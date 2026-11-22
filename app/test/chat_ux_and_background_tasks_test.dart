@@ -60,7 +60,7 @@ void main() {
     expect(find.textContaining('running line 1'), findsNothing);
 
     await tester.tap(find.text('Running 1 tool step (1 total)'));
-    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 300));
 
     expect(find.textContaining('SECRET_CMD_MARKER'), findsOneWidget);
     expect(find.textContaining('running line 1'), findsOneWidget);

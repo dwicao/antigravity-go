@@ -186,15 +186,19 @@ class OverviewPanel extends ConsumerWidget {
                                     color: theme.colorScheme.primary,
                                   ),
                                 const SizedBox(width: 6),
-                                Text(
-                                  bgTasks.isEmpty
-                                      ? 'Background Tasks'
-                                      : 'Background Tasks (${bgTasks.length})',
-                                  style: theme.textTheme.labelLarge?.copyWith(
-                                    fontWeight: FontWeight.w700,
+                                Expanded(
+                                  child: Text(
+                                    bgTasks.isEmpty
+                                        ? 'Background Tasks'
+                                        : 'Background Tasks (${bgTasks.length})',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: theme.textTheme.labelLarge?.copyWith(
+                                      fontWeight: FontWeight.w700,
+                                    ),
                                   ),
                                 ),
-                                const Spacer(),
+                                const SizedBox(width: 6),
                                 const Icon(Icons.open_in_new, size: 15),
                               ],
                             ),
