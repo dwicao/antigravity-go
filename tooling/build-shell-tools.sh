@@ -64,7 +64,10 @@ build_for_arch() {
       cp bash /out/libbash.so
       chmod 0755 /out/libbusybox.so /out/libbash.so
 
-      /out/libbash.so -c "echo verified-bash-\$(/out/libbusybox.so uname -m)"
+      ln -sf /out/libbusybox.so /tmp/busybox
+      ln -sf /out/libbusybox.so /tmp/ls
+      /out/libbash.so -c "echo verified-bash-\$(/tmp/busybox uname -m)"
+      /tmp/ls /tmp >/dev/null
     '
 
   for bin in libbash.so libbusybox.so; do
@@ -86,4 +89,7 @@ build_for_arch "x86_64" "linux/amd64" "X86-64"
 build_for_arch "arm64-v8a" "linux/arm64" "AArch64"
 
 echo "[shell-tools] Executing x86_64 static binaries on host to double-check..."
-"$JNI_DIR/x86_64/libbash.so" -c '"$1" ls -la /tmp >/dev/null && echo "host-exec-ok"' _ "$JNI_DIR/x86_64/libbusybox.so"
+ln -sf "$JNI_DIR/x86_64/libbusybox.so" /tmp/test-busybox-host
+ln -sf "$JNI_DIR/x86_64/libbusybox.so" "$CACHE_DIR/ls"
+"$JNI_DIR/x86_64/libbash.so" -c '"$1" /tmp >/dev/null && echo "host-exec-ok"' _ "$CACHE_DIR/ls"
+rm -f /tmp/test-busybox-host "$CACHE_DIR/ls"
