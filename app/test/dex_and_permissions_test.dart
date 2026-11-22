@@ -1,4 +1,6 @@
+import 'package:agy_client/agy_client.dart';
 import 'package:antigravity_go/app.dart';
+import 'package:antigravity_go/state/settings_state.dart';
 import 'package:antigravity_go/ui/settings/settings_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -41,5 +43,20 @@ void main() {
     await tester.scrollUntilVisible(find.text('All Files Access'), 200);
     expect(find.text('Android Permissions & Samsung DeX'), findsOneWidget);
     expect(find.text('All Files Access'), findsOneWidget);
+  });
+
+  test('Legacy saved auto preset and exec mode are repaired for Android', () async {
+    SharedPreferences.setMockInitialValues({
+      'agy_permission_preset': 'auto',
+      'agy_exec_mode': 'auto',
+    });
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    container.read(settingsProvider);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    final repaired = container.read(settingsProvider);
+    expect(repaired.permissionPreset, AntigravityPermissionPreset.turbo);
+    expect(repaired.executionMode, 'default');
   });
 }

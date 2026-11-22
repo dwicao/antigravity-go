@@ -10,9 +10,13 @@ class MessageBubble extends StatelessWidget {
   const MessageBubble({
     super.key,
     required this.message,
+    this.onRegenerate,
+    this.onEditResend,
   });
 
   final ChatMessage message;
+  final VoidCallback? onRegenerate;
+  final ValueChanged<String>? onEditResend;
 
   @override
   Widget build(BuildContext context) {
@@ -65,6 +69,46 @@ class MessageBubble extends StatelessWidget {
                   height: 1.4,
                 ),
               ),
+              if (onEditResend != null)
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: IconButton(
+                    iconSize: 15,
+                    visualDensity: VisualDensity.compact,
+                    tooltip: 'Edit & resend',
+                    onPressed: () async {
+                      final ctrl = TextEditingController(text: message.text);
+                      final updated = await showDialog<String>(
+                        context: context,
+                        builder: (ctx) => AlertDialog(
+                          title: const Text('Edit & Resend'),
+                          content: TextField(
+                            controller: ctrl,
+                            minLines: 2,
+                            maxLines: 6,
+                            autofocus: true,
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.of(ctx).pop(),
+                              child: const Text('Cancel'),
+                            ),
+                            FilledButton(
+                              onPressed: () =>
+                                  Navigator.of(ctx).pop(ctrl.text),
+                              child: const Text('Resend'),
+                            ),
+                          ],
+                        ),
+                      );
+                      ctrl.dispose();
+                      if (updated != null && updated.trim().isNotEmpty) {
+                        onEditResend!(updated);
+                      }
+                    },
+                    icon: const Icon(Icons.edit_outlined),
+                  ),
+                ),
             ],
           ),
         ),
@@ -122,6 +166,14 @@ class MessageBubble extends StatelessWidget {
                     );
                   },
                   icon: const Icon(Icons.copy_all_outlined),
+                ),
+              if (onRegenerate != null && !message.isStreaming)
+                IconButton(
+                  iconSize: 16,
+                  visualDensity: VisualDensity.compact,
+                  tooltip: 'Regenerate',
+                  onPressed: onRegenerate,
+                  icon: const Icon(Icons.refresh_rounded),
                 ),
             ],
           ),

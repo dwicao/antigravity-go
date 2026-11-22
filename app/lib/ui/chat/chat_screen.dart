@@ -349,9 +349,28 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     controller: _scrollController,
                     padding: const EdgeInsets.only(top: 8, bottom: 16),
                     itemCount: chat.messages.length,
-                    itemBuilder: (context, index) => wrapCentered(
-                      MessageBubble(message: chat.messages[index]),
-                    ),
+                    itemBuilder: (context, index) {
+                      final m = chat.messages[index];
+                      final isLastAssistant = !chat.isStreaming &&
+                          m.role == ChatRole.assistant &&
+                          index == chat.messages.length - 1;
+                      return wrapCentered(
+                        MessageBubble(
+                          message: m,
+                          onRegenerate: isLastAssistant
+                              ? () => ref
+                                  .read(chatProvider.notifier)
+                                  .regenerateLastTurn()
+                              : null,
+                          onEditResend:
+                              !chat.isStreaming && m.role == ChatRole.user
+                                  ? (newText) => ref
+                                      .read(chatProvider.notifier)
+                                      .editAndResend(m.id, newText)
+                                  : null,
+                        ),
+                      );
+                    },
                   ),
                 ),
         ),
@@ -386,7 +405,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   TextButton(
                     onPressed: () =>
                         ref.read(chatProvider.notifier).sendQueuedNow(),
-                    child: const Text('Send now'),
+                    child: const Text('Steer now'),
+                  ),
+                  IconButton(
+                    iconSize: 16,
+                    visualDensity: VisualDensity.compact,
+                    tooltip: 'Remove queued prompt',
+                    onPressed: () =>
+                        ref.read(chatProvider.notifier).removeQueuedPrompt(0),
+                    icon: const Icon(Icons.close),
                   ),
                 ],
               ),
@@ -595,6 +622,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                           icon: Icons.shield_outlined,
                           label: settings.permissionPreset.label,
                           items: AntigravityPermissionPreset.values
+                              .where(
+                                (p) =>
+                                    hosts.activeSshHost != null ||
+                                    p != AntigravityPermissionPreset.auto,
+                              )
                               .map(
                                 (p) => PopupMenuItem(
                                   value: p,
@@ -613,6 +645,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                             settings.executionMode,
                           ).label,
                           items: AgyExecutionMode.values
+                              .where(
+                                (m) =>
+                                    hosts.activeSshHost != null ||
+                                    m != AgyExecutionMode.auto,
+                              )
                               .map(
                                 (m) => PopupMenuItem(
                                   value: m.cliValue,

@@ -52,5 +52,18 @@ void main() {
       expect(turn.status, 'SUCCESS');
       expect(turn.usage.totalTokens, 345);
     });
+
+    test('androidSafe maps OS-sandbox-only auto mode/preset to mobile-safe defaults', () {
+      expect(AgyExecutionMode.auto.androidSafe, AgyExecutionMode.standard);
+      expect(AgyExecutionMode.plan.androidSafe, AgyExecutionMode.plan);
+      expect(
+        AntigravityPermissionPreset.auto.androidSafe,
+        AntigravityPermissionPreset.turbo,
+      );
+      expect(
+        AntigravityPermissionPreset.requestReview.androidSafe,
+        AntigravityPermissionPreset.requestReview,
+      );
+    });
   });
 }

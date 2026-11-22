@@ -27,12 +27,20 @@ enum AntigravityPermissionPreset {
   final String label;
   final String description;
 
+  /// On unrooted Android there is no OS terminal sandbox (`auto` fails), so
+  /// map `auto` to `turbo` when full proceed is desired or `standard` (`default`).
+  AntigravityPermissionPreset get androidSafe =>
+      this == AntigravityPermissionPreset.auto
+          ? AntigravityPermissionPreset.turbo
+          : this;
+
   static AntigravityPermissionPreset fromString(String? value) {
     return switch (value) {
       'request-review' || 'requestReview' => AntigravityPermissionPreset.requestReview,
       'default' || 'standard' => AntigravityPermissionPreset.standard,
+      'auto' => AntigravityPermissionPreset.auto,
       'always-proceed' || 'turbo' => AntigravityPermissionPreset.turbo,
-      _ => AntigravityPermissionPreset.auto,
+      _ => AntigravityPermissionPreset.turbo,
     };
   }
 }

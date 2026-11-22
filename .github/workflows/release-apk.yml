@@ -91,6 +91,12 @@ jobs:
 
           printf 'storeFile=%s\nstorePassword=android\nkeyAlias=testkey\nkeyPassword=android\n' "$jks" > app/android/key.properties
 
+      - name: Set up QEMU for multi-arch shell binaries
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build bundled bash and busybox native binaries
+        run: bash tooling/build-shell-tools.sh
+
       - name: Build signed release APKs (arm64 + x64)
         run: bash tooling/build-apk.sh -f all --release
 

@@ -21,10 +21,20 @@ class AcpSessionManager(
     private val emit: (Map<String, Any?>) -> Unit,
     private val log: (String) -> Unit,
 ) {
+    private class TerminalProc(
+        val process: Process,
+        val output: StringBuffer = StringBuffer(),
+        @Volatile var exitCode: Int? = null,
+    )
+
     private data class ActiveAcp(
         val process: Process,
         val writer: OutputStreamWriter,
+        val env: Map<String, String>,
+        val defaultCwd: File,
         val nextId: AtomicInteger = AtomicInteger(1),
+        @Volatile var sessionId: String? = null,
+        val terminals: ConcurrentHashMap<String, TerminalProc> = ConcurrentHashMap(),
     )
 
     private val sessions = ConcurrentHashMap<String, ActiveAcp>()
@@ -61,7 +71,12 @@ class AcpSessionManager(
                 proc = pb.start()
 
                 val writer = OutputStreamWriter(proc.outputStream, Charsets.UTF_8)
-                val active = ActiveAcp(process = proc, writer = writer)
+                val active = ActiveAcp(
+                    process = proc,
+                    writer = writer,
+                    env = env,
+                    defaultCwd = cwd,
+                )
                 sessions[turnId] = active
 
                 val errFuture = executor.submit {
@@ -195,6 +210,7 @@ class AcpSessionManager(
                             )
 
                             if (acpSessionId != null) {
+                                active.sessionId = acpSessionId
                                 if (!modelId.isNullOrBlank()) {
                                     sendJson(
                                         writer,
@@ -211,7 +227,11 @@ class AcpSessionManager(
                                             )
                                     )
                                 }
-                                if (!modeCli.isNullOrBlank()) {
+                                val safeModeCli = when (modeCli?.lowercase()?.trim()) {
+                                    null, "", "auto" -> if (skipPermissions) null else "default"
+                                    else -> modeCli
+                                }
+                                if (!safeModeCli.isNullOrBlank()) {
                                     sendJson(
                                         writer,
                                         JSONObject()
@@ -223,7 +243,7 @@ class AcpSessionManager(
                                                 JSONObject()
                                                     .put("sessionId", acpSessionId)
                                                     .put("configId", "mode")
-                                                    .put("value", modeCli)
+                                                    .put("value", safeModeCli)
                                             )
                                     )
                                 }
@@ -255,13 +275,17 @@ class AcpSessionManager(
                             continue
                         }
 
-                        // Handle client filesystem capabilities directly using All Files Access!
+                        // Handle client filesystem & terminal capabilities directly!
                         if (method == "fs/read_text_file" && msgId != null) {
                             handleReadTextFile(writer, msgId, msg.optJSONObject("params"))
                             continue
                         }
                         if (method == "fs/write_text_file" && msgId != null) {
                             handleWriteTextFile(writer, msgId, msg.optJSONObject("params"))
+                            continue
+                        }
+                        if (method.startsWith("terminal/") && msgId != null) {
+                            handleTerminalRpc(active, method, msgId, msg.optJSONObject("params"))
                             continue
                         }
 
@@ -303,7 +327,12 @@ class AcpSessionManager(
                 )
                 emit(mapOf("kind" to "turn_exit", "turnId" to turnId, "exitCode" to 1))
             } finally {
-                sessions.remove(turnId)
+                val removed = sessions.remove(turnId)
+                removed?.terminals?.values?.forEach { term ->
+                    try {
+                        term.process.destroyForcibly()
+                    } catch (_: Throwable) {}
+                }
                 try {
                     proc?.destroy()
                 } catch (_: Throwable) {}
@@ -336,7 +365,175 @@ class AcpSessionManager(
 
     fun cancel(turnId: String) {
         val active = sessions.remove(turnId) ?: return
+        active.terminals.values.forEach { term ->
+            try {
+                term.process.destroyForcibly()
+            } catch (_: Throwable) {}
+        }
+        val sid = active.sessionId
+        if (!sid.isNullOrBlank()) {
+            try {
+                sendJson(
+                    active.writer,
+                    JSONObject()
+                        .put("jsonrpc", "2.0")
+                        .put("method", "session/cancel")
+                        .put("params", JSONObject().put("sessionId", sid))
+                )
+            } catch (_: Throwable) {}
+        }
         active.process.destroyForcibly()
+    }
+
+    private fun handleTerminalRpc(
+        active: ActiveAcp,
+        method: String,
+        id: Any,
+        params: JSONObject?,
+    ) {
+        try {
+            when (method) {
+                "terminal/create" -> {
+                    val command = params?.optString("command", "") ?: ""
+                    val argsArr = params?.optJSONArray("args")
+                    val cwdStr = params?.optString("cwd")?.takeIf { it.isNotBlank() }
+                    val dir = if (cwdStr != null) File(cwdStr) else active.defaultCwd
+                    if (!dir.exists()) dir.mkdirs()
+
+                    val cmdList = mutableListOf<String>()
+                    if (argsArr != null && argsArr.length() > 0) {
+                        val resolved = if (command == "bash" || command == "/bin/bash") {
+                            active.env["SHELL"] ?: "bash"
+                        } else {
+                            command
+                        }
+                        cmdList.add(resolved)
+                        for (i in 0 until argsArr.length()) {
+                            cmdList.add(argsArr.optString(i, ""))
+                        }
+                    } else {
+                        val shell = active.env["SHELL"] ?: "/system/bin/sh"
+                        cmdList.addAll(listOf(shell, "-c", command))
+                    }
+
+                    val pb = ProcessBuilder(cmdList)
+                    pb.directory(dir)
+                    pb.environment().putAll(active.env)
+                    val envArr = params?.optJSONArray("env")
+                    if (envArr != null) {
+                        for (i in 0 until envArr.length()) {
+                            val item = envArr.optJSONObject(i) ?: continue
+                            val k = item.optString("name", "")
+                            val v = item.optString("value", "")
+                            if (k.isNotBlank()) pb.environment()[k] = v
+                        }
+                    }
+                    pb.redirectErrorStream(true)
+                    val proc = pb.start()
+                    val termId = "term-${active.nextId.getAndIncrement()}"
+                    val tp = TerminalProc(process = proc)
+                    active.terminals[termId] = tp
+
+                    executor.submit {
+                        try {
+                            BufferedReader(InputStreamReader(proc.inputStream)).use { br ->
+                                val buf = CharArray(4096)
+                                var n: Int
+                                while (br.read(buf).also { n = it } >= 0) {
+                                    if (tp.output.length < 262_144) {
+                                        tp.output.append(buf, 0, n)
+                                    }
+                                }
+                            }
+                        } catch (_: Throwable) {}
+                        tp.exitCode = try {
+                            proc.waitFor()
+                        } catch (_: Throwable) {
+                            -1
+                        }
+                    }
+
+                    sendJson(
+                        active.writer,
+                        JSONObject()
+                            .put("jsonrpc", "2.0")
+                            .put("id", id)
+                            .put("result", JSONObject().put("terminalId", termId))
+                    )
+                }
+
+                "terminal/output" -> {
+                    val termId = params?.optString("terminalId", "") ?: ""
+                    val tp = active.terminals[termId]
+                    val res = JSONObject()
+                        .put("output", tp?.output?.toString() ?: "")
+                        .put("truncated", (tp?.output?.length ?: 0) >= 262_144)
+                    tp?.exitCode?.let { code ->
+                        res.put("exitStatus", JSONObject().put("exitCode", code))
+                    }
+                    sendJson(
+                        active.writer,
+                        JSONObject().put("jsonrpc", "2.0").put("id", id).put("result", res)
+                    )
+                }
+
+                "terminal/wait_for_exit" -> {
+                    val termId = params?.optString("terminalId", "") ?: ""
+                    val tp = active.terminals[termId]
+                    val code = tp?.process?.waitFor() ?: tp?.exitCode ?: 0
+                    tp?.exitCode = code
+                    sendJson(
+                        active.writer,
+                        JSONObject()
+                            .put("jsonrpc", "2.0")
+                            .put("id", id)
+                            .put("result", JSONObject().put("exitCode", code))
+                    )
+                }
+
+                "terminal/kill" -> {
+                    val termId = params?.optString("terminalId", "") ?: ""
+                    active.terminals[termId]?.process?.destroyForcibly()
+                    sendJson(
+                        active.writer,
+                        JSONObject().put("jsonrpc", "2.0").put("id", id).put("result", JSONObject())
+                    )
+                }
+
+                "terminal/release" -> {
+                    val termId = params?.optString("terminalId", "") ?: ""
+                    active.terminals.remove(termId)?.process?.destroyForcibly()
+                    sendJson(
+                        active.writer,
+                        JSONObject().put("jsonrpc", "2.0").put("id", id).put("result", JSONObject())
+                    )
+                }
+
+                else -> {
+                    sendJson(
+                        active.writer,
+                        JSONObject()
+                            .put("jsonrpc", "2.0")
+                            .put("id", id)
+                            .put(
+                                "error",
+                                JSONObject().put("code", -32601).put("message", "Method not found: $method")
+                            )
+                    )
+                }
+            }
+        } catch (t: Throwable) {
+            sendJson(
+                active.writer,
+                JSONObject()
+                    .put("jsonrpc", "2.0")
+                    .put("id", id)
+                    .put(
+                        "error",
+                        JSONObject().put("code", -32001).put("message", t.message ?: "Terminal RPC error")
+                    )
+            )
+        }
     }
 
     private fun handleReadTextFile(
@@ -347,7 +544,23 @@ class AcpSessionManager(
         val path = params?.optString("path", "") ?: ""
         try {
             val file = File(path)
-            val content = if (file.exists() && file.isFile) file.readText() else ""
+            if (file.isDirectory) {
+                throw IllegalStateException("Path is a directory: $path")
+            }
+            if (!file.exists()) {
+                throw IllegalStateException("File does not exist: $path")
+            }
+            val startLine = params?.optInt("line", 0) ?: 0
+            val limit = params?.optInt("limit", 0) ?: 0
+            val rawText = file.readText()
+            val content = if (startLine > 0 || limit > 0) {
+                val lines = rawText.lines()
+                val from = (startLine - 1).coerceIn(0, lines.size)
+                val to = if (limit > 0) (from + limit).coerceAtMost(lines.size) else lines.size
+                lines.subList(from, to).joinToString("\n")
+            } else {
+                rawText
+            }
             sendJson(
                 writer,
                 JSONObject()

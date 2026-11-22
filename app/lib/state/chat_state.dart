@@ -308,24 +308,30 @@ class ChatNotifier extends Notifier<ChatThreadState> {
             ? project.primaryFolder
             : (runtime.status.workspaceRoot ?? ''));
 
+    final sshHost = hosts.activeSshHost;
+    final requestedMode = AgyExecutionMode.fromCli(settings.executionMode);
+    final effectiveMode = sshHost != null
+        ? requestedMode
+        : requestedMode.androidSafe;
+
     final request = AgyPromptRequest(
       prompt: effectivePrompt,
       workspacePath: effectiveWorkspace,
       extraDirs: [
         ...project.folders,
         if (perms.allFilesAccess) perms.externalStorageRoot,
+        if (perms.allFilesAccess) '/sdcard',
       ],
       conversationId: session.remoteConversationId,
       modelId: settings.selectedModelId,
       effortCliValue: settings.reasoningEffort,
-      mode: AgyExecutionMode.fromCli(settings.executionMode),
+      mode: effectiveMode,
       dangerouslySkipPermissions: skipPerms,
       allowNonWorkspaceAccess: allowNonWorkspace,
       geminiApiKey: apiKey,
     );
 
     Stream<AgyChatEvent> stream;
-    final sshHost = hosts.activeSshHost;
     if (sshHost != null) {
       final (pwd, key) =
           await ref.read(hostsProvider.notifier).readCredentials(sshHost.id);
@@ -393,19 +399,30 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       case AgyToolCallEvent():
         final tools = [...current.tools];
         final tIdx = tools.indexWhere((t) => t.id == evt.callId);
-        final step = ChatToolStep(
-          id: evt.callId,
-          toolName: evt.toolName,
-          state: evt.state,
-          parameters: evt.parameters,
-          output: evt.output,
-          error: evt.errorMessage,
-          durationSeconds: evt.durationSeconds,
-        );
         if (tIdx >= 0) {
-          tools[tIdx] = step;
+          final prev = tools[tIdx];
+          tools[tIdx] = ChatToolStep(
+            id: evt.callId,
+            toolName: evt.toolName != 'tool' ? evt.toolName : prev.toolName,
+            state: evt.state,
+            parameters:
+                evt.parameters.isNotEmpty ? evt.parameters : prev.parameters,
+            output: evt.output ?? prev.output,
+            error: evt.errorMessage ?? prev.error,
+            durationSeconds: evt.durationSeconds ?? prev.durationSeconds,
+          );
         } else {
-          tools.add(step);
+          tools.add(
+            ChatToolStep(
+              id: evt.callId,
+              toolName: evt.toolName,
+              state: evt.state,
+              parameters: evt.parameters,
+              output: evt.output,
+              error: evt.errorMessage,
+              durationSeconds: evt.durationSeconds,
+            ),
+          );
         }
         _replaceMessage(idx, current.copyWith(tools: tools));
       case AgyPermissionRequestEvent():
@@ -521,6 +538,51 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       queuedPrompts: state.queuedPrompts.sublist(1),
     );
     await sendPrompt(nextPrompt);
+  }
+
+  void removeQueuedPrompt(int index) {
+    if (index < 0 || index >= state.queuedPrompts.length) return;
+    final updated = [...state.queuedPrompts]..removeAt(index);
+    state = state.copyWith(queuedPrompts: updated);
+  }
+
+  Future<void> steerNow(String prompt) async {
+    final trimmed = prompt.trim();
+    if (trimmed.isEmpty) return;
+    if (state.isStreaming) {
+      await stopStreaming();
+    }
+    await sendPrompt(trimmed);
+  }
+
+  Future<void> regenerateLastTurn() async {
+    if (state.isStreaming || state.messages.isEmpty) return;
+    final lastUserIdx =
+        state.messages.lastIndexWhere((m) => m.role == ChatRole.user);
+    if (lastUserIdx < 0) return;
+    final lastUser = state.messages[lastUserIdx];
+    final trimmedHistory = state.messages.sublist(0, lastUserIdx);
+    state = state.copyWith(messages: trimmedHistory);
+    final activeId = ref.read(sessionsProvider).activeSessionId;
+    if (activeId != null) {
+      await _persistMessages(activeId, trimmedHistory);
+    }
+    await sendPrompt(lastUser.text, attachments: lastUser.attachments);
+  }
+
+  Future<void> editAndResend(String userMessageId, String newText) async {
+    final trimmed = newText.trim();
+    if (trimmed.isEmpty || state.isStreaming) return;
+    final idx = state.messages.indexWhere((m) => m.id == userMessageId);
+    if (idx < 0) return;
+    final original = state.messages[idx];
+    final prefix = state.messages.sublist(0, idx);
+    state = state.copyWith(messages: prefix);
+    final activeId = ref.read(sessionsProvider).activeSessionId;
+    if (activeId != null) {
+      await _persistMessages(activeId, prefix);
+    }
+    await sendPrompt(trimmed, attachments: original.attachments);
   }
 
   Future<void> resolvePermission(String optionId) async {

@@ -1,9 +1,9 @@
 /// Agent execution mode matching `agy --mode` (`default`, `accept-edits`, `auto`, `plan`).
 enum AgyExecutionMode {
-  auto('auto', 'Auto', 'Edits workspace files & runs safe commands automatically'),
-  standard('default', 'Default', 'Asks permission before editing files or running commands'),
+  standard('default', 'Fast', 'Runs with your configured permission preset (no OS sandbox required)'),
   acceptEdits('accept-edits', 'Accept Edits', 'Auto-approves file edits, asks before commands'),
-  plan('plan', 'Plan', 'Explores codebase and produces an implementation plan first');
+  plan('plan', 'Plan', 'Explores workspace and produces an implementation plan first'),
+  auto('auto', 'Auto (Sandbox)', 'Uses desktop OS terminal sandbox (unsupported on unrooted Android)');
 
   const AgyExecutionMode(this.cliValue, this.label, this.description);
 
@@ -11,12 +11,16 @@ enum AgyExecutionMode {
   final String label;
   final String description;
 
+  /// Returns an execution mode safe for unrooted Android (maps `auto` -> `default`).
+  AgyExecutionMode get androidSafe =>
+      this == AgyExecutionMode.auto ? AgyExecutionMode.standard : this;
+
   static AgyExecutionMode fromCli(String? value) {
     return switch (value?.toLowerCase().trim()) {
-      'default' || 'request-review' => AgyExecutionMode.standard,
       'accept-edits' => AgyExecutionMode.acceptEdits,
       'plan' => AgyExecutionMode.plan,
-      _ => AgyExecutionMode.auto,
+      'auto' => AgyExecutionMode.auto,
+      _ => AgyExecutionMode.standard,
     };
   }
 }

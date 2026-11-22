@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Environment
+import android.system.Os
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -72,16 +73,32 @@ class RuntimeController private constructor(private val appContext: Context) {
     private var safeMode: Boolean = false
 
     val runtimeDir: File get() = File(appContext.filesDir, "runtime")
+    val binDir: File get() = File(runtimeDir, "bin")
+    val tmpDir: File get() = File(runtimeDir, "tmp")
     val binaryFile: File get() = File(runtimeDir, "bin/agy")
+    val bashFile: File get() = File(binDir, "bash")
     val homeDir: File get() = File(runtimeDir, "home")
     val workspaceDir: File get() = File(runtimeDir, "workspace")
     val settingsFile: File get() = File(homeDir, ".gemini/antigravity-cli/settings.json")
     val authMarkerFile: File get() = File(homeDir, ".gemini/antigravity-go-auth.json")
 
+    private val busyboxApplets = listOf(
+        "sh", "ls", "cat", "find", "grep", "egrep", "fgrep", "sed", "awk",
+        "head", "tail", "wc", "sort", "uniq", "cut", "tr", "xargs",
+        "mkdir", "rmdir", "rm", "cp", "mv", "touch", "chmod", "ln",
+        "stat", "realpath", "readlink", "dirname", "basename", "which",
+        "tar", "gzip", "gunzip", "unzip", "ps", "kill", "du", "df",
+        "id", "whoami", "uname", "date", "sleep", "env", "pwd",
+        "echo", "printf", "test", "[", "tee", "diff", "patch", "wget",
+    )
+
     init {
         runtimeDir.mkdirs()
+        binDir.mkdirs()
+        tmpDir.mkdirs()
         homeDir.mkdirs()
         workspaceDir.mkdirs()
+        ensureShellToolchain()
         refreshInitialPhase()
     }
 
@@ -226,12 +243,123 @@ class RuntimeController private constructor(private val appContext: Context) {
         emitStatus()
     }
 
+    /**
+     * Links bundled native static `libbash.so` & `libbusybox.so` into `runtime/bin/`
+     * (refreshing symlink targets whenever an APK upgrade relocates `nativeLibraryDir`)
+     * so `agy` tools always find `bash`, `sh`, `ls`, `find`, `grep`, `sed`, `awk`, etc.
+     */
+    fun ensureShellToolchain() {
+        try {
+            binDir.mkdirs()
+            tmpDir.mkdirs()
+            val nativeLibDir = appContext.applicationInfo?.nativeLibraryDir
+            val bundledBash = nativeLibDir?.let { File(it, "libbash.so") }?.takeIf { it.isFile }
+            val bundledBusybox = nativeLibDir?.let { File(it, "libbusybox.so") }?.takeIf { it.isFile }
+
+            if (bundledBash != null) {
+                ensureSymlink(bashFile, bundledBash.absolutePath)
+            } else {
+                // Fallback executable wrapper when native JNI binaries are omitted (e.g. dev debug).
+                if (!bashFile.exists() || !bashFile.canExecute()) {
+                    bashFile.writeText("#!/system/bin/sh\nexec /system/bin/sh \"\$@\"\n")
+                    bashFile.setExecutable(true, false)
+                }
+            }
+
+            if (bundledBusybox != null) {
+                ensureSymlink(File(binDir, "busybox"), bundledBusybox.absolutePath)
+                for (applet in busyboxApplets) {
+                    if (applet == "agy" || applet == "bash") continue
+                    ensureSymlink(File(binDir, applet), bundledBusybox.absolutePath)
+                }
+            }
+
+            // DSH-go style storage shortcuts inside HOME & default workspace.
+            if (hasStorageAccess()) {
+                val extRoot = Environment.getExternalStorageDirectory()?.absolutePath
+                    ?: "/storage/emulated/0"
+                if (File(extRoot).canRead()) {
+                    ensureSymlink(File(homeDir, "sdcard"), extRoot)
+                    ensureSymlink(File(workspaceDir, "phone_storage"), extRoot)
+                }
+            }
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun ensureSymlink(linkFile: File, targetPath: String) {
+        try {
+            val currentTarget = try {
+                Os.readlink(linkFile.absolutePath)
+            } catch (_: Throwable) {
+                null
+            }
+            if (currentTarget == targetPath) return
+            if (linkFile.exists() || currentTarget != null) {
+                linkFile.delete()
+            }
+            Os.symlink(targetPath, linkFile.absolutePath)
+        } catch (_: Throwable) {
+            try {
+                val src = File(targetPath)
+                if (src.isFile && (!linkFile.exists() || linkFile.length() != src.length())) {
+                    src.copyTo(linkFile, overwrite = true)
+                    linkFile.setExecutable(true, false)
+                }
+            } catch (_: Throwable) {}
+        }
+    }
+
+    /**
+     * DSH-go style managed `$HOME/.gemini/GEMINI.md`: informs `agy` about the Android
+     * runtime (`bash` + BusyBox tools, no OS terminal sandbox, and `/sdcard` storage paths)
+     * unless the user removes the managed marker comment.
+     */
+    private fun syncManagedGeminiMd(allowStorage: Boolean) {
+        try {
+            val geminiMd = File(homeDir, ".gemini/GEMINI.md")
+            val marker = "<!-- antigravity-go:managed"
+            if (geminiMd.exists()) {
+                val existing = geminiMd.readText()
+                if (!existing.startsWith(marker)) return
+            }
+            geminiMd.parentFile?.mkdirs()
+            val storageSection = if (allowStorage) {
+                val extRoot = Environment.getExternalStorageDirectory()?.absolutePath
+                    ?: "/storage/emulated/0"
+                "- Phone Storage (All Files Access GRANTED): Internal storage is directly accessible at `/sdcard`, `$extRoot`, and `~/sdcard` (Downloads: `/sdcard/Download`, Photos: `/sdcard/DCIM`). Explain changes before editing or deleting personal user files."
+            } else {
+                "- Phone Storage: All Files Access is not currently granted. Only workspace files (`${workspaceDir.absolutePath}`) are writable; if the user asks for `/sdcard` or Downloads, remind them to enable All Files Access in Settings."
+            }
+            val managedContent = """
+                |$marker — Remove this line to stop Antigravity Go from auto-updating runtime context -->
+                |# Antigravity Go — Android Runtime Context
+                |
+                |- You are running natively on Android (no root required). There is **no OS terminal sandbox** (bubblewrap/landlock); never select or require `auto` sandbox mode.
+                |- Shell commands run via bundled `bash` and BusyBox POSIX tools (`ls`, `find`, `grep`, `sed`, `awk`, `cat`, `head`, `tail`, `wc`, `tar`, `gzip`, `unzip`, etc.) preloaded in `${'$'}PATH` (`SHELL=${bashFile.absolutePath}`, `TMPDIR=${tmpDir.absolutePath}`).
+                |- Default workspace: `${workspaceDir.absolutePath}`.
+                |$storageSection
+                |- Keep replies well-structured for mobile and Samsung DeX screens.
+                |""".trimMargin()
+            if (!geminiMd.exists() || geminiMd.readText() != managedContent) {
+                geminiMd.writeText(managedContent)
+            }
+        } catch (_: Throwable) {}
+    }
+
     private fun buildEnv(extra: Map<String, String> = emptyMap()): Map<String, String> {
+        ensureShellToolchain()
         val env = HashMap<String, String>(System.getenv())
         env["HOME"] = homeDir.absolutePath
         env["XDG_CONFIG_HOME"] = File(homeDir, ".config").absolutePath
         env["XDG_CACHE_HOME"] = File(homeDir, ".cache").absolutePath
-        val binPath = File(runtimeDir, "bin").absolutePath
+        env["TMPDIR"] = tmpDir.absolutePath
+        env["TMP"] = tmpDir.absolutePath
+        env["TEMP"] = tmpDir.absolutePath
+        env["SHELL"] = bashFile.absolutePath
+        env["CONFIG_SHELL"] = bashFile.absolutePath
+        env["ANDROID_STORAGE"] = "/sdcard"
+        val binPath = binDir.absolutePath
         val oldPath = env["PATH"] ?: "/system/bin:/system/xbin"
         env["PATH"] = "$binPath:$oldPath"
         env.putAll(extra)
@@ -569,15 +697,47 @@ class RuntimeController private constructor(private val appContext: Context) {
     }
 
     fun runShell(command: String, cwd: String?): String {
-        val pb = ProcessBuilder("/system/bin/sh", "-c", command)
-        pb.directory(if (!cwd.isNullOrBlank()) File(cwd) else workspaceDir)
-        pb.environment().putAll(buildEnv())
+        val env = buildEnv()
+        val shell = if (bashFile.canExecute()) bashFile.absolutePath else "/system/bin/sh"
+        val pb = ProcessBuilder(shell, "-c", command)
+        val dir = if (!cwd.isNullOrBlank()) File(cwd) else workspaceDir
+        if (!dir.exists()) dir.mkdirs()
+        pb.directory(dir)
+        pb.environment().putAll(env)
         pb.redirectErrorStream(true)
         val proc = pb.start()
         val out = proc.inputStream.bufferedReader().use { it.readText() }
         proc.waitFor(30, TimeUnit.SECONDS)
         if (proc.isAlive) proc.destroyForcibly()
         return out
+    }
+
+    fun diagnoseRuntime(): Map<String, Any?> {
+        val env = buildEnv()
+        val bashWorks = try {
+            runShell("which bash ls find grep sed awk | head -n 6", null).trim()
+        } catch (t: Throwable) {
+            "error: ${t.message}"
+        }
+        val storageProbe = if (hasStorageAccess()) {
+            try {
+                runShell("ls -la /sdcard/Download 2>&1 | head -n 10", null).trim()
+            } catch (t: Throwable) {
+                "error: ${t.message}"
+            }
+        } else {
+            "All Files Access not granted"
+        }
+        return mapOf(
+            "agyExists" to (binaryFile.exists() && binaryFile.canExecute()),
+            "bashPath" to bashFile.absolutePath,
+            "bashExecutable" to bashFile.canExecute(),
+            "busyboxExecutable" to File(binDir, "busybox").canExecute(),
+            "allFilesAccess" to hasStorageAccess(),
+            "tmpDir" to env["TMPDIR"],
+            "shellProbe" to bashWorks,
+            "downloadProbe" to storageProbe,
+        )
     }
 
     private fun hasStorageAccess(): Boolean {
@@ -620,22 +780,38 @@ class RuntimeController private constructor(private val appContext: Context) {
             return
         }
 
+        val storageEnabled = allowNonWorkspaceAccess || hasStorageAccess()
+        syncManagedGeminiMd(allowStorage = storageEnabled)
+
         // Sync non-workspace & permission settings before running agy.
+        // Never allow `auto` sandbox mode to persist in settings.json on Android.
         try {
+            val currentSettings = readSettings()
             val patch = mutableMapOf<String, Any?>(
-                "allowNonWorkspaceAccess" to (allowNonWorkspaceAccess || hasStorageAccess()),
+                "allowNonWorkspaceAccess" to storageEnabled,
             )
             if (skipPermissions) {
                 patch["toolPermission"] = "always-proceed"
                 patch["permissions"] = mapOf(
                     "allow" to listOf("command(*)", "read_file(*)", "write_file(*)"),
                 )
+            } else if (currentSettings["toolPermission"] == "auto") {
+                patch["toolPermission"] = "default"
             }
             writeSettings(patch)
         } catch (_: Throwable) {}
 
         val effectiveCwd = if (!cwd.isNullOrBlank()) File(cwd) else workspaceDir
+        if (!effectiveCwd.exists()) {
+            try {
+                effectiveCwd.mkdirs()
+            } catch (_: Throwable) {}
+        }
         val mergedDirs = defaultExtraDirs(extraDirs)
+        val safeCliMode = when (mode?.lowercase()?.trim()) {
+            null, "", "auto" -> if (skipPermissions) null else "default"
+            else -> mode
+        }
         val extraEnv = mutableMapOf<String, String>()
         if (!geminiApiKey.isNullOrBlank()) {
             extraEnv["GEMINI_API_KEY"] = geminiApiKey
@@ -651,7 +827,7 @@ class RuntimeController private constructor(private val appContext: Context) {
                 extraDirs = mergedDirs,
                 existingSessionId = conversationId,
                 modelId = model,
-                modeCli = mode,
+                modeCli = safeCliMode,
                 skipPermissions = skipPermissions,
                 onAuthenticated = {
                     if (!authMarkerFile.exists()) {
@@ -677,8 +853,8 @@ class RuntimeController private constructor(private val appContext: Context) {
                         cmd.addAll(listOf("--add-dir", dir))
                     }
                 }
-                if (!mode.isNullOrBlank()) {
-                    cmd.addAll(listOf("--mode", mode))
+                if (!safeCliMode.isNullOrBlank()) {
+                    cmd.addAll(listOf("--mode", safeCliMode))
                 }
                 if (!model.isNullOrBlank()) {
                     cmd.addAll(listOf("--model", model))

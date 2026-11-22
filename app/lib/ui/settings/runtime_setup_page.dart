@@ -1,14 +1,33 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../runtime/runtime_bridge.dart';
 import '../../runtime/runtime_models.dart';
 import '../../state/runtime_state.dart';
 
-class RuntimeSetupPage extends ConsumerWidget {
+class RuntimeSetupPage extends ConsumerStatefulWidget {
   const RuntimeSetupPage({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<RuntimeSetupPage> createState() => _RuntimeSetupPageState();
+}
+
+class _RuntimeSetupPageState extends ConsumerState<RuntimeSetupPage> {
+  Map<String, Object?>? _diag;
+  bool _probing = false;
+
+  Future<void> _runDiagnostics() async {
+    setState(() => _probing = true);
+    final res = await RuntimeBridge.instance.diagnoseRuntime();
+    if (!mounted) return;
+    setState(() {
+      _diag = res;
+      _probing = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final runtime = ref.watch(runtimeProvider);
     final status = runtime.status;
     final theme = Theme.of(context);
@@ -137,6 +156,40 @@ class RuntimeSetupPage extends ConsumerWidget {
                     onChanged: (v) =>
                         ref.read(runtimeProvider.notifier).setSafeMode(v),
                   ),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    onPressed: _probing ? null : _runDiagnostics,
+                    icon: const Icon(Icons.health_and_safety_outlined, size: 18),
+                    label: Text(
+                      _probing
+                          ? 'Checking bash, busybox & /sdcard…'
+                          : 'Run Shell & Storage Self-Test',
+                    ),
+                  ),
+                  if (_diag != null && _diag!.isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.surfaceContainerHighest,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: SelectableText(
+                        'agy ready: ${_diag!['agyExists']}\n'
+                        'bash ready: ${_diag!['bashExecutable']} (${_diag!['bashPath']})\n'
+                        'busybox ready: ${_diag!['busyboxExecutable']}\n'
+                        'All Files Access: ${_diag!['allFilesAccess']}\n'
+                        'TMPDIR: ${_diag!['tmpDir']}\n'
+                        'Tools:\n${_diag!['shellProbe']}\n\n'
+                        '/sdcard/Download:\n${_diag!['downloadProbe']}',
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 11.5,
+                        ),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),

@@ -158,6 +158,7 @@ class RuntimeBridge {
   }) async* {
     final controller = StreamController<AgyChatEvent>();
     final acpCodec = AcpCodec();
+    final stderrTail = <String>[];
     late final StreamSubscription<RuntimeEvent> sub;
 
     sub = events.listen((evt) {
@@ -175,6 +176,8 @@ class RuntimeBridge {
       } else if (evt.kind == 'turn_stderr' && evt.stderrLine != null) {
         final line = evt.stderrLine!.trim();
         if (line.isNotEmpty) {
+          stderrTail.add(line);
+          if (stderrTail.length > 6) stderrTail.removeAt(0);
           if (line.toLowerCase().contains('authentication required') ||
               line.toLowerCase().contains('not signed in')) {
             controller.add(AgyErrorEvent(message: line, requiresAuth: true));
@@ -182,9 +185,12 @@ class RuntimeBridge {
         }
       } else if (evt.kind == 'turn_exit') {
         if ((evt.exitCode ?? 0) != 0 && !controller.isClosed) {
+          final detail = stderrTail.isNotEmpty
+              ? '\n${stderrTail.join('\n')}'
+              : '';
           controller.add(
             AgyErrorEvent(
-              message: 'agy exited with code ${evt.exitCode}',
+              message: 'agy exited with code ${evt.exitCode}$detail',
             ),
           );
         }
@@ -308,5 +314,16 @@ class RuntimeBridge {
   Future<String> readWorkspaceFile(String path) async {
     return await _method.invokeMethod<String>('readFile', {'path': path}) ??
         '';
+  }
+
+  Future<Map<String, Object?>> diagnoseRuntime() async {
+    try {
+      final raw =
+          await _method.invokeMethod<Map<Object?, Object?>>('diagnoseRuntime');
+      if (raw == null) return const {};
+      return raw.map((k, v) => MapEntry(k.toString(), v));
+    } on MissingPluginException {
+      return const {};
+    }
   }
 }

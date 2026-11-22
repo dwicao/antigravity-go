@@ -12,12 +12,12 @@ class AppSettings {
     this.accent = AgyAccentPreset.indigo,
     this.localeCode = 'en',
     this.useG1Credits = false,
-    this.permissionPreset = AntigravityPermissionPreset.auto,
+    this.permissionPreset = AntigravityPermissionPreset.turbo,
     this.allowNonWorkspaceAccess = true,
     this.layoutMode = AntigravityLayoutMode.softwareEngineering,
     this.selectedModelId = 'Orchestrator (Neon)',
     this.reasoningEffort = 'medium',
-    this.executionMode = 'auto',
+    this.executionMode = 'default',
   });
 
   final ThemeMode themeMode;
@@ -78,7 +78,29 @@ class SettingsNotifier extends Notifier<AppSettings> {
     final accentName = prefs.getString('agy_accent');
     final presetName = prefs.getString('agy_permission_preset');
     final layoutName = prefs.getString('agy_layout_mode');
-    final legacySkip = prefs.getBool('agy_skip_permissions') ?? false;
+    final legacySkip = prefs.getBool('agy_skip_permissions');
+
+    // DSH-go style repair: older versions persisted `auto`, which requires a
+    // desktop OS terminal sandbox unavailable on Android.
+    var resolvedPreset = presetName != null
+        ? AntigravityPermissionPreset.fromString(presetName).androidSafe
+        : (legacySkip == false
+            ? AntigravityPermissionPreset.standard
+            : AntigravityPermissionPreset.turbo);
+    if (presetName == 'auto') {
+      await prefs.setString('agy_permission_preset', resolvedPreset.name);
+      await prefs.setBool(
+        'agy_skip_permissions',
+        resolvedPreset == AntigravityPermissionPreset.turbo,
+      );
+    }
+
+    var savedExecMode = prefs.getString('agy_exec_mode') ?? 'default';
+    if (savedExecMode == 'auto') {
+      savedExecMode = 'default';
+      await prefs.setString('agy_exec_mode', savedExecMode);
+    }
+
     state = state.copyWith(
       themeMode: ThemeMode.values.firstWhere(
         (m) => m.name == themeName,
@@ -90,11 +112,7 @@ class SettingsNotifier extends Notifier<AppSettings> {
       ),
       localeCode: prefs.getString('agy_locale') ?? 'en',
       useG1Credits: prefs.getBool('agy_use_g1_credits') ?? false,
-      permissionPreset: presetName != null
-          ? AntigravityPermissionPreset.fromString(presetName)
-          : (legacySkip
-              ? AntigravityPermissionPreset.turbo
-              : AntigravityPermissionPreset.auto),
+      permissionPreset: resolvedPreset,
       allowNonWorkspaceAccess:
           prefs.getBool('agy_allow_non_workspace') ?? true,
       layoutMode: AntigravityLayoutMode.values.firstWhere(
@@ -104,7 +122,7 @@ class SettingsNotifier extends Notifier<AppSettings> {
       selectedModelId:
           prefs.getString('agy_selected_model') ?? 'Orchestrator (Neon)',
       reasoningEffort: prefs.getString('agy_effort') ?? 'medium',
-      executionMode: prefs.getString('agy_exec_mode') ?? 'auto',
+      executionMode: savedExecMode,
     );
   }
 
@@ -151,7 +169,7 @@ class SettingsNotifier extends Notifier<AppSettings> {
     return setPermissionPreset(
       enabled
           ? AntigravityPermissionPreset.turbo
-          : AntigravityPermissionPreset.auto,
+          : AntigravityPermissionPreset.standard,
     );
   }
 

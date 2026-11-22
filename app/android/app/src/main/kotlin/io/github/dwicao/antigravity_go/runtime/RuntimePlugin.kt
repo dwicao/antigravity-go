@@ -171,6 +171,12 @@ class RuntimePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChann
                     mainHandler.post { result.success(res) }
                 }
             }
+            "diagnoseRuntime" -> {
+                ioExecutor.submit {
+                    val res = ctrl.diagnoseRuntime()
+                    mainHandler.post { result.success(res) }
+                }
+            }
             "listWorkspace" -> result.success(ctrl.listWorkspace(call.argument<String>("path")))
             "readFile" -> result.success(ctrl.readFile(call.argument<String>("path") ?: ""))
             else -> result.notImplemented()
