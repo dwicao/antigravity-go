@@ -8,6 +8,7 @@ class AndroidPermissionsStatus {
     this.notifications = false,
     this.microphone = false,
     this.accessibility = false,
+    this.batteryOptimizationExempt = false,
     this.isDexMode = false,
     this.sdkInt = 30,
     this.externalStorageRoot = '/storage/emulated/0',
@@ -17,6 +18,7 @@ class AndroidPermissionsStatus {
   final bool notifications;
   final bool microphone;
   final bool accessibility;
+  final bool batteryOptimizationExempt;
   final bool isDexMode;
   final int sdkInt;
   final String externalStorageRoot;
@@ -27,6 +29,8 @@ class AndroidPermissionsStatus {
       notifications: map['notifications'] as bool? ?? false,
       microphone: map['microphone'] as bool? ?? false,
       accessibility: map['accessibility'] as bool? ?? false,
+      batteryOptimizationExempt:
+          map['batteryOptimizationExempt'] as bool? ?? false,
       isDexMode: map['isDexMode'] as bool? ?? false,
       sdkInt: (map['sdkInt'] as num?)?.toInt() ?? 30,
       externalStorageRoot:
@@ -75,6 +79,14 @@ class PermissionsBridge {
   Future<void> requestRuntimePermissions() async {
     try {
       await _method.invokeMethod<void>('requestRuntimePermissions');
+    } on MissingPluginException {
+      // Ignore in widget tests / non-Android platforms.
+    }
+  }
+
+  Future<void> requestBatteryOptimizationExemption() async {
+    try {
+      await _method.invokeMethod<void>('requestBatteryOptimizationExemption');
     } on MissingPluginException {
       // Ignore in widget tests / non-Android platforms.
     }

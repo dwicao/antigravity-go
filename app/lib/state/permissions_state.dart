@@ -36,4 +36,9 @@ class PermissionsNotifier extends Notifier<AndroidPermissionsStatus> {
     await PermissionsBridge.instance.requestRuntimePermissions();
     await refresh();
   }
+
+  Future<void> requestBatteryOptimizationExemption() async {
+    await PermissionsBridge.instance.requestBatteryOptimizationExemption();
+    await refresh();
+  }
 }

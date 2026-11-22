@@ -214,6 +214,31 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                       child: const Text('Settings'),
                     ),
                   ),
+                  const Divider(height: 1),
+                  ListTile(
+                    leading: Icon(
+                      perms.batteryOptimizationExempt
+                          ? Icons.battery_charging_full
+                          : Icons.battery_saver_outlined,
+                      color: perms.batteryOptimizationExempt
+                          ? Colors.green
+                          : Colors.amber,
+                    ),
+                    title: const Text('Background Battery Exemption'),
+                    subtitle: Text(
+                      perms.batteryOptimizationExempt
+                          ? 'Unrestricted (keeps long agent turns alive)'
+                          : 'Recommended so Android does not suspend active turns',
+                    ),
+                    trailing: OutlinedButton(
+                      onPressed: () => ref
+                          .read(permissionsProvider.notifier)
+                          .requestBatteryOptimizationExemption(),
+                      child: Text(
+                        perms.batteryOptimizationExempt ? 'Manage' : 'Allow',
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),

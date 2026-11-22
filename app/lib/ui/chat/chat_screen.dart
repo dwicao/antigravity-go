@@ -9,10 +9,12 @@ import 'package:share_plus/share_plus.dart';
 import '../../runtime/runtime_bridge.dart';
 import '../../state/auth_state.dart';
 import '../../state/chat_state.dart';
+import '../../state/draft_store.dart';
 import '../../state/hosts_state.dart';
 import '../../state/permissions_state.dart';
 import '../../state/projects_state.dart';
 import '../../state/runtime_state.dart';
+import '../../state/sessions_state.dart';
 import '../../state/settings_state.dart';
 import '../../state/side_panel_state.dart';
 import '../auth/google_login_sheet.dart';
@@ -61,6 +63,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   bool _showMentionMenu = false;
   bool _listeningVoice = false;
   bool _enterToSend = true;
+  String? _draftSessionId;
 
   @override
   void dispose() {
@@ -70,6 +73,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Future<void> _onChanged(String val) async {
+    final sessionId =
+        ref.read(sessionsProvider).activeSessionId ?? 'new_session';
+    ref.read(draftStoreProvider.notifier).save(sessionId, val);
+
     final wantSlash = val.startsWith('/') && !val.contains(' ');
     final atIndex = val.lastIndexOf('@');
     final wantMention =
@@ -136,6 +143,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
 
     final files = List<String>.from(_attachments);
+    final sessionId =
+        ref.read(sessionsProvider).activeSessionId ?? 'new_session';
+    ref.read(draftStoreProvider.notifier).clear(sessionId);
     _inputController.clear();
     setState(() {
       _attachments.clear();
@@ -207,6 +217,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final settings = ref.watch(settingsProvider);
     final perms = ref.watch(permissionsProvider);
     final sidePanel = ref.watch(sidePanelProvider);
+    final activeSessionId =
+        ref.watch(sessionsProvider.select((s) => s.activeSessionId)) ??
+            'new_session';
+    if (_draftSessionId != activeSessionId) {
+      _draftSessionId = activeSessionId;
+      final savedDraft =
+          ref.read(draftStoreProvider.notifier).draftFor(activeSessionId);
+      if (_inputController.text != savedDraft) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          _inputController.text = savedDraft;
+          _inputController.selection =
+              TextSelection.collapsed(offset: savedDraft.length);
+        });
+      }
+    }
     final theme = Theme.of(context);
 
     final activeModel = AgyModelCatalog.resolve(settings.selectedModelId);
@@ -357,6 +383,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       return wrapCentered(
                         MessageBubble(
                           message: m,
+                          tokensPerSecond:
+                              m.isStreaming ? chat.tokensPerSecond : null,
                           onRegenerate: isLastAssistant
                               ? () => ref
                                   .read(chatProvider.notifier)
@@ -374,6 +402,30 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   ),
                 ),
         ),
+        if (chat.stallWarning != null)
+          wrapCentered(
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.errorContainer.withOpacity(0.5),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.hourglass_bottom,
+                      size: 16, color: theme.colorScheme.error),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      chat.stallWarning!,
+                      style: theme.textTheme.bodySmall,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
         if (chat.pendingPermission != null)
           wrapCentered(
             ToolApprovalCard(

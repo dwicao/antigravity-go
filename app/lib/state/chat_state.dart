@@ -156,6 +156,8 @@ class ChatThreadState {
     this.queuedPrompts = const [],
     this.pendingPermission,
     this.activeTurnId,
+    this.tokensPerSecond = 0,
+    this.stallWarning,
   });
 
   final List<ChatMessage> messages;
@@ -163,6 +165,8 @@ class ChatThreadState {
   final List<String> queuedPrompts;
   final AgyPermissionRequestEvent? pendingPermission;
   final String? activeTurnId;
+  final double tokensPerSecond;
+  final String? stallWarning;
 
   ChatThreadState copyWith({
     List<ChatMessage>? messages,
@@ -171,6 +175,9 @@ class ChatThreadState {
     AgyPermissionRequestEvent? pendingPermission,
     bool clearPermission = false,
     String? activeTurnId,
+    double? tokensPerSecond,
+    String? stallWarning,
+    bool clearStallWarning = false,
   }) {
     return ChatThreadState(
       messages: messages ?? this.messages,
@@ -180,6 +187,9 @@ class ChatThreadState {
           ? null
           : (pendingPermission ?? this.pendingPermission),
       activeTurnId: activeTurnId ?? this.activeTurnId,
+      tokensPerSecond: tokensPerSecond ?? this.tokensPerSecond,
+      stallWarning:
+          clearStallWarning ? null : (stallWarning ?? this.stallWarning),
     );
   }
 }
@@ -190,9 +200,55 @@ final chatProvider =
 class ChatNotifier extends Notifier<ChatThreadState> {
   StreamSubscription<AgyChatEvent>? _activeSub;
   String? _loadedSessionId;
+  Timer? _stallWatchdog;
+  bool _receivedTurnContent = false;
+  bool _usedFallbackForTurn = false;
+  AgyPromptRequest? _activeLocalRequest;
+  DateTime? _streamBurstStart;
+  final List<({DateTime at, double tokens})> _rateSamples = [];
+
+  double _recordRateSample(String delta) {
+    if (delta.isEmpty) return state.tokensPerSecond;
+    final now = DateTime.now();
+    // Same empirical estimate as DSH-go's run_pulse.dart (~0.35 tok/char).
+    final est = delta.trim().length * 0.35;
+    if (est <= 0) return state.tokensPerSecond;
+    if (_rateSamples.isEmpty ||
+        now.difference(_rateSamples.last.at).inMilliseconds > 1500) {
+      _streamBurstStart = now;
+    }
+    _rateSamples.add((at: now, tokens: est));
+    final cutoff = now.subtract(const Duration(milliseconds: 2500));
+    _rateSamples.removeWhere((s) => s.at.isBefore(cutoff));
+    final start =
+        _streamBurstStart != null && _streamBurstStart!.isAfter(cutoff)
+            ? _streamBurstStart!
+            : cutoff;
+    final elapsedMs = now.difference(start).inMilliseconds;
+    final secs = (elapsedMs < 500 ? 500 : elapsedMs) / 1000.0;
+    final sum = _rateSamples.fold<double>(0, (a, s) => a + s.tokens);
+    return sum / secs;
+  }
+
+  void _resetWatchdog() {
+    _stallWatchdog?.cancel();
+    if (!state.isStreaming) return;
+    _stallWatchdog = Timer(const Duration(seconds: 180), () {
+      if (state.isStreaming && ref.mounted) {
+        state = state.copyWith(
+          stallWarning:
+              'Agent turn has had no output for 3 minutes — check connection or tap Stop & Regenerate.',
+        );
+      }
+    });
+  }
 
   @override
   ChatThreadState build() {
+    ref.onDispose(() {
+      _stallWatchdog?.cancel();
+      _activeSub?.cancel();
+    });
     final activeId = ref.watch(
       sessionsProvider.select((s) => s.activeSessionId),
     );
@@ -355,6 +411,14 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     }
 
     final currentSession = session;
+    _receivedTurnContent = false;
+    _usedFallbackForTurn = false;
+    _activeLocalRequest = sshHost == null ? request : null;
+    _rateSamples.clear();
+    _streamBurstStart = null;
+    state = state.copyWith(tokensPerSecond: 0, clearStallWarning: true);
+    _resetWatchdog();
+
     await _activeSub?.cancel();
     _activeSub = stream.listen(
       (evt) => _handleEvent(currentSession, assistantId, evt),
@@ -374,6 +438,10 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     String assistantId,
     AgyChatEvent evt,
   ) {
+    _resetWatchdog();
+    if (state.stallWarning != null) {
+      state = state.copyWith(clearStallWarning: true);
+    }
     final idx = state.messages.indexWhere((m) => m.id == assistantId);
     if (idx < 0) return;
     final current = state.messages[idx];
@@ -387,16 +455,23 @@ class ChatNotifier extends Notifier<ChatThreadState> {
               );
         }
       case AgyThoughtDeltaEvent():
+        _receivedTurnContent = true;
+        final rate = _recordRateSample(evt.delta);
+        state = state.copyWith(tokensPerSecond: rate);
         _replaceMessage(
           idx,
           current.copyWith(thoughts: '${current.thoughts}${evt.delta}'),
         );
       case AgyTextDeltaEvent():
+        _receivedTurnContent = true;
+        final rate = _recordRateSample(evt.delta);
+        state = state.copyWith(tokensPerSecond: rate);
         _replaceMessage(
           idx,
           current.copyWith(text: '${current.text}${evt.delta}'),
         );
       case AgyToolCallEvent():
+        _receivedTurnContent = true;
         final tools = [...current.tools];
         final tIdx = tools.indexWhere((t) => t.id == evt.callId);
         if (tIdx >= 0) {
@@ -425,9 +500,14 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           );
         }
         _replaceMessage(idx, current.copyWith(tools: tools));
+        // Checkpoint completed tool steps mid-turn against OS process kills.
+        if (evt.state != ToolCallState.running) {
+          unawaited(_persistMessages(session.id, state.messages));
+        }
       case AgyPermissionRequestEvent():
         state = state.copyWith(pendingPermission: evt);
       case AgyTurnResultEvent():
+        _receivedTurnContent = true;
         if (evt.status.toUpperCase() == 'SUCCESS') {
           ref.read(authProvider.notifier).markAuthenticatedFromTurn();
         }
@@ -457,6 +537,29 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       case AgyErrorEvent():
         if (evt.requiresAuth) {
           ref.read(authProvider.notifier).refresh();
+        } else if (!_receivedTurnContent &&
+            !_usedFallbackForTurn &&
+            _activeLocalRequest != null &&
+            !evt.message.toLowerCase().contains('auto mode is not available')) {
+          // DSH-go style engine fallback: if ACP fails before producing any output,
+          // automatically retry once via `-p --output-format stream-json`.
+          _usedFallbackForTurn = true;
+          final fallbackReq = _activeLocalRequest!;
+          final fallbackTurnId = const Uuid().v4();
+          state = state.copyWith(activeTurnId: fallbackTurnId);
+          _activeSub?.cancel();
+          _activeSub = RuntimeBridge.instance
+              .runPrompt(fallbackReq, fallbackTurnId, useAcp: false)
+              .listen(
+                (e) => _handleEvent(session, assistantId, e),
+                onError: (Object err) => _finishAssistantMessage(
+                  session: session,
+                  assistantId: assistantId,
+                  text: 'Agent error: $err',
+                ),
+                onDone: () => _completeStreaming(session, assistantId),
+              );
+          return;
         }
         _replaceMessage(
           idx,
@@ -496,6 +599,9 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     AgySessionSummary session,
     String assistantId,
   ) async {
+    _stallWatchdog?.cancel();
+    _stallWatchdog = null;
+    _activeLocalRequest = null;
     final idx = state.messages.indexWhere((m) => m.id == assistantId);
     if (idx >= 0 && state.messages[idx].isStreaming) {
       _replaceMessage(
@@ -503,7 +609,12 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         state.messages[idx].copyWith(isStreaming: false),
       );
     }
-    state = state.copyWith(isStreaming: false, clearPermission: true);
+    state = state.copyWith(
+      isStreaming: false,
+      tokensPerSecond: 0,
+      clearPermission: true,
+      clearStallWarning: true,
+    );
     await _persistMessages(session.id, state.messages);
 
     if (state.queuedPrompts.isNotEmpty) {
@@ -524,10 +635,26 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         await RuntimeBridge.instance.cancelTurn(turnId);
       } catch (_) {}
     }
+    _stallWatchdog?.cancel();
+    _stallWatchdog = null;
+    _activeLocalRequest = null;
     try {
       await SshAgyRunner.instance.cancelActive();
     } catch (_) {}
-    state = state.copyWith(isStreaming: false, clearPermission: true);
+    final updated = state.messages
+        .map((m) => m.isStreaming ? m.copyWith(isStreaming: false) : m)
+        .toList();
+    state = state.copyWith(
+      messages: updated,
+      isStreaming: false,
+      tokensPerSecond: 0,
+      clearPermission: true,
+      clearStallWarning: true,
+    );
+    final activeId = ref.read(sessionsProvider).activeSessionId;
+    if (activeId != null) {
+      await _persistMessages(activeId, updated);
+    }
   }
 
   Future<void> sendQueuedNow() async {

@@ -1,6 +1,9 @@
 import 'package:agy_client/agy_client.dart';
 import 'package:flutter/material.dart';
 
+import '../../theme/app_theme.dart';
+import 'secret_mask.dart';
+
 class ToolApprovalCard extends StatelessWidget {
   const ToolApprovalCard({
     super.key,
@@ -14,6 +17,7 @@ class ToolApprovalCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final semantic = AgySemanticColors.of(context);
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       color: theme.colorScheme.secondaryContainer.withOpacity(0.55),
@@ -31,6 +35,7 @@ class ToolApprovalCard extends StatelessWidget {
                     request.title,
                     style: theme.textTheme.titleSmall?.copyWith(
                       fontWeight: FontWeight.w700,
+                      color: semantic.textPrimary,
                     ),
                   ),
                 ),
@@ -47,12 +52,17 @@ class ToolApprovalCard extends StatelessWidget {
                 width: double.infinity,
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: theme.colorScheme.surface.withOpacity(0.8),
+                  color: semantic.codeWellBg,
                   borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: semantic.codeWellBorder),
                 ),
                 child: SelectableText(
-                  request.commandOrPath!,
-                  style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                  AgySecretMask.mask(request.commandOrPath!),
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 12,
+                    color: semantic.codeWellFg,
+                  ),
                 ),
               ),
             ],

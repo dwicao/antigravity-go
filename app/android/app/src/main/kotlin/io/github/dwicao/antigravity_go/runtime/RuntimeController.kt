@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Environment
+import android.os.PowerManager
 import android.system.Os
 import org.json.JSONArray
 import org.json.JSONObject
@@ -44,10 +45,11 @@ class RuntimeController private constructor(private val appContext: Context) {
     private val executor = Executors.newCachedThreadPool()
     private val listeners = CopyOnWriteArrayList<(Map<String, Any?>) -> Unit>()
     private val logs = CopyOnWriteArrayList<String>()
+    private val runTail = ArrayDeque<String>()
     private val activeTurns = ConcurrentHashMap<String, Process>()
     private val acpManager = AcpSessionManager(
         executor = executor,
-        emit = { payload -> emit(payload) },
+        emit = { payload -> handleAcpOrProcessEvent(payload) },
         log = { msg -> log(msg) },
     )
 
@@ -71,6 +73,21 @@ class RuntimeController private constructor(private val appContext: Context) {
 
     @Volatile
     private var safeMode: Boolean = false
+
+    @Volatile
+    private var safeState: SafeState = SafeState.OFF
+
+    @Volatile
+    private var consecutiveStrikes: Int = 0
+
+    @Volatile
+    private var lastFailure: RunFailure? = null
+
+    @Volatile
+    private var networkBlocked: Boolean = false
+
+    private val turnStartedAt = ConcurrentHashMap<String, Long>()
+    private val turnReceivedOutput = ConcurrentHashMap<String, Boolean>()
 
     val runtimeDir: File get() = File(appContext.filesDir, "runtime")
     val binDir: File get() = File(runtimeDir, "bin")
@@ -129,11 +146,108 @@ class RuntimeController private constructor(private val appContext: Context) {
     }
 
     private fun log(msg: String) {
-        logs.add(msg)
+        val clean = LogRedactor.redact(msg)
+        logs.add(clean)
         while (logs.size > 250) {
             logs.removeAt(0)
         }
-        emit(mapOf("kind" to "log", "logLine" to msg))
+        synchronized(runTail) {
+            runTail.addLast(clean)
+            while (runTail.size > CrashClassifier.TAIL_LINES) {
+                runTail.removeFirst()
+            }
+        }
+        emit(mapOf("kind" to "log", "logLine" to clean))
+    }
+
+    fun noteNetworkChange(note: String) {
+        networkBlocked = false
+        log(note)
+    }
+
+    fun noteNetworkBlocked(blocked: Boolean) {
+        networkBlocked = blocked
+        log(if (blocked) "Android network policy blocked background access" else "Network access restored")
+    }
+
+    private fun handleAcpOrProcessEvent(payload: Map<String, Any?>) {
+        val kind = payload["kind"] as? String
+        val turnId = payload["turnId"] as? String
+        when (kind) {
+            "turn_acp_line", "turn_stdout" -> {
+                if (turnId != null) {
+                    val line = (payload["stdoutLine"] as? String).orEmpty()
+                    if (line.contains("agent_message_chunk") || line.contains("agent_thought_chunk") || line.contains("\"response\"")) {
+                        turnReceivedOutput[turnId] = true
+                    }
+                    if (line.contains("tool_call") && AgyService.running) {
+                        AgyService.updateTurnStatus(appContext, "Agent running tool step…")
+                    }
+                }
+            }
+            "turn_stderr" -> {
+                val err = LogRedactor.redact((payload["stderrLine"] as? String).orEmpty())
+                if (err.isNotBlank()) {
+                    synchronized(runTail) {
+                        runTail.addLast(err)
+                        while (runTail.size > CrashClassifier.TAIL_LINES) runTail.removeFirst()
+                    }
+                }
+            }
+            "turn_exit" -> {
+                val exitCode = (payload["exitCode"] as? Number)?.toInt() ?: 0
+                if (turnId != null) {
+                    onTurnFinished(turnId, exitCode)
+                }
+            }
+        }
+        emit(payload)
+    }
+
+    private fun onTurnFinished(turnId: String, exitCode: Int) {
+        val started = turnStartedAt.remove(turnId)
+        val upMs = started?.let { System.currentTimeMillis() - it }
+        val receivedOut = turnReceivedOutput.remove(turnId) ?: false
+        if (AgyService.running) {
+            AgyService.updateTurnStatus(appContext, "On-device Antigravity CLI harness active")
+        }
+        if (exitCode == 0) {
+            if (safeState == SafeState.PROBATION && (upMs == null || upMs >= SafePolicy.HEALTHY_MS || receivedOut)) {
+                safeState = SafeState.OFF
+            }
+            consecutiveStrikes = 0
+            return
+        }
+        val tailSnapshot = synchronized(runTail) { runTail.toList() }
+        val failure = CrashClassifier.classify(
+            exitCode = exitCode,
+            upMillis = upMs,
+            tailLines = tailSnapshot,
+            safeMode = safeMode,
+            receivedAgentOutput = receivedOut,
+        ) ?: return
+        lastFailure = failure
+        log("[classifier] ${failure.kind.wire}: ${failure.summary} | hint: ${failure.hint}")
+        emit(
+            mapOf(
+                "kind" to "turn_stderr",
+                "turnId" to turnId,
+                "stderrLine" to "${failure.summary}\nHint: ${failure.hint}",
+            )
+        )
+        val outcome = SafePolicy.onFailure(
+            state = safeState,
+            strikes = consecutiveStrikes,
+            failure = failure,
+        )
+        safeState = outcome.state
+        consecutiveStrikes = outcome.strikes
+        if (outcome.engagedSafeMode && !safeMode) {
+            safeMode = true
+            statusMessage = "Safe Mode engaged automatically"
+            outcome.notice?.let(::log)
+            emitStatus()
+        }
     }
 
     fun getLogs(): List<String> = logs.toList()
@@ -239,8 +353,23 @@ class RuntimeController private constructor(private val appContext: Context) {
 
     fun setSafeMode(enabled: Boolean) {
         safeMode = enabled
-        log("Safe mode ${if (enabled) "enabled" else "disabled"}")
+        safeState = SafePolicy.onManualModeChange(safeState, enabled)
+        if (!enabled) consecutiveStrikes = 0
+        log("Safe mode ${if (enabled) "enabled" else "disabled"} (state=${safeState.wire})")
         emitStatus()
+    }
+
+    private fun atomicWriteText(target: File, content: String) {
+        target.parentFile?.mkdirs()
+        val tmp = File(target.parentFile, ".${target.name}.agy-tmp")
+        try {
+            tmp.writeText(content)
+            if (!tmp.renameTo(target)) {
+                tmp.copyTo(target, overwrite = true)
+            }
+        } finally {
+            if (tmp.exists()) tmp.delete()
+        }
     }
 
     /**
@@ -394,7 +523,7 @@ class RuntimeController private constructor(private val appContext: Context) {
         for ((k, v) in patch) {
             obj.put(k, JSONObject.wrap(v))
         }
-        settingsFile.writeText(obj.toString(2))
+        atomicWriteText(settingsFile, obj.toString(2))
     }
 
     private fun writeAuthMarker(
@@ -728,12 +857,18 @@ class RuntimeController private constructor(private val appContext: Context) {
         } else {
             "All Files Access not granted"
         }
+        val pm = appContext.getSystemService(Context.POWER_SERVICE) as? PowerManager
+        val batteryExempt = pm?.isIgnoringBatteryOptimizations(appContext.packageName) ?: false
         return mapOf(
             "agyExists" to (binaryFile.exists() && binaryFile.canExecute()),
             "bashPath" to bashFile.absolutePath,
             "bashExecutable" to bashFile.canExecute(),
             "busyboxExecutable" to File(binDir, "busybox").canExecute(),
             "allFilesAccess" to hasStorageAccess(),
+            "batteryOptimizationExempt" to batteryExempt,
+            "safeState" to safeState.wire,
+            "networkBlocked" to networkBlocked,
+            "lastFailure" to lastFailure?.toMap(),
             "tmpDir" to env["TMPDIR"],
             "shellProbe" to bashWorks,
             "downloadProbe" to storageProbe,
@@ -780,8 +915,18 @@ class RuntimeController private constructor(private val appContext: Context) {
             return
         }
 
+        turnStartedAt[turnId] = System.currentTimeMillis()
+        turnReceivedOutput[turnId] = false
+        synchronized(runTail) { runTail.clear() }
+        if (AgyService.running) {
+            AgyService.updateTurnStatus(appContext, "Agent thinking…")
+        }
+
         val storageEnabled = allowNonWorkspaceAccess || hasStorageAccess()
-        syncManagedGeminiMd(allowStorage = storageEnabled)
+        // In Safe Mode, skip regenerating custom GEMINI.md overrides to match DSH-go safe recovery.
+        if (!safeMode) {
+            syncManagedGeminiMd(allowStorage = storageEnabled)
+        }
 
         // Sync non-workspace & permission settings before running agy.
         // Never allow `auto` sandbox mode to persist in settings.json on Android.
@@ -878,14 +1023,15 @@ class RuntimeController private constructor(private val appContext: Context) {
                 activeTurns[turnId] = proc
 
                 val errFuture = executor.submit {
+                    val redactor = LogRedactor()
                     BufferedReader(InputStreamReader(proc.errorStream)).use { errReader ->
                         var errLine: String?
                         while (errReader.readLine().also { errLine = it } != null) {
-                            emit(
+                            handleAcpOrProcessEvent(
                                 mapOf(
                                     "kind" to "turn_stderr",
                                     "turnId" to turnId,
-                                    "stderrLine" to (errLine ?: ""),
+                                    "stderrLine" to redactor.line(errLine ?: ""),
                                 )
                             )
                         }
@@ -895,7 +1041,7 @@ class RuntimeController private constructor(private val appContext: Context) {
                 BufferedReader(InputStreamReader(proc.inputStream)).use { outReader ->
                     var outLine: String?
                     while (outReader.readLine().also { outLine = it } != null) {
-                        emit(
+                        handleAcpOrProcessEvent(
                             mapOf(
                                 "kind" to "turn_stdout",
                                 "turnId" to turnId,
@@ -911,16 +1057,16 @@ class RuntimeController private constructor(private val appContext: Context) {
                     writeAuthMarker(true)
                     emit(mapOf("kind" to "auth_completed"))
                 }
-                emit(mapOf("kind" to "turn_exit", "turnId" to turnId, "exitCode" to code))
+                handleAcpOrProcessEvent(mapOf("kind" to "turn_exit", "turnId" to turnId, "exitCode" to code))
             } catch (t: Throwable) {
-                emit(
+                handleAcpOrProcessEvent(
                     mapOf(
                         "kind" to "turn_stderr",
                         "turnId" to turnId,
                         "stderrLine" to (t.message ?: t.toString()),
                     )
                 )
-                emit(mapOf("kind" to "turn_exit", "turnId" to turnId, "exitCode" to 1))
+                handleAcpOrProcessEvent(mapOf("kind" to "turn_exit", "turnId" to turnId, "exitCode" to 1))
             } finally {
                 activeTurns.remove(turnId)
             }

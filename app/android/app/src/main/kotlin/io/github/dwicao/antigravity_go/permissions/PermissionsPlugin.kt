@@ -10,6 +10,7 @@ import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.PowerManager
 import android.provider.Settings
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -137,6 +138,15 @@ class PermissionsPlugin :
         return false
     }
 
+    fun isBatteryOptimizationExempt(): Boolean {
+        return try {
+            val pm = appContext.getSystemService(Context.POWER_SERVICE) as? PowerManager
+            pm?.isIgnoringBatteryOptimizations(appContext.packageName) ?: false
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
     fun statusMap(): Map<String, Any?> {
         val externalRoot = Environment.getExternalStorageDirectory()?.absolutePath ?: "/storage/emulated/0"
         return mapOf(
@@ -144,6 +154,7 @@ class PermissionsPlugin :
             "notifications" to hasNotifications(),
             "microphone" to hasMicrophone(),
             "accessibility" to (AgyAccessibilityService.instance != null),
+            "batteryOptimizationExempt" to isBatteryOptimizationExempt(),
             "isDexMode" to isDexMode(),
             "sdkInt" to Build.VERSION.SDK_INT,
             "externalStorageRoot" to externalRoot,
@@ -210,6 +221,28 @@ class PermissionsPlugin :
                 } else {
                     pendingPermissionResult = result
                     ActivityCompat.requestPermissions(act, toRequest.toTypedArray(), REQ_PERMISSIONS)
+                }
+            }
+            "requestBatteryOptimizationExemption" -> {
+                val act = activity
+                if (act == null) {
+                    result.error("no_activity", "Activity unavailable", null)
+                    return
+                }
+                try {
+                    val intent = Intent(
+                        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                        Uri.parse("package:${act.packageName}"),
+                    )
+                    act.startActivity(intent)
+                    result.success(true)
+                } catch (_: Throwable) {
+                    try {
+                        act.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                        result.success(true)
+                    } catch (t: Throwable) {
+                        result.error("settings_error", t.message, null)
+                    }
                 }
             }
             else -> result.notImplemented()

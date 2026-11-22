@@ -1,10 +1,12 @@
 import 'package:agy_client/agy_client.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:gpt_markdown/gpt_markdown.dart';
 
 import '../../state/chat_state.dart';
+import '../../theme/app_theme.dart';
 import '../auth/google_login_sheet.dart';
+import 'render/agy_markdown.dart';
+import 'secret_mask.dart';
 
 class MessageBubble extends StatelessWidget {
   const MessageBubble({
@@ -12,15 +14,18 @@ class MessageBubble extends StatelessWidget {
     required this.message,
     this.onRegenerate,
     this.onEditResend,
+    this.tokensPerSecond,
   });
 
   final ChatMessage message;
   final VoidCallback? onRegenerate;
   final ValueChanged<String>? onEditResend;
+  final double? tokensPerSecond;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final semantic = AgySemanticColors.of(context);
     final isUser = message.role == ChatRole.user;
 
     if (isUser) {
@@ -145,6 +150,15 @@ class MessageBubble extends StatelessWidget {
                   height: 12,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 ),
+                if (tokensPerSecond != null && tokensPerSecond! > 0.5) ...[
+                  const SizedBox(width: 8),
+                  Text(
+                    '${tokensPerSecond!.toStringAsFixed(0)} tok/s',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: semantic.textSecondary,
+                    ),
+                  ),
+                ],
               ],
               const Spacer(),
               if (message.usage != null && message.usage!.totalTokens > 0)
@@ -191,13 +205,16 @@ class MessageBubble extends StatelessWidget {
           ],
           if (message.text.isNotEmpty) ...[
             const SizedBox(height: 8),
-            GptMarkdown(message.text),
+            AgyMarkdown(
+              text: message.text,
+              streaming: message.isStreaming,
+            ),
           ] else if (message.isStreaming) ...[
             const SizedBox(height: 8),
             Text(
               'Thinking…',
               style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
+                color: semantic.textSecondary,
               ),
             ),
           ],
@@ -236,14 +253,12 @@ class _CollapsibleSection extends StatelessWidget {
         leading: Icon(icon, size: 18, color: theme.colorScheme.primary),
         title: Text(title, style: theme.textTheme.labelMedium),
         childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-        children: [
+          children: [
           Align(
             alignment: Alignment.centerLeft,
-            child: SelectableText(
-              body.trim(),
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
+            child: AgyMarkdown(
+              text: body.trim(),
+              secondary: true,
             ),
           ),
         ],
@@ -260,6 +275,7 @@ class _FoldedToolsBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final semantic = AgySemanticColors.of(context);
     final running =
         tools.where((t) => t.state == ToolCallState.running).length;
     final failed = tools.where((t) => t.state == ToolCallState.failed).length;
@@ -281,10 +297,16 @@ class _FoldedToolsBar extends StatelessWidget {
                   : Icons.check_circle_outline,
           size: 18,
           color: failed > 0
-              ? theme.colorScheme.error
+              ? semantic.danger
               : theme.colorScheme.primary,
         ),
-        title: Text(summary, style: theme.textTheme.labelMedium),
+        title: Text(
+          summary,
+          style: theme.textTheme.labelMedium?.copyWith(
+            color: semantic.textPrimary,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
         childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
         children: tools
             .map(
@@ -297,6 +319,7 @@ class _FoldedToolsBar extends StatelessWidget {
                       '• ${t.toolName} (${t.state.name})',
                       style: theme.textTheme.labelSmall?.copyWith(
                         fontWeight: FontWeight.w700,
+                        color: semantic.textPrimary,
                       ),
                     ),
                     if (t.output != null && t.output!.isNotEmpty)
@@ -305,24 +328,28 @@ class _FoldedToolsBar extends StatelessWidget {
                         margin: const EdgeInsets.only(top: 4),
                         padding: const EdgeInsets.all(8),
                         decoration: BoxDecoration(
-                          color: theme.colorScheme.surfaceContainerHighest,
+                          color: semantic.codeWellBg,
                           borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: semantic.codeWellBorder),
                         ),
                         child: Text(
-                          t.output!.length > 600
-                              ? '${t.output!.substring(0, 600)}…'
-                              : t.output!,
-                          style: const TextStyle(
+                          AgySecretMask.mask(
+                            t.output!.length > 600
+                                ? '${t.output!.substring(0, 600)}…'
+                                : t.output!,
+                          ),
+                          style: TextStyle(
                             fontFamily: 'monospace',
-                            fontSize: 11,
+                            fontSize: 11.5,
+                            color: semantic.codeWellFg,
                           ),
                         ),
                       ),
                     if (t.error != null && t.error!.isNotEmpty)
                       Text(
-                        t.error!,
+                        AgySecretMask.mask(t.error!),
                         style: TextStyle(
-                          color: theme.colorScheme.error,
+                          color: semantic.danger,
                           fontSize: 12,
                         ),
                       ),

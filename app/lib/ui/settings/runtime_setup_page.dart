@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../runtime/runtime_bridge.dart';
 import '../../runtime/runtime_models.dart';
 import '../../state/runtime_state.dart';
+import '../../theme/app_theme.dart';
 
 class RuntimeSetupPage extends ConsumerStatefulWidget {
   const RuntimeSetupPage({super.key});
@@ -31,6 +32,7 @@ class _RuntimeSetupPageState extends ConsumerState<RuntimeSetupPage> {
     final runtime = ref.watch(runtimeProvider);
     final status = runtime.status;
     final theme = Theme.of(context);
+    final semantic = AgySemanticColors.of(context);
 
     return Scaffold(
       appBar: AppBar(
@@ -172,20 +174,25 @@ class _RuntimeSetupPageState extends ConsumerState<RuntimeSetupPage> {
                       width: double.infinity,
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
-                        color: theme.colorScheme.surfaceContainerHighest,
+                        color: semantic.codeWellBg,
                         borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: semantic.codeWellBorder),
                       ),
                       child: SelectableText(
                         'agy ready: ${_diag!['agyExists']}\n'
                         'bash ready: ${_diag!['bashExecutable']} (${_diag!['bashPath']})\n'
                         'busybox ready: ${_diag!['busyboxExecutable']}\n'
                         'All Files Access: ${_diag!['allFilesAccess']}\n'
+                        'Battery Exempt: ${_diag!['batteryOptimizationExempt']}\n'
+                        'Safe State: ${_diag!['safeState']} | Network Blocked: ${_diag!['networkBlocked']}\n'
                         'TMPDIR: ${_diag!['tmpDir']}\n'
+                        '${_diag!['lastFailure'] != null ? 'Last Failure: ${_diag!['lastFailure']}\n' : ''}'
                         'Tools:\n${_diag!['shellProbe']}\n\n'
                         '/sdcard/Download:\n${_diag!['downloadProbe']}',
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontFamily: 'monospace',
                           fontSize: 11.5,
+                          color: semantic.codeWellFg,
                         ),
                       ),
                     ),
@@ -205,14 +212,19 @@ class _RuntimeSetupPageState extends ConsumerState<RuntimeSetupPage> {
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceContainerHighest,
+              color: semantic.codeWellBg,
               borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: semantic.codeWellBorder),
             ),
             child: SelectableText(
               runtime.logs.isEmpty
                   ? 'No runtime logs yet.'
                   : runtime.logs.join('\n'),
-              style: const TextStyle(fontFamily: 'monospace', fontSize: 11.5),
+              style: TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 11.5,
+                color: semantic.codeWellFg,
+              ),
             ),
           ),
         ],
