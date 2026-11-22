@@ -19,9 +19,15 @@ class GoogleAuthService {
   final RuntimeBridge _runtime;
   final FlutterSecureStorage _secureStorage;
 
-  Future<AgyAuthStatus> loadStatus() async {
+  Future<AgyAuthStatus> loadStatus({bool verifyWithCli = false}) async {
     final apiKey = await _secureStorage.read(key: _apiKeyStorageKey);
-    final native = await _runtime.checkAuthStatus();
+    var native = await _runtime.checkAuthStatus();
+    if (verifyWithCli || native['isAuthenticated'] != true) {
+      final verified = await _runtime.verifyAuth();
+      if (verified['isAuthenticated'] == true) {
+        native = verified;
+      }
+    }
     final isAuth = native['isAuthenticated'] == true ||
         (apiKey != null && apiKey.isNotEmpty);
 

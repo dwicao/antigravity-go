@@ -97,6 +97,7 @@ class UsageLedger {
     bool useG1Credits = false,
     DateTime? now,
     String? rawProbeOutput,
+    String? lastProbeError,
   }) {
     final current = now ?? DateTime.now().toUtc();
     final baseEntries = liveProbe?.entries ?? UsageQuotaSnapshot.initial().entries;
@@ -119,6 +120,7 @@ class UsageLedger {
     return UsageQuotaSnapshot(
       entries: enriched,
       fetchedAt: current,
+      discoveredModels: liveProbe?.discoveredModels ?? const [],
       aiCreditsRemaining: liveProbe?.aiCreditsRemaining,
       useG1Credits: useG1Credits,
       overallFiveHourRemainingPct: liveProbe?.overallFiveHourRemainingPct,
@@ -129,6 +131,7 @@ class UsageLedger {
       weeklyLedgerTokens: sumWindow(weeklyWindow, now: current),
       source: liveProbe != null ? 'agy-live+ledger' : 'local-ledger',
       rawProbeOutput: rawProbeOutput,
+      lastProbeError: lastProbeError,
     );
   }
 }

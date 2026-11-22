@@ -6,7 +6,9 @@ import '../../state/auth_state.dart';
 import '../../state/usage_state.dart';
 
 class UsagePage extends ConsumerStatefulWidget {
-  const UsagePage({super.key});
+  const UsagePage({super.key, this.autoRefreshOnOpen = true});
+
+  final bool autoRefreshOnOpen;
 
   @override
   ConsumerState<UsagePage> createState() => _UsagePageState();
@@ -15,7 +17,16 @@ class UsagePage extends ConsumerStatefulWidget {
 class _UsagePageState extends ConsumerState<UsagePage> {
   bool _probing = false;
 
+  @override
+  void initState() {
+    super.initState();
+    if (widget.autoRefreshOnOpen) {
+      Future.microtask(_refreshLive);
+    }
+  }
+
   Future<void> _refreshLive() async {
+    if (!mounted) return;
     setState(() => _probing = true);
     try {
       await ref.read(usageProvider.notifier).refreshFromRuntime();
@@ -47,161 +58,216 @@ class _UsagePageState extends ConsumerState<UsagePage> {
           ),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(
-                        Icons.speed_rounded,
-                        color: theme.colorScheme.primary,
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Plan & Rolling Windows',
-                          style: theme.textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.w700,
+      body: Scrollbar(
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.speed_rounded,
+                          color: theme.colorScheme.primary,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Plan & Rolling Windows',
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
                         ),
-                      ),
-                      Chip(label: Text(auth.planTier.label)),
-                    ],
-                  ),
-                  const SizedBox(height: 14),
-                  _WindowSummaryRow(
-                    title: '5-Hour Rolling Window',
-                    remainingPct: usage.overallFiveHourRemainingPct,
-                    resetText: usage.overallFiveHourResetText,
-                    tokensUsed: usage.fiveHourLedgerTokens.totalTokens,
-                    color: theme.colorScheme.primary,
-                  ),
-                  const SizedBox(height: 14),
-                  _WindowSummaryRow(
-                    title: 'Weekly Limit',
-                    remainingPct: usage.overallWeeklyRemainingPct,
-                    resetText: usage.overallWeeklyResetText,
-                    tokensUsed: usage.weeklyLedgerTokens.totalTokens,
-                    color: theme.colorScheme.tertiary,
-                  ),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 12,
-                    runSpacing: 6,
-                    children: [
-                      _TokenChip(
-                        label: '5h Input',
-                        value: usage.fiveHourLedgerTokens.inputTokens,
-                      ),
-                      _TokenChip(
-                        label: '5h Output',
-                        value: usage.fiveHourLedgerTokens.outputTokens,
-                      ),
-                      _TokenChip(
-                        label: '5h Thinking',
-                        value: usage.fiveHourLedgerTokens.thinkingTokens,
-                      ),
-                      _TokenChip(
-                        label: '7d Cached',
-                        value: usage.weeklyLedgerTokens.cacheReadTokens,
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 14),
-          Text(
-            'Model & Group Quotas',
-            style: theme.textTheme.titleSmall?.copyWith(
-              fontWeight: FontWeight.w700,
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-          ),
-          const SizedBox(height: 8),
-          for (final entry in usage.entries) ...[
-            _ModelQuotaCard(entry: entry),
-            const SizedBox(height: 10),
-          ],
-          const SizedBox(height: 6),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(
-                        Icons.toll_rounded,
-                        color: theme.colorScheme.secondary,
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'AI Credits & Overages',
-                          style: theme.textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                      if (usage.aiCreditsRemaining != null)
-                        Text(
-                          '${usage.aiCreditsRemaining!.toStringAsFixed(0)} credits',
-                          style: theme.textTheme.titleSmall?.copyWith(
-                            fontWeight: FontWeight.w700,
-                            color: theme.colorScheme.primary,
-                          ),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  SwitchListTile.adaptive(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Use AI Credits on Quota Overage'),
-                    subtitle: const Text(
-                      'Matches CLI `useG1Credits` setting when 5h or weekly limits are reached',
+                        Chip(label: Text(auth.planTier.label)),
+                      ],
                     ),
-                    value: usage.useG1Credits,
-                    onChanged: (v) =>
-                        ref.read(usageProvider.notifier).toggleUseG1Credits(v),
-                  ),
-                ],
+                    const SizedBox(height: 4),
+                    Text(
+                      'Source: ${usage.source} · Updated ${TimeOfDay.fromDateTime(usage.fetchedAt.toLocal()).format(context)}',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    _WindowSummaryRow(
+                      title: '5-Hour Rolling Window',
+                      remainingPct: usage.overallFiveHourRemainingPct,
+                      resetText: usage.overallFiveHourResetText,
+                      tokensUsed: usage.fiveHourLedgerTokens.totalTokens,
+                      color: theme.colorScheme.primary,
+                    ),
+                    const SizedBox(height: 14),
+                    _WindowSummaryRow(
+                      title: 'Weekly Limit',
+                      remainingPct: usage.overallWeeklyRemainingPct,
+                      resetText: usage.overallWeeklyResetText,
+                      tokensUsed: usage.weeklyLedgerTokens.totalTokens,
+                      color: theme.colorScheme.tertiary,
+                    ),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 12,
+                      runSpacing: 6,
+                      children: [
+                        _TokenChip(
+                          label: '5h Input',
+                          value: usage.fiveHourLedgerTokens.inputTokens,
+                        ),
+                        _TokenChip(
+                          label: '5h Output',
+                          value: usage.fiveHourLedgerTokens.outputTokens,
+                        ),
+                        _TokenChip(
+                          label: '5h Thinking',
+                          value: usage.fiveHourLedgerTokens.thinkingTokens,
+                        ),
+                        _TokenChip(
+                          label: '7d Cached',
+                          value: usage.weeklyLedgerTokens.cacheReadTokens,
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
             ),
-          ),
-          if (usage.rawProbeOutput != null &&
-              usage.rawProbeOutput!.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            ExpansionTile(
-              title: const Text('Raw /usage & /credits Output'),
-              children: [
-                Container(
-                  width: double.infinity,
+            if (usage.discoveredModels.isNotEmpty) ...[
+              const SizedBox(height: 14),
+              Text(
+                'Models Enabled On Your Account (${usage.discoveredModels.length})',
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                children: usage.discoveredModels
+                    .map(
+                      (m) => Chip(
+                        visualDensity: VisualDensity.compact,
+                        label: Text(m.displayName),
+                      ),
+                    )
+                    .toList(),
+              ),
+            ],
+            const SizedBox(height: 14),
+            Text(
+              'Model & Group Quotas',
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 8),
+            for (final entry in usage.entries) ...[
+              _ModelQuotaCard(entry: entry),
+              const SizedBox(height: 10),
+            ],
+            const SizedBox(height: 6),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.toll_rounded,
+                          color: theme.colorScheme.secondary,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'AI Credits & Overages',
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        if (usage.aiCreditsRemaining != null)
+                          Text(
+                            '${usage.aiCreditsRemaining!.toStringAsFixed(0)} credits',
+                            style: theme.textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.w700,
+                              color: theme.colorScheme.primary,
+                            ),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    SwitchListTile.adaptive(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Use AI Credits on Quota Overage'),
+                      subtitle: const Text(
+                        'Matches CLI `useG1Credits` setting when 5h or weekly limits are reached',
+                      ),
+                      value: usage.useG1Credits,
+                      onChanged: (v) =>
+                          ref.read(usageProvider.notifier).toggleUseG1Credits(v),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            if (usage.lastProbeError != null &&
+                usage.lastProbeError!.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Card(
+                color: theme.colorScheme.errorContainer.withOpacity(0.5),
+                child: Padding(
                   padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: SelectableText(
-                    usage.rawProbeOutput!,
-                    style: const TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 12,
-                    ),
+                  child: Text(usage.lastProbeError!),
+                ),
+              ),
+            ],
+            if (usage.rawProbeOutput != null &&
+                usage.rawProbeOutput!.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Live CLI Report (/usage & models)',
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: SelectableText(
+                          usage.rawProbeOutput!,
+                          style: const TextStyle(
+                            fontFamily: 'monospace',
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ],
-            ),
+              ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
@@ -313,12 +379,18 @@ class _ModelQuotaCard extends StatelessWidget {
                     ),
                   ),
                 ),
-                Text(
-                  '${entry.fiveHourRequests} turns (5h) · ${entry.weeklyRequests} (7d)',
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
+                if (!entry.isAvailable)
+                  Chip(
+                    visualDensity: VisualDensity.compact,
+                    label: const Text('Not in plan'),
+                  )
+                else
+                  Text(
+                    '${entry.fiveHourRequests} turns (5h) · ${entry.weeklyRequests} (7d)',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
                   ),
-                ),
               ],
             ),
             const SizedBox(height: 10),
@@ -339,7 +411,11 @@ class _ModelQuotaCard extends StatelessWidget {
               const SizedBox(height: 6),
             ],
             Text(
-              'Logged usage: ${_formatTokens(entry.fiveHourTokensUsed)} tokens (5h) · ${_formatTokens(entry.weeklyTokensUsed)} tokens (weekly)',
+              [
+                if (entry.statusNote != null && entry.statusNote!.isNotEmpty)
+                  entry.statusNote!,
+                'Logged: ${_formatTokens(entry.fiveHourTokensUsed)} tok (5h) · ${_formatTokens(entry.weeklyTokensUsed)} tok (7d)',
+              ].join('\n'),
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),

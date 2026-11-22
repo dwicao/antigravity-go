@@ -182,21 +182,49 @@ class _GoogleLoginSheetState extends ConsumerState<GoogleLoginSheet> {
                   ),
                 ),
               const SizedBox(height: 8),
-              FilledButton.icon(
-                onPressed: _submitting || !runtime.status.isReady
-                    ? null
-                    : () async {
-                        setState(() => _submitting = true);
-                        try {
-                          await ref
-                              .read(authProvider.notifier)
-                              .startGoogleSignIn();
-                        } finally {
-                          if (mounted) setState(() => _submitting = false);
-                        }
-                      },
-                icon: const Icon(Icons.login),
-                label: const Text('Sign in with Google Account'),
+              Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: _submitting || !runtime.status.isReady
+                          ? null
+                          : () async {
+                              setState(() => _submitting = true);
+                              try {
+                                await ref
+                                    .read(authProvider.notifier)
+                                    .startGoogleSignIn();
+                              } finally {
+                                if (mounted) setState(() => _submitting = false);
+                              }
+                            },
+                      icon: const Icon(Icons.login),
+                      label: const Text('Sign in with Google Account'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  OutlinedButton.icon(
+                    onPressed: _submitting || !runtime.status.isReady
+                        ? null
+                        : () async {
+                            setState(() => _submitting = true);
+                            final nav = Navigator.of(context);
+                            try {
+                              await ref
+                                  .read(authProvider.notifier)
+                                  .refresh(verifyWithCli: true);
+                              if (mounted &&
+                                  ref.read(authProvider).isAuthenticated) {
+                                nav.pop();
+                              }
+                            } finally {
+                              if (mounted) setState(() => _submitting = false);
+                            }
+                          },
+                    icon: const Icon(Icons.verified_outlined, size: 18),
+                    label: const Text('Verify'),
+                  ),
+                ],
               ),
               if (auth.pendingOAuthUrl != null) ...[
                 const SizedBox(height: 12),

@@ -174,50 +174,78 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
           ),
           const Divider(height: 12),
           Expanded(
-            child: ListView.builder(
-              itemCount: filtered.length,
-              itemBuilder: (context, index) {
-                final s = filtered[index];
-                final active = s.id == sessions.activeSessionId;
-                return ListTile(
-                  selected: active,
-                  leading: Icon(
-                    s.hostKind == AgyHostKind.ssh
-                        ? Icons.computer
-                        : Icons.smartphone,
-                    size: 18,
-                  ),
-                  title: Text(
-                    s.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  subtitle: Text(
-                    '${s.hostName} · ${s.modelId}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  trailing: PopupMenuButton<String>(
-                    onSelected: (action) async {
+            child: Scrollbar(
+              child: ListView.builder(
+                itemCount: filtered.length,
+                itemBuilder: (context, index) {
+                  final s = filtered[index];
+                  final active = s.id == sessions.activeSessionId;
+                  return GestureDetector(
+                    onSecondaryTapUp: (details) async {
+                      final action = await showMenu<String>(
+                        context: context,
+                        position: RelativeRect.fromLTRB(
+                          details.globalPosition.dx,
+                          details.globalPosition.dy,
+                          details.globalPosition.dx,
+                          details.globalPosition.dy,
+                        ),
+                        items: const [
+                          PopupMenuItem(value: 'rename', child: Text('Rename')),
+                          PopupMenuItem(value: 'delete', child: Text('Delete')),
+                        ],
+                      );
                       if (action == 'delete') {
                         await ref
                             .read(sessionsProvider.notifier)
                             .deleteSession(s.id);
-                      } else if (action == 'rename') {
+                      } else if (action == 'rename' && context.mounted) {
                         await _promptRename(context, s);
                       }
                     },
-                    itemBuilder: (_) => const [
-                      PopupMenuItem(value: 'rename', child: Text('Rename')),
-                      PopupMenuItem(value: 'delete', child: Text('Delete')),
-                    ],
-                  ),
-                  onTap: () {
-                    ref.read(sessionsProvider.notifier).selectSession(s.id);
-                    widget.onClose?.call();
-                  },
-                );
-              },
+                    child: ListTile(
+                      selected: active,
+                      leading: Icon(
+                        s.hostKind == AgyHostKind.ssh
+                            ? Icons.computer
+                            : Icons.smartphone,
+                        size: 18,
+                      ),
+                      title: Text(
+                        s.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: Text(
+                        '${s.hostName} · ${s.modelId}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      trailing: PopupMenuButton<String>(
+                        onSelected: (action) async {
+                          if (action == 'delete') {
+                            await ref
+                                .read(sessionsProvider.notifier)
+                                .deleteSession(s.id);
+                          } else if (action == 'rename') {
+                            await _promptRename(context, s);
+                          }
+                        },
+                        itemBuilder: (_) => const [
+                          PopupMenuItem(value: 'rename', child: Text('Rename')),
+                          PopupMenuItem(value: 'delete', child: Text('Delete')),
+                        ],
+                      ),
+                      onTap: () {
+                        ref
+                            .read(sessionsProvider.notifier)
+                            .selectSession(s.id);
+                        widget.onClose?.call();
+                      },
+                    ),
+                  );
+                },
+              ),
             ),
           ),
         ],

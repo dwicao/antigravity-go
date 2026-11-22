@@ -69,6 +69,7 @@ class RuntimeController private constructor(private val appContext: Context) {
     val homeDir: File get() = File(runtimeDir, "home")
     val workspaceDir: File get() = File(runtimeDir, "workspace")
     val settingsFile: File get() = File(homeDir, ".gemini/antigravity-cli/settings.json")
+    val authMarkerFile: File get() = File(homeDir, ".gemini/antigravity-go-auth.json")
 
     init {
         runtimeDir.mkdirs()
@@ -261,25 +262,85 @@ class RuntimeController private constructor(private val appContext: Context) {
         settingsFile.writeText(obj.toString(2))
     }
 
+    private fun writeAuthMarker(
+        authenticated: Boolean,
+        email: String? = null,
+        method: String = "oauth-personal",
+    ) {
+        authMarkerFile.parentFile?.mkdirs()
+        if (!authenticated) {
+            authMarkerFile.delete()
+            return
+        }
+        val existingEmail = if (email.isNullOrBlank() && authMarkerFile.exists()) {
+            try {
+                JSONObject(authMarkerFile.readText()).optString("email").takeIf { it.isNotBlank() }
+            } catch (_: Throwable) {
+                null
+            }
+        } else {
+            email
+        }
+        val obj = JSONObject()
+            .put("isAuthenticated", true)
+            .put("method", method)
+            .put("updatedAt", System.currentTimeMillis())
+        if (!existingEmail.isNullOrBlank()) {
+            obj.put("email", existingEmail)
+        }
+        authMarkerFile.writeText(obj.toString(2))
+    }
+
     fun checkAuthStatus(): Map<String, Any?> {
         val geminiDir = File(homeDir, ".gemini")
-        val credsCandidates = listOf(
-            File(geminiDir, "oauth_creds.json"),
-            File(geminiDir, "antigravity-cli/credentials.json"),
-            File(geminiDir, "google_accounts.json"),
-        )
+        val configDir = File(homeDir, ".config")
+        val localShareDir = File(homeDir, ".local/share")
+        val emailRegex = Regex("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
+
         var foundEmail: String? = null
         var hasCreds = false
-        for (f in credsCandidates) {
-            if (f.exists() && f.length() > 2) {
-                hasCreds = true
-                val text = f.readText()
-                val match = Regex("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}").find(text)
-                if (match != null && foundEmail == null) {
-                    foundEmail = match.value
+
+        // 1. Check our explicit auth marker (set when login succeeds or CLI verifies auth).
+        if (authMarkerFile.exists()) {
+            try {
+                val marker = JSONObject(authMarkerFile.readText())
+                if (marker.optBoolean("isAuthenticated", false)) {
+                    hasCreds = true
+                    foundEmail = marker.optString("email").takeIf { it.isNotBlank() }
+                }
+            } catch (_: Throwable) {}
+        }
+
+        // 2. Scan .gemini, .config, and .local/share for any agy credential/account/state files.
+        val searchRoots = listOf(geminiDir, configDir, localShareDir)
+        for (root in searchRoots) {
+            if (!root.exists()) continue
+            root.walkTopDown().maxDepth(3).forEach { f ->
+                if (!f.isFile || f.length() <= 2 || f.length() > 512 * 1024) return@forEach
+                val lower = f.name.lowercase()
+                val looksLikeAuth = lower.contains("cred") ||
+                    lower.contains("oauth") ||
+                    lower.contains("token") ||
+                    lower.contains("account") ||
+                    lower.contains("auth") ||
+                    lower == "antigravity_state.pbtxt"
+                if (looksLikeAuth) {
+                    hasCreds = true
+                }
+                if (foundEmail == null &&
+                    (looksLikeAuth || lower == "settings.json" || lower == "config.json")
+                ) {
+                    try {
+                        val text = f.readText()
+                        val match = emailRegex.find(text)
+                        if (match != null && !match.value.endsWith(".example.com")) {
+                            foundEmail = match.value
+                        }
+                    } catch (_: Throwable) {}
                 }
             }
         }
+
         val settings = readSettings()
         val gcp = settings["gcp"] as? JSONObject
         return mapOf(
@@ -289,6 +350,106 @@ class RuntimeController private constructor(private val appContext: Context) {
             "gcpProject" to gcp?.optString("project"),
             "gcpLocation" to gcp?.optString("location"),
         )
+    }
+
+    /**
+     * Actively probes `agy models` to verify whether cached/keyring/file credentials
+     * are valid, updating the auth marker accordingly.
+     */
+    fun verifyAuth(): Map<String, Any?> {
+        val current = checkAuthStatus()
+        if (!binaryFile.exists()) return current
+        return try {
+            val out = runCapture(listOf("models"), null, emptyMap(), 12)
+            val lower = out.lowercase()
+            val unauth = lower.contains("authentication required") ||
+                lower.contains("not signed in") ||
+                lower.contains("please sign in")
+            val hasModelSlugs = lower.contains("gemini-") ||
+                lower.contains("claude-") ||
+                lower.contains("orchestrator")
+            if (!unauth && hasModelSlugs) {
+                val emailMatch = Regex("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}").find(out)
+                writeAuthMarker(true, email = emailMatch?.value ?: (current["email"] as? String))
+                checkAuthStatus()
+            } else {
+                current
+            }
+        } catch (_: Throwable) {
+            current
+        }
+    }
+
+    /**
+     * Probes `agy` for live usage limits, credits, and model catalog.
+     * Falls back to piping `/usage` + `/credits` + `/exit` interactively when `-p` doesn't emit quotas.
+     */
+    fun probeUsage(): String {
+        if (!binaryFile.exists()) return ""
+        val sb = StringBuilder()
+
+        val modelsOut = try {
+            runCapture(listOf("models"), null, emptyMap(), 12)
+        } catch (_: Throwable) {
+            ""
+        }
+        if (modelsOut.isNotBlank()) {
+            sb.append(modelsOut).append("\n")
+        }
+
+        val printUsage = try {
+            runCapture(listOf("-p", "/usage", "--output-format", "text"), null, emptyMap(), 18)
+        } catch (_: Throwable) {
+            ""
+        }
+        val printCredits = try {
+            runCapture(listOf("-p", "/credits", "--output-format", "text"), null, emptyMap(), 15)
+        } catch (_: Throwable) {
+            ""
+        }
+        sb.append(printUsage).append("\n").append(printCredits).append("\n")
+
+        val combinedSoFar = sb.toString().lowercase()
+        val hasQuotaNumbers = combinedSoFar.contains("%") &&
+            (combinedSoFar.contains("5-hour") || combinedSoFar.contains("5 hour") || combinedSoFar.contains("weekly") || combinedSoFar.contains("gemini"))
+
+        if (!hasQuotaNumbers) {
+            // Fallback: drive interactive `agy` via stdin `/usage` -> `/credits` -> `/exit`.
+            val interactiveOut = runInteractiveProbe("/usage\n/credits\n/exit\n", 14)
+            if (interactiveOut.isNotBlank()) {
+                sb.append(interactiveOut).append("\n")
+            }
+        }
+        return sb.toString().trim()
+    }
+
+    private fun runInteractiveProbe(stdinCommands: String, timeoutSeconds: Int): String {
+        if (!binaryFile.exists()) return ""
+        return try {
+            val pb = ProcessBuilder(listOf(binaryFile.absolutePath))
+            pb.directory(workspaceDir)
+            pb.environment().putAll(
+                buildEnv(
+                    mapOf(
+                        "COLUMNS" to "120",
+                        "LINES" to "40",
+                        "TERM" to "xterm-256color",
+                    )
+                )
+            )
+            pb.redirectErrorStream(true)
+            val proc = pb.start()
+            OutputStreamWriter(proc.outputStream).use { writer ->
+                writer.write(stdinCommands)
+                writer.flush()
+            }
+            val out = proc.inputStream.bufferedReader().use { it.readText() }
+            proc.waitFor(timeoutSeconds.toLong(), TimeUnit.SECONDS)
+            if (proc.isAlive) proc.destroyForcibly()
+            out
+        } catch (_: Throwable) {
+            ""
+        }
     }
 
     fun startGoogleLogin(enterprise: Boolean) {
@@ -315,6 +476,8 @@ class RuntimeController private constructor(private val appContext: Context) {
 
                 val reader = BufferedReader(InputStreamReader(proc.inputStream))
                 val urlRegex = Regex("https://accounts\\.google\\.com/[^\\s\\)\\]>\"']+")
+                val emailRegex = Regex("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
+                var capturedEmail: String? = null
                 var line: String?
                 while (reader.readLine().also { line = it } != null) {
                     val l = line ?: continue
@@ -323,9 +486,20 @@ class RuntimeController private constructor(private val appContext: Context) {
                     if (url != null) {
                         emit(mapOf("kind" to "auth_oauth_url", "logLine" to url))
                     }
+                    if (capturedEmail == null) {
+                        val m = emailRegex.find(l)
+                        if (m != null && !m.value.endsWith(".example.com")) {
+                            capturedEmail = m.value
+                        }
+                    }
                 }
                 val code = proc.waitFor()
                 if (code == 0) {
+                    writeAuthMarker(
+                        authenticated = true,
+                        email = capturedEmail,
+                        method = if (enterprise) "oauth-business" else "oauth-personal",
+                    )
                     emit(mapOf("kind" to "auth_completed"))
                 } else {
                     emit(mapOf("kind" to "auth_error", "logLine" to "Login exited with code $code"))
@@ -355,9 +529,16 @@ class RuntimeController private constructor(private val appContext: Context) {
 
     fun logout() {
         val geminiDir = File(homeDir, ".gemini")
+        writeAuthMarker(false)
         File(geminiDir, "oauth_creds.json").delete()
         File(geminiDir, "google_accounts.json").delete()
         File(geminiDir, "antigravity-cli/credentials.json").delete()
+        File(geminiDir, "antigravity_state.pbtxt").delete()
+        if (binaryFile.exists()) {
+            try {
+                runCapture(listOf("-p", "/logout", "--output-format", "text"), null, emptyMap(), 8)
+            } catch (_: Throwable) {}
+        }
         log("Cleared cached Google credentials")
     }
 
@@ -475,6 +656,10 @@ class RuntimeController private constructor(private val appContext: Context) {
 
                 errFuture.get(5, TimeUnit.SECONDS)
                 val code = proc.waitFor()
+                if (code == 0 && !authMarkerFile.exists()) {
+                    writeAuthMarker(true)
+                    emit(mapOf("kind" to "auth_completed"))
+                }
                 emit(mapOf("kind" to "turn_exit", "turnId" to turnId, "exitCode" to code))
             } catch (t: Throwable) {
                 emit(

@@ -356,6 +356,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
 
     switch (evt) {
       case AgyInitEvent():
+        ref.read(authProvider.notifier).markAuthenticatedFromTurn();
         if (evt.conversationId.isNotEmpty) {
           ref.read(sessionsProvider.notifier).updateSession(
                 session.copyWith(remoteConversationId: evt.conversationId),
@@ -392,6 +393,9 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       case AgyPermissionRequestEvent():
         state = state.copyWith(pendingPermission: evt);
       case AgyTurnResultEvent():
+        if (evt.status.toUpperCase() == 'SUCCESS') {
+          ref.read(authProvider.notifier).markAuthenticatedFromTurn();
+        }
         final finalText = current.text.isEmpty ? evt.response : current.text;
         _replaceMessage(
           idx,

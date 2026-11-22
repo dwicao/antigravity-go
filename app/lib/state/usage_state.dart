@@ -4,8 +4,11 @@ import 'package:agy_client/agy_client.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../remote/ssh_agy_runner.dart';
 import '../runtime/runtime_bridge.dart';
-import '../state/settings_state.dart';
+import 'auth_state.dart';
+import 'hosts_state.dart';
+import 'settings_state.dart';
 
 final usageProvider =
     NotifierProvider<UsageNotifier, UsageQuotaSnapshot>(UsageNotifier.new);
@@ -16,6 +19,7 @@ class UsageNotifier extends Notifier<UsageQuotaSnapshot> {
   final UsageLedger _ledger = UsageLedger();
   ParsedUsageReport? _lastLiveProbe;
   String? _lastRawOutput;
+  String? _lastProbeError;
 
   @override
   UsageQuotaSnapshot build() {
@@ -60,35 +64,46 @@ class UsageNotifier extends Notifier<UsageQuotaSnapshot> {
     );
   }
 
-  /// Probes `agy` on device for live `/usage`, `/credits`, and `agy models` limits.
+  /// Probes `agy` (on-device or active SSH workstation) for live `/usage`, `/credits`, and `agy models`.
   Future<void> refreshFromRuntime() async {
+    _lastProbeError = null;
     try {
-      final modelsOut = await RuntimeBridge.instance.runCommandCapture(
-        args: ['models'],
-        timeoutSeconds: 15,
-      );
-      final usageOut = await RuntimeBridge.instance.runCommandCapture(
-        args: ['-p', '/usage', '--output-format', 'text'],
-        timeoutSeconds: 20,
-      );
-      final creditsOut = await RuntimeBridge.instance.runCommandCapture(
-        args: ['-p', '/credits', '--output-format', 'text'],
-        timeoutSeconds: 15,
-      );
-      final combined = '$usageOut\n$creditsOut\n$modelsOut'.trim();
-      if (combined.isNotEmpty) {
-        _lastRawOutput = combined;
-        _lastLiveProbe = UsageOutputParser.parseUsageText(combined);
+      String combined = '';
+      final sshHost = ref.read(hostsProvider).activeSshHost;
+      if (sshHost != null) {
+        final (pwd, key) =
+            await ref.read(hostsProvider.notifier).readCredentials(sshHost.id);
+        combined = await SshAgyRunner.instance.probeUsage(
+          host: sshHost,
+          password: pwd,
+          privateKeyPem: key,
+        );
+      } else {
+        combined = await RuntimeBridge.instance.probeUsage();
       }
-    } catch (_) {
-      // Keep local ledger snapshot if agy isn't installed or offline.
+
+      final trimmed = combined.trim();
+      if (trimmed.isNotEmpty) {
+        _lastRawOutput = UsageOutputParser.stripAnsi(trimmed);
+        _lastLiveProbe = UsageOutputParser.parseUsageText(trimmed);
+        if (UsageOutputParser.outputIndicatesAuthenticated(trimmed)) {
+          final email = UsageOutputParser.extractEmail(trimmed);
+          ref.read(authProvider.notifier).markAuthenticatedFromTurn(email: email);
+        }
+      } else {
+        _lastProbeError =
+            'No output from agy yet. Make sure the on-device runtime is installed and signed in.';
+      }
+    } catch (e) {
+      _lastProbeError = e.toString();
     }
     _emit();
   }
 
   void applyRawProbeOutput(String output) {
-    _lastRawOutput = output;
+    _lastRawOutput = UsageOutputParser.stripAnsi(output);
     _lastLiveProbe = UsageOutputParser.parseUsageText(output);
+    _lastProbeError = null;
     _emit();
   }
 
@@ -106,6 +121,7 @@ class UsageNotifier extends Notifier<UsageQuotaSnapshot> {
       liveProbe: _lastLiveProbe,
       useG1Credits: useCredits,
       rawProbeOutput: _lastRawOutput,
+      lastProbeError: _lastProbeError,
     );
   }
 }

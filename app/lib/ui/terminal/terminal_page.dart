@@ -3,7 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:xterm/xterm.dart';
 
 import '../../runtime/runtime_bridge.dart';
+import '../../state/auth_state.dart';
 import '../../state/runtime_state.dart';
+import '../../state/usage_state.dart';
 
 class TerminalPage extends ConsumerStatefulWidget {
   const TerminalPage({super.key});
@@ -46,6 +48,10 @@ class _TerminalPageState extends ConsumerState<TerminalPage> {
       );
       if (out.isNotEmpty) {
         _terminal.write('${out.replaceAll('\n', '\r\n')}\r\n');
+      }
+      if (trimmed.contains('agy')) {
+        await ref.read(authProvider.notifier).refresh(verifyWithCli: true);
+        await ref.read(usageProvider.notifier).refreshFromRuntime();
       }
     } catch (e) {
       _terminal.write('Error: $e\r\n');

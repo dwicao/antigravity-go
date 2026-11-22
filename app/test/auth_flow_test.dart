@@ -23,6 +23,7 @@ void main() {
 
     expect(find.text('Antigravity Account'), findsOneWidget);
     expect(find.text('Sign in with Google Account'), findsOneWidget);
+    expect(find.text('Verify'), findsOneWidget);
 
     await tester.tap(find.text('Enterprise'));
     await tester.pump();

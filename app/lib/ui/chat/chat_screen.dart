@@ -9,6 +9,7 @@ import 'package:share_plus/share_plus.dart';
 import '../../state/auth_state.dart';
 import '../../state/chat_state.dart';
 import '../../state/hosts_state.dart';
+import '../../state/permissions_state.dart';
 import '../../state/runtime_state.dart';
 import '../../state/settings_state.dart';
 import '../auth/google_login_sheet.dart';
@@ -32,10 +33,12 @@ const _slashCommands = <(String cmd, String desc)>[
 class ChatScreen extends ConsumerStatefulWidget {
   const ChatScreen({
     super.key,
+    this.isDesktopMode = false,
     this.onOpenSessions,
     this.onOpenQuickPanel,
   });
 
+  final bool isDesktopMode;
   final VoidCallback? onOpenSessions;
   final VoidCallback? onOpenQuickPanel;
 
@@ -51,6 +54,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final List<String> _attachments = [];
   bool _showSlashMenu = false;
   bool _listeningVoice = false;
+  bool _enterToSend = true;
 
   @override
   void dispose() {
@@ -131,6 +135,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
   }
 
+  KeyEventResult _handleComposerKey(FocusNode node, KeyEvent event) {
+    if (!widget.isDesktopMode || !_enterToSend) return KeyEventResult.ignored;
+    if (event is KeyDownEvent &&
+        (event.logicalKey == LogicalKeyboardKey.enter ||
+            event.logicalKey == LogicalKeyboardKey.numpadEnter)) {
+      final keys = HardwareKeyboard.instance.logicalKeysPressed;
+      final shiftHeld = keys.contains(LogicalKeyboardKey.shiftLeft) ||
+          keys.contains(LogicalKeyboardKey.shiftRight);
+      if (!shiftHeld) {
+        _submit();
+        return KeyEventResult.handled;
+      }
+    }
+    return KeyEventResult.ignored;
+  }
+
   @override
   Widget build(BuildContext context) {
     final chat = ref.watch(chatProvider);
@@ -138,36 +158,66 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final hosts = ref.watch(hostsProvider);
     final runtime = ref.watch(runtimeProvider);
     final settings = ref.watch(settingsProvider);
+    final perms = ref.watch(permissionsProvider);
     final theme = Theme.of(context);
 
     final activeModel = AgyModelCatalog.resolve(settings.selectedModelId);
     final hostLabel = hosts.activeSshHost?.name ?? 'On Device';
+
+    Widget wrapCentered(Widget child) {
+      if (!widget.isDesktopMode) return child;
+      return Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 920),
+          child: child,
+        ),
+      );
+    }
 
     return Column(
       children: [
         AppBar(
           leading: widget.onOpenSessions != null
               ? IconButton(
-                  tooltip: 'Sessions & Hosts',
+                  tooltip: widget.isDesktopMode
+                      ? 'Toggle Sidebar (Ctrl+B)'
+                      : 'Sessions & Hosts',
                   onPressed: widget.onOpenSessions,
-                  icon: const Icon(Icons.menu),
+                  icon: Icon(
+                    widget.isDesktopMode ? Icons.view_sidebar_outlined : Icons.menu,
+                  ),
                 )
               : null,
-          title: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          title: Row(
             children: [
-              const Text('Antigravity Go'),
-              Text(
-                '$hostLabel · ${activeModel.displayName}',
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
+              Flexible(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Antigravity Go'),
+                    Text(
+                      '$hostLabel · ${activeModel.displayName}',
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
                 ),
               ),
+              if (perms.isDexMode) ...[
+                const SizedBox(width: 8),
+                Chip(
+                  visualDensity: VisualDensity.compact,
+                  avatar: const Icon(Icons.desktop_windows_outlined, size: 14),
+                  label: const Text('DeX'),
+                ),
+              ],
             ],
           ),
           actions: [
             IconButton(
-              tooltip: 'Usage Limits',
+              tooltip: 'Usage Limits (Ctrl+U)',
               onPressed: () => Navigator.of(context).push(
                 MaterialPageRoute<void>(builder: (_) => const UsagePage()),
               ),
@@ -196,21 +246,26 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               ),
             if (widget.onOpenQuickPanel != null)
               IconButton(
-                tooltip: 'Controls & Tools',
+                tooltip: widget.isDesktopMode
+                    ? 'Toggle Inspector (Ctrl+I)'
+                    : 'Controls & Tools',
                 onPressed: widget.onOpenQuickPanel,
                 icon: const Icon(Icons.tune_rounded),
               ),
           ],
         ),
-        if (!auth.isAuthenticated || (!runtime.status.isReady && hosts.isLocalActive))
-          _OnboardingBanner(
-            isAuthenticated: auth.isAuthenticated,
-            runtimeReady: runtime.status.isReady,
-            runtimeBusy: runtime.busy,
-            isLocal: hosts.isLocalActive,
-            onSignIn: () => GoogleLoginSheet.show(context),
-            onInstallRuntime: () =>
-                ref.read(runtimeProvider.notifier).installAndStart(),
+        if (!auth.isAuthenticated ||
+            (!runtime.status.isReady && hosts.isLocalActive))
+          wrapCentered(
+            _OnboardingBanner(
+              isAuthenticated: auth.isAuthenticated,
+              runtimeReady: runtime.status.isReady,
+              runtimeBusy: runtime.busy,
+              isLocal: hosts.isLocalActive,
+              onSignIn: () => GoogleLoginSheet.show(context),
+              onInstallRuntime: () =>
+                  ref.read(runtimeProvider.notifier).installAndStart(),
+            ),
           ),
         Expanded(
           child: chat.messages.isEmpty
@@ -219,153 +274,200 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     _inputController.text = s;
                   },
                 )
-              : ListView.builder(
+              : Scrollbar(
                   controller: _scrollController,
-                  padding: const EdgeInsets.only(top: 8, bottom: 16),
-                  itemCount: chat.messages.length,
-                  itemBuilder: (context, index) =>
+                  child: ListView.builder(
+                    controller: _scrollController,
+                    padding: const EdgeInsets.only(top: 8, bottom: 16),
+                    itemCount: chat.messages.length,
+                    itemBuilder: (context, index) => wrapCentered(
                       MessageBubble(message: chat.messages[index]),
+                    ),
+                  ),
                 ),
         ),
         if (chat.pendingPermission != null)
-          ToolApprovalCard(
-            request: chat.pendingPermission!,
-            onSelectOption: (id) =>
-                ref.read(chatProvider.notifier).resolvePermission(id),
+          wrapCentered(
+            ToolApprovalCard(
+              request: chat.pendingPermission!,
+              onSelectOption: (id) =>
+                  ref.read(chatProvider.notifier).resolvePermission(id),
+            ),
           ),
         if (chat.queuedPrompts.isNotEmpty)
-          Container(
-            margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: theme.colorScheme.secondaryContainer.withOpacity(0.6),
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: Row(
-              children: [
-                const Icon(Icons.schedule_send, size: 18),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Queued (${chat.queuedPrompts.length}): ${chat.queuedPrompts.first}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+          wrapCentered(
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.secondaryContainer.withOpacity(0.6),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.schedule_send, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Queued (${chat.queuedPrompts.length}): ${chat.queuedPrompts.first}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
-                ),
-                TextButton(
-                  onPressed: () =>
-                      ref.read(chatProvider.notifier).sendQueuedNow(),
-                  child: const Text('Send now'),
-                ),
-              ],
+                  TextButton(
+                    onPressed: () =>
+                        ref.read(chatProvider.notifier).sendQueuedNow(),
+                    child: const Text('Send now'),
+                  ),
+                ],
+              ),
             ),
           ),
         if (_showSlashMenu)
-          Container(
-            constraints: const BoxConstraints(maxHeight: 220),
-            margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            child: Card(
-              child: ListView(
-                shrinkWrap: true,
-                children: _slashCommands
-                    .where((c) => c.$1.startsWith(_inputController.text))
-                    .map(
-                      (c) => ListTile(
-                        dense: true,
-                        title: Text(
-                          c.$1,
-                          style: const TextStyle(fontWeight: FontWeight.w700),
+          wrapCentered(
+            Container(
+              constraints: const BoxConstraints(maxHeight: 220),
+              margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              child: Card(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: _slashCommands
+                      .where((c) => c.$1.startsWith(_inputController.text))
+                      .map(
+                        (c) => ListTile(
+                          dense: true,
+                          title: Text(
+                            c.$1,
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                          subtitle: Text(c.$2),
+                          onTap: () {
+                            _inputController.text = '${c.$1} ';
+                            _inputController.selection = TextSelection.collapsed(
+                              offset: _inputController.text.length,
+                            );
+                            setState(() => _showSlashMenu = false);
+                          },
                         ),
-                        subtitle: Text(c.$2),
-                        onTap: () {
-                          _inputController.text = '${c.$1} ';
-                          _inputController.selection = TextSelection.collapsed(
-                            offset: _inputController.text.length,
-                          );
-                          setState(() => _showSlashMenu = false);
-                        },
+                      )
+                      .toList(),
+                ),
+              ),
+            ),
+          ),
+        if (_attachments.isNotEmpty)
+          wrapCentered(
+            SizedBox(
+              height: 40,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                children: _attachments
+                    .map(
+                      (a) => Padding(
+                        padding: const EdgeInsets.only(right: 6),
+                        child: InputChip(
+                          label: Text(a.split('/').last.split('\\').last),
+                          onDeleted: () =>
+                              setState(() => _attachments.remove(a)),
+                        ),
                       ),
                     )
                     .toList(),
               ),
             ),
           ),
-        if (_attachments.isNotEmpty)
-          SizedBox(
-            height: 40,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              children: _attachments
-                  .map(
-                    (a) => Padding(
-                      padding: const EdgeInsets.only(right: 6),
-                      child: InputChip(
-                        label: Text(a.split('/').last.split('\\').last),
-                        onDeleted: () =>
-                            setState(() => _attachments.remove(a)),
-                      ),
-                    ),
-                  )
-                  .toList(),
-            ),
-          ),
         SafeArea(
           top: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                IconButton(
-                  tooltip: 'Attach file',
-                  onPressed: _pickFile,
-                  icon: const Icon(Icons.attach_file),
-                ),
-                IconButton(
-                  tooltip: 'Attach image',
-                  onPressed: _pickImage,
-                  icon: const Icon(Icons.image_outlined),
-                ),
-                Expanded(
-                  child: TextField(
-                    controller: _inputController,
-                    onChanged: _onChanged,
-                    minLines: 1,
-                    maxLines: 5,
-                    textInputAction: TextInputAction.newline,
-                    decoration: InputDecoration(
-                      hintText: chat.isStreaming
-                          ? 'Queue follow-up or steer agent…'
-                          : 'Ask Antigravity or type / for commands…',
-                      suffixIcon: IconButton(
-                        tooltip: 'Voice input',
-                        onPressed: _listeningVoice ? null : _dictateVoice,
-                        icon: Icon(
-                          _listeningVoice ? Icons.mic : Icons.mic_none,
-                          color: _listeningVoice
-                              ? theme.colorScheme.primary
-                              : null,
+          child: wrapCentered(
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      IconButton(
+                        tooltip: 'Attach file',
+                        onPressed: _pickFile,
+                        icon: const Icon(Icons.attach_file),
+                      ),
+                      IconButton(
+                        tooltip: 'Attach image',
+                        onPressed: _pickImage,
+                        icon: const Icon(Icons.image_outlined),
+                      ),
+                      Expanded(
+                        child: Focus(
+                          onKeyEvent: _handleComposerKey,
+                          child: TextField(
+                            controller: _inputController,
+                            onChanged: _onChanged,
+                            minLines: 1,
+                            maxLines: widget.isDesktopMode ? 8 : 5,
+                            textInputAction: TextInputAction.newline,
+                            decoration: InputDecoration(
+                              hintText: chat.isStreaming
+                                  ? 'Queue follow-up or steer agent…'
+                                  : widget.isDesktopMode && _enterToSend
+                                      ? 'Ask Antigravity… (Enter to send, Shift+Enter for newline)'
+                                      : 'Ask Antigravity or type / for commands…',
+                              suffixIcon: IconButton(
+                                tooltip: 'Voice input',
+                                onPressed:
+                                    _listeningVoice ? null : _dictateVoice,
+                                icon: Icon(
+                                  _listeningVoice ? Icons.mic : Icons.mic_none,
+                                  color: _listeningVoice
+                                      ? theme.colorScheme.primary
+                                      : null,
+                                ),
+                              ),
+                            ),
+                          ),
                         ),
                       ),
+                      const SizedBox(width: 8),
+                      if (chat.isStreaming)
+                        IconButton.filledTonal(
+                          tooltip: 'Stop (Esc)',
+                          onPressed: () =>
+                              ref.read(chatProvider.notifier).stopStreaming(),
+                          icon: const Icon(Icons.stop_rounded),
+                        ),
+                      const SizedBox(width: 4),
+                      IconButton.filled(
+                        tooltip: chat.isStreaming ? 'Queue' : 'Send',
+                        onPressed: _submit,
+                        icon: const Icon(Icons.arrow_upward_rounded),
+                      ),
+                    ],
+                  ),
+                  if (widget.isDesktopMode)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4, left: 8, right: 8),
+                      child: Row(
+                        children: [
+                          Text(
+                            'Shortcuts: Ctrl+N New · Ctrl+B Sidebar · Ctrl+U Usage · Ctrl+, Settings',
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                          const Spacer(),
+                          FilterChip(
+                            visualDensity: VisualDensity.compact,
+                            label: const Text('Enter sends'),
+                            selected: _enterToSend,
+                            onSelected: (v) =>
+                                setState(() => _enterToSend = v),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                if (chat.isStreaming)
-                  IconButton.filledTonal(
-                    tooltip: 'Stop',
-                    onPressed: () =>
-                        ref.read(chatProvider.notifier).stopStreaming(),
-                    icon: const Icon(Icons.stop_rounded),
-                  ),
-                const SizedBox(width: 4),
-                IconButton.filled(
-                  tooltip: chat.isStreaming ? 'Queue' : 'Send',
-                  onPressed: _submit,
-                  icon: const Icon(Icons.arrow_upward_rounded),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),

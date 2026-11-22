@@ -21,13 +21,16 @@ class UsageOutputParser {
   static final RegExp _pctPattern = RegExp(r'(\d{1,3}(?:\.\d+)?)\s*%');
 
   static final RegExp _resetPattern = RegExp(
-    r'(?:resets?|refresh(?:es)?)\s+(?:in\s+|at\s+)?([^\n,|;\)]+)',
+    r'(?:resets?|refresh(?:es)?)\s*(?::|in|at)?\s*([^\n,|;\)]+)',
     caseSensitive: false,
   );
 
   /// Strips ANSI escape codes and control sequences from CLI output.
   static String stripAnsi(String input) {
-    return input.replaceAll(_ansiPattern, '').replaceAll('\r', '\n');
+    return input
+        .replaceAll(_ansiPattern, '')
+        .replaceAll('\r\n', '\n')
+        .replaceAll('\r', '\n');
   }
 
   /// Extracts a Google OAuth authorization URL from `agy acp --login` output.
@@ -42,6 +45,22 @@ class UsageOutputParser {
     return _emailPattern.firstMatch(clean)?.group(0);
   }
 
+  /// Returns true if CLI output proves the account is authenticated (e.g. `agy models` succeeded).
+  static bool outputIndicatesAuthenticated(String raw) {
+    final clean = stripAnsi(raw).toLowerCase();
+    if (clean.contains('authentication required') ||
+        clean.contains('not signed in') ||
+        clean.contains('please sign in') ||
+        clean.contains('unauthenticated')) {
+      return false;
+    }
+    return parseModelsOutput(raw).isNotEmpty ||
+        clean.contains('models & quota') ||
+        clean.contains('5-hour') ||
+        clean.contains('5 hour') ||
+        clean.contains('weekly');
+  }
+
   /// Parses model identifiers returned by `agy models`.
   static List<AgyModelInfo> parseModelsOutput(String raw) {
     final clean = stripAnsi(raw);
@@ -52,27 +71,29 @@ class UsageOutputParser {
       if (trimmed.isEmpty ||
           trimmed.startsWith('Available') ||
           trimmed.startsWith('Model') ||
-          trimmed.startsWith('---')) {
+          trimmed.startsWith('---') ||
+          trimmed.startsWith('Usage') ||
+          trimmed.startsWith('5-hour') ||
+          trimmed.startsWith('Weekly')) {
         continue;
       }
-      final token = trimmed.split(RegExp(r'\s{2,}|\t')).first.trim();
-      if (token.isEmpty || token.length < 3) continue;
-      if (token.contains(' ')) {
-        if (!token.toLowerCase().contains('gemini') &&
-            !token.toLowerCase().contains('claude') &&
-            !token.toLowerCase().contains('orchestrator') &&
-            !token.toLowerCase().contains('gpt')) {
-          continue;
-        }
-      }
-      if (seen.add(token.toLowerCase())) {
-        results.add(AgyModelCatalog.resolve(token));
+      final parts = trimmed.split(RegExp(r'\s{2,}|\t'));
+      final slug = parts.first.trim();
+      if (slug.isEmpty || slug.length < 3) continue;
+      final lower = slug.toLowerCase();
+      final looksLikeModelSlug = lower.startsWith('gemini-') ||
+          lower.startsWith('claude-') ||
+          lower.startsWith('gpt-') ||
+          lower.contains('orchestrator');
+      if (!looksLikeModelSlug) continue;
+      if (seen.add(lower)) {
+        results.add(AgyModelCatalog.resolve(slug));
       }
     }
     return results;
   }
 
-  /// Parses `/usage` (and optional `/credits`) TUI/headless output into quota entries.
+  /// Parses `/usage`, `/credits`, and `agy models` output into quota entries.
   static ParsedUsageReport parseUsageText(String raw) {
     final clean = stripAnsi(raw);
     final lines = clean
@@ -80,6 +101,8 @@ class UsageOutputParser {
         .map((l) => l.trim())
         .where((l) => l.isNotEmpty)
         .toList();
+
+    final discoveredModels = parseModelsOutput(clean);
 
     final entriesById = <String, ModelQuotaEntry>{
       'gemini-4-argon': const ModelQuotaEntry(
@@ -117,7 +140,7 @@ class UsageOutputParser {
       final combined = '$line $nextLine';
 
       final creditMatch = RegExp(
-        r'(?:ai\s*credits?|credits?\s*remaining|balance)\D*(\d+(?:\.\d+)?)',
+        r'(?:ai\s*credits?|credits?\s*(?:remaining|balance)?|balance)\D*(\d+(?:\.\d+)?)',
         caseSensitive: false,
       ).firstMatch(line);
       if (creditMatch != null) {
@@ -127,16 +150,16 @@ class UsageOutputParser {
       if (lower.contains('5-hour') ||
           lower.contains('5 hour') ||
           lower.contains('5h')) {
-        final pct = _extractRemainingPct(combined);
+        final pcts = _extractAllRemainingPcts(combined);
         final reset = _resetPattern.firstMatch(combined)?.group(1)?.trim();
-        if (pct != null && overall5h == null) overall5h = pct;
+        if (pcts.isNotEmpty && overall5h == null) overall5h = pcts.first;
         if (reset != null && overall5hReset == null) overall5hReset = reset;
       }
 
       if (lower.contains('weekly') || lower.contains('7-day')) {
-        final pct = _extractRemainingPct(combined);
+        final pcts = _extractAllRemainingPcts(combined);
         final reset = _resetPattern.firstMatch(combined)?.group(1)?.trim();
-        if (pct != null && overallWeekly == null) overallWeekly = pct;
+        if (pcts.isNotEmpty && overallWeekly == null) overallWeekly = pcts.last;
         if (reset != null && overallWeeklyReset == null) {
           overallWeeklyReset = reset;
         }
@@ -145,7 +168,9 @@ class UsageOutputParser {
       final targetId = _matchQuotaEntryId(lower);
       if (targetId != null) {
         final current = entriesById[targetId]!;
-        final pct = _extractRemainingPct(combined);
+        final linePcts = _extractAllRemainingPcts(line);
+        final combinedPcts =
+            linePcts.isNotEmpty ? linePcts : _extractAllRemainingPcts(combined);
         final reset = _resetPattern.firstMatch(combined)?.group(1)?.trim();
         final isWeeklyLine =
             lower.contains('weekly') || nextLine.toLowerCase().contains('weekly');
@@ -155,13 +180,26 @@ class UsageOutputParser {
             nextLine.toLowerCase().contains('5h') ||
             nextLine.toLowerCase().contains('5-hour');
 
+        double? fiveHPct;
+        double? weeklyPct;
+        if (linePcts.length >= 2) {
+          fiveHPct = linePcts[0];
+          weeklyPct = linePcts[1];
+        } else if (combinedPcts.isNotEmpty) {
+          final single = combinedPcts.first;
+          if (isWeeklyLine && !isFiveHourLine) {
+            weeklyPct = single;
+          } else {
+            fiveHPct = single;
+          }
+        }
+
         entriesById[targetId] = current.copyWith(
-          fiveHourRemainingPct:
-              (!isWeeklyLine || isFiveHourLine) ? (pct ?? current.fiveHourRemainingPct) : null,
-          weeklyRemainingPct:
-              isWeeklyLine ? (pct ?? current.weeklyRemainingPct) : null,
-          fiveHourResetText:
-              (!isWeeklyLine || isFiveHourLine) ? (reset ?? current.fiveHourResetText) : null,
+          fiveHourRemainingPct: fiveHPct ?? current.fiveHourRemainingPct,
+          weeklyRemainingPct: weeklyPct ?? current.weeklyRemainingPct,
+          fiveHourResetText: (!isWeeklyLine || isFiveHourLine)
+              ? (reset ?? current.fiveHourResetText)
+              : null,
           weeklyResetText:
               isWeeklyLine ? (reset ?? current.weeklyResetText) : null,
           statusNote: line,
@@ -169,8 +207,26 @@ class UsageOutputParser {
       }
     }
 
+    // Check availability of each quota group against discovered `agy models` when present.
+    if (discoveredModels.isNotEmpty) {
+      for (final key in entriesById.keys.toList()) {
+        final entry = entriesById[key]!;
+        final matchingModels = discoveredModels
+            .where((m) => m.quotaGroup == entry.group)
+            .toList();
+        entriesById[key] = entry.copyWith(
+          isAvailable: matchingModels.isNotEmpty,
+          statusNote: entry.statusNote ??
+              (matchingModels.isNotEmpty
+                  ? matchingModels.map((m) => m.displayName).take(2).join(', ')
+                  : 'Not included in current plan'),
+        );
+      }
+    }
+
     return ParsedUsageReport(
       entries: entriesById.values.toList(),
+      discoveredModels: discoveredModels,
       overallFiveHourRemainingPct: overall5h,
       overallWeeklyRemainingPct: overallWeekly,
       overallFiveHourResetText: overall5hReset,
@@ -184,7 +240,9 @@ class UsageOutputParser {
     if (lower.contains('claude') || lower.contains('gpt')) return 'claude-gpt';
     if (lower.contains('neon') ||
         lower.contains('carbon') ||
-        lower.contains('gemini pro')) {
+        lower.contains('gemini pro') ||
+        lower.contains('gemini-pro') ||
+        lower.contains('3.1 pro')) {
       return 'gemini-pro';
     }
     if (lower.contains('hydrogen') ||
@@ -195,24 +253,26 @@ class UsageOutputParser {
     return null;
   }
 
-  static double? _extractRemainingPct(String text) {
-    final match = _pctPattern.firstMatch(text);
-    if (match == null) return null;
-    final val = double.tryParse(match.group(1)!);
-    if (val == null) return null;
-    final clamped = val.clamp(0.0, 100.0);
-    if (text.toLowerCase().contains('used') &&
-        !text.toLowerCase().contains('remaining') &&
-        !text.toLowerCase().contains('left')) {
-      return (100.0 - clamped).clamp(0.0, 100.0);
+  static List<double> _extractAllRemainingPcts(String text) {
+    final lower = text.toLowerCase();
+    final isUsedOnly = lower.contains('used') &&
+        !lower.contains('remaining') &&
+        !lower.contains('left');
+    final out = <double>[];
+    for (final m in _pctPattern.allMatches(text)) {
+      final val = double.tryParse(m.group(1)!);
+      if (val == null) continue;
+      final clamped = val.clamp(0.0, 100.0);
+      out.add(isUsedOnly ? (100.0 - clamped).clamp(0.0, 100.0) : clamped);
     }
-    return clamped;
+    return out;
   }
 }
 
 class ParsedUsageReport {
   const ParsedUsageReport({
     required this.entries,
+    this.discoveredModels = const [],
     this.overallFiveHourRemainingPct,
     this.overallWeeklyRemainingPct,
     this.overallFiveHourResetText,
@@ -221,6 +281,7 @@ class ParsedUsageReport {
   });
 
   final List<ModelQuotaEntry> entries;
+  final List<AgyModelInfo> discoveredModels;
   final double? overallFiveHourRemainingPct;
   final double? overallWeeklyRemainingPct;
   final String? overallFiveHourResetText;

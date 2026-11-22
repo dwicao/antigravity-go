@@ -36,5 +36,27 @@ AI Credits balance: 420
       final claudeGpt = parsed.entries.firstWhere((e) => e.id == 'claude-gpt');
       expect(claudeGpt.weeklyRemainingPct, 55);
     });
+
+    test('parses two-column table percentages and agy models list', () {
+      const tableAndModels = '''
+gemini-4-neon-high     Gemini 4 Neon (High)
+gemini-4-argon-high    Gemini 4 Argon (High)
+claude-opus-5.5-thinking  Claude Opus 5.5
+Gemini 4 Argon            70%      85%    resets in 2h
+Claude & GPT              40%      60%
+''';
+      expect(
+        UsageOutputParser.outputIndicatesAuthenticated(tableAndModels),
+        isTrue,
+      );
+      final parsed = UsageOutputParser.parseUsageText(tableAndModels);
+      expect(parsed.discoveredModels, hasLength(3));
+      final argon = parsed.entries.firstWhere((e) => e.id == 'gemini-4-argon');
+      expect(argon.fiveHourRemainingPct, 70);
+      expect(argon.weeklyRemainingPct, 85);
+      final claude = parsed.entries.firstWhere((e) => e.id == 'claude-gpt');
+      expect(claude.fiveHourRemainingPct, 40);
+      expect(claude.weeklyRemainingPct, 60);
+    });
   });
 }

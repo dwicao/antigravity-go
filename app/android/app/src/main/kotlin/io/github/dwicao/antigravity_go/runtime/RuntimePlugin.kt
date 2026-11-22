@@ -83,6 +83,18 @@ class RuntimePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChann
                 result.success(null)
             }
             "authStatus" -> result.success(ctrl.checkAuthStatus())
+            "verifyAuth" -> {
+                ioExecutor.submit {
+                    val status = ctrl.verifyAuth()
+                    mainHandler.post { result.success(status) }
+                }
+            }
+            "probeUsage" -> {
+                ioExecutor.submit {
+                    val out = ctrl.probeUsage()
+                    mainHandler.post { result.success(out) }
+                }
+            }
             "startLogin" -> {
                 ctrl.startGoogleLogin(call.argument<Boolean>("enterprise") ?: false)
                 result.success(null)

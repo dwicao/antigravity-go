@@ -146,7 +146,7 @@ class SshAgyRunner {
     try {
       final agy = _shellQuote(host.agyBinary);
       final out = await client.run(
-        '$agy models 2>/dev/null || true',
+        '$agy models 2>/dev/null; $agy -p /usage --output-format text 2>/dev/null; $agy -p /credits --output-format text 2>/dev/null || true',
       );
       return utf8.decode(out, allowMalformed: true);
     } finally {

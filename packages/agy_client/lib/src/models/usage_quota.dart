@@ -127,6 +127,7 @@ class UsageQuotaSnapshot {
   const UsageQuotaSnapshot({
     required this.entries,
     required this.fetchedAt,
+    this.discoveredModels = const [],
     this.aiCreditsRemaining,
     this.aiCreditsUsedThisCycle,
     this.useG1Credits = false,
@@ -138,10 +139,12 @@ class UsageQuotaSnapshot {
     this.weeklyLedgerTokens = const TokenUsage(),
     this.source = 'local-ledger',
     this.rawProbeOutput,
+    this.lastProbeError,
   });
 
   final List<ModelQuotaEntry> entries;
   final DateTime fetchedAt;
+  final List<AgyModelInfo> discoveredModels;
   final double? aiCreditsRemaining;
   final double? aiCreditsUsedThisCycle;
   final bool useG1Credits;
@@ -153,6 +156,7 @@ class UsageQuotaSnapshot {
   final TokenUsage weeklyLedgerTokens;
   final String source;
   final String? rawProbeOutput;
+  final String? lastProbeError;
 
   static UsageQuotaSnapshot initial() {
     return UsageQuotaSnapshot(

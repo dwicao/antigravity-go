@@ -28,7 +28,7 @@ AI Credits balance: 250
       UncontrolledProviderScope(
         container: container,
         child: const MaterialApp(
-          home: UsagePage(),
+          home: UsagePage(autoRefreshOnOpen: false),
         ),
       ),
     );

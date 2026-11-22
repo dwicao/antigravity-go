@@ -91,6 +91,25 @@ class RuntimeBridge {
     }
   }
 
+  Future<Map<String, dynamic>> verifyAuth() async {
+    try {
+      final raw =
+          await _method.invokeMethod<Map<Object?, Object?>>('verifyAuth');
+      if (raw == null) return const {'isAuthenticated': false};
+      return raw.map((k, v) => MapEntry(k.toString(), v));
+    } on MissingPluginException {
+      return const {'isAuthenticated': false};
+    }
+  }
+
+  Future<String> probeUsage() async {
+    try {
+      return await _method.invokeMethod<String>('probeUsage') ?? '';
+    } on MissingPluginException {
+      return '';
+    }
+  }
+
   Future<void> startGoogleLogin({bool enterprise = false}) async {
     await _method.invokeMethod<void>('startLogin', {
       'enterprise': enterprise,

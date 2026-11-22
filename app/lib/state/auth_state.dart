@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../auth/google_auth_service.dart';
 import '../runtime/runtime_bridge.dart';
 import '../runtime/runtime_models.dart';
+import 'usage_state.dart';
 
 final authServiceProvider = Provider<GoogleAuthService>(
   (ref) => GoogleAuthService(),
@@ -30,7 +31,10 @@ class AuthNotifier extends Notifier<AgyAuthStatus> {
         );
         ref.read(authServiceProvider).openOAuthUrl(url);
       } else if (evt.kind == 'auth_completed') {
-        Future.microtask(refresh);
+        Future.microtask(() async {
+          await refresh(verifyWithCli: true);
+          await ref.read(usageProvider.notifier).refreshFromRuntime();
+        });
       } else if (evt.kind == 'auth_error' && evt.logLine != null) {
         state = state.copyWith(
           awaitingCode: false,
@@ -39,13 +43,29 @@ class AuthNotifier extends Notifier<AgyAuthStatus> {
       }
     });
     ref.onDispose(() => _sub?.cancel());
-    Future.microtask(refresh);
+    Future.microtask(() => refresh(verifyWithCli: true));
     return const AgyAuthStatus.signedOut();
   }
 
-  Future<void> refresh() async {
-    final loaded = await ref.read(authServiceProvider).loadStatus();
+  Future<void> refresh({bool verifyWithCli = false}) async {
+    final loaded = await ref
+        .read(authServiceProvider)
+        .loadStatus(verifyWithCli: verifyWithCli);
     state = loaded;
+  }
+
+  /// Marks state authenticated immediately when an `agy` turn or model probe succeeds.
+  void markAuthenticatedFromTurn({String? email}) {
+    if (state.isAuthenticated) return;
+    state = state.copyWith(
+      isAuthenticated: true,
+      email: email ?? state.email,
+      displayName: email ?? state.displayName ?? 'Google Account',
+      awaitingCode: false,
+      errorMessage: null,
+      lastAuthenticatedAt: DateTime.now(),
+    );
+    Future.microtask(() => refresh(verifyWithCli: false));
   }
 
   Future<void> startGoogleSignIn({bool enterprise = false}) async {
@@ -61,7 +81,10 @@ class AuthNotifier extends Notifier<AgyAuthStatus> {
   Future<void> submitVerificationCode(String code) async {
     await ref.read(authServiceProvider).submitVerificationCode(code);
     await Future<void>.delayed(const Duration(seconds: 2));
-    await refresh();
+    await refresh(verifyWithCli: true);
+    if (state.isAuthenticated) {
+      await ref.read(usageProvider.notifier).refreshFromRuntime();
+    }
   }
 
   Future<void> saveGeminiApiKey(String key) async {
