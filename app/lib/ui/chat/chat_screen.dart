@@ -449,13 +449,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       padding: const EdgeInsets.only(top: 4, left: 8, right: 8),
                       child: Row(
                         children: [
-                          Text(
-                            'Shortcuts: Ctrl+N New · Ctrl+B Sidebar · Ctrl+U Usage · Ctrl+, Settings',
-                            style: theme.textTheme.labelSmall?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant,
+                          Expanded(
+                            child: Text(
+                              'Shortcuts: Ctrl+N New · Ctrl+B Sidebar · Ctrl+U Usage · Ctrl+, Settings',
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
                             ),
                           ),
-                          const Spacer(),
+                          const SizedBox(width: 8),
                           FilterChip(
                             visualDensity: VisualDensity.compact,
                             label: const Text('Enter sends'),

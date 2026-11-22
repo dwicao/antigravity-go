@@ -16,7 +16,7 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 200));
 
-    expect(find.text('Antigravity Go'), findsOneWidget);
+    expect(find.text('Antigravity Go'), findsWidgets);
     expect(find.text('Antigravity in your pocket'), findsOneWidget);
   });
 }

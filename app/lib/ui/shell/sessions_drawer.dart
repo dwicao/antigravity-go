@@ -125,6 +125,7 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
                   child: DropdownButtonFormField<String>(
                     value: hosts.activeHostId,
                     isDense: true,
+                    isExpanded: true,
                     decoration: const InputDecoration(
                       labelText: 'Execution Host',
                       contentPadding:
@@ -133,12 +134,18 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
                     items: [
                       const DropdownMenuItem(
                         value: 'local',
-                        child: Text('On Device (Android)'),
+                        child: Text(
+                          'On Device (Android)',
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
                       for (final h in hosts.sshHosts)
                         DropdownMenuItem(
                           value: h.id,
-                          child: Text('SSH · ${h.name}'),
+                          child: Text(
+                            'SSH · ${h.name}',
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                     ],
                     onChanged: (v) {

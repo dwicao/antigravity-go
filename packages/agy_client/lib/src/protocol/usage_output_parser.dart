@@ -150,16 +150,22 @@ class UsageOutputParser {
       if (lower.contains('5-hour') ||
           lower.contains('5 hour') ||
           lower.contains('5h')) {
-        final pcts = _extractAllRemainingPcts(combined);
+        final linePcts = _extractAllRemainingPcts(line);
+        final pcts =
+            linePcts.isNotEmpty ? linePcts : _extractAllRemainingPcts(combined);
         final reset = _resetPattern.firstMatch(combined)?.group(1)?.trim();
         if (pcts.isNotEmpty && overall5h == null) overall5h = pcts.first;
         if (reset != null && overall5hReset == null) overall5hReset = reset;
       }
 
       if (lower.contains('weekly') || lower.contains('7-day')) {
-        final pcts = _extractAllRemainingPcts(combined);
+        final linePcts = _extractAllRemainingPcts(line);
+        final pcts =
+            linePcts.isNotEmpty ? linePcts : _extractAllRemainingPcts(combined);
         final reset = _resetPattern.firstMatch(combined)?.group(1)?.trim();
-        if (pcts.isNotEmpty && overallWeekly == null) overallWeekly = pcts.last;
+        if (pcts.isNotEmpty && overallWeekly == null) {
+          overallWeekly = pcts.first;
+        }
         if (reset != null && overallWeeklyReset == null) {
           overallWeeklyReset = reset;
         }

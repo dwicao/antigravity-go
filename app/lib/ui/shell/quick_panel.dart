@@ -144,6 +144,7 @@ class QuickPanel extends ConsumerWidget {
           ],
           DropdownButtonFormField<String>(
             value: settings.executionMode,
+            isExpanded: true,
             decoration: const InputDecoration(labelText: 'Execution Mode'),
             items: AgyExecutionMode.values
                 .map(

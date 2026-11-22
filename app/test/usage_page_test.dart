@@ -40,13 +40,29 @@ AI Credits balance: 250
     expect(find.text('Gemini 4 Argon'), findsOneWidget);
     expect(find.text('Gemini 4 Neon & Carbon'), findsOneWidget);
 
-    await tester.scrollUntilVisible(find.text('Gemini 4 Hydrogen & 3.8 Flash'), 200);
+    final listScrollable = find.descendant(
+      of: find.byType(ListView),
+      matching: find.byType(Scrollable),
+    );
+    await tester.scrollUntilVisible(
+      find.text('Gemini 4 Hydrogen & 3.8 Flash'),
+      200,
+      scrollable: listScrollable,
+    );
     expect(find.text('Gemini 4 Hydrogen & 3.8 Flash'), findsOneWidget);
 
-    await tester.scrollUntilVisible(find.text('Claude & GPT'), 200);
+    await tester.scrollUntilVisible(
+      find.text('Claude & GPT'),
+      200,
+      scrollable: listScrollable,
+    );
     expect(find.text('Claude & GPT'), findsOneWidget);
 
-    await tester.scrollUntilVisible(find.text('250 credits'), 200);
+    await tester.scrollUntilVisible(
+      find.text('250 credits'),
+      200,
+      scrollable: listScrollable,
+    );
     expect(find.text('250 credits'), findsOneWidget);
   });
 }
