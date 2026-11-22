@@ -55,6 +55,12 @@ android {
         disable += "ExpiredTargetSdkVersion"
     }
 
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
     signingConfigs {
         if (!keyProps.isEmpty) {
             create("release") {
