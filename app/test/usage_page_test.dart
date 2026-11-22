@@ -39,8 +39,14 @@ AI Credits balance: 250
     expect(find.text('Weekly Limit'), findsOneWidget);
     expect(find.text('Gemini 4 Argon'), findsOneWidget);
     expect(find.text('Gemini 4 Neon & Carbon'), findsOneWidget);
+
+    await tester.scrollUntilVisible(find.text('Gemini 4 Hydrogen & 3.8 Flash'), 200);
     expect(find.text('Gemini 4 Hydrogen & 3.8 Flash'), findsOneWidget);
+
+    await tester.scrollUntilVisible(find.text('Claude & GPT'), 200);
     expect(find.text('Claude & GPT'), findsOneWidget);
+
+    await tester.scrollUntilVisible(find.text('250 credits'), 200);
     expect(find.text('250 credits'), findsOneWidget);
   });
 }
