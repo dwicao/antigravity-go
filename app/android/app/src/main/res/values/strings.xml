@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Antigravity Go</string>
+    <string name="phone_a11y_label">Antigravity Go Phone Control</string>
+    <string name="phone_a11y_description">Allows Antigravity AI agents to inspect screen elements and perform user-approved actions.</string>
+</resources>

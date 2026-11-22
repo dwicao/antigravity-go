@@ -1,0 +1,42 @@
+name: antigravity_go
+description: "Antigravity Go — Google Antigravity Mobile Harness for Android"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.10.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  intl: any
+  cupertino_icons: ^1.0.8
+  flutter_riverpod: ^3.5.0
+  shared_preferences: ^2.5.6
+  flutter_secure_storage: ^11.2.0
+  webview_flutter: ^4.14.1
+  webview_flutter_android: ^4.14.1
+  gpt_markdown: ^1.4.1
+  path_provider: ^2.1.6
+  url_launcher: ^6.3.3
+  dartssh2: ^4.1.0
+  connectivity_plus: ^7.3.2
+  image_picker: ^1.2.4
+  file_picker: ^13.4.1
+  crypto: ^3.0.8
+  xterm: ^4.0.0
+  http: ^1.6.0
+  share_plus: ^13.3.1
+  uuid: ^4.6.0
+  agy_client:
+    path: ../packages/agy_client
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

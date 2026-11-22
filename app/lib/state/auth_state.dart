@@ -1,0 +1,87 @@
+import 'dart:async';
+
+import 'package:agy_client/agy_client.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../auth/google_auth_service.dart';
+import '../runtime/runtime_bridge.dart';
+import '../runtime/runtime_models.dart';
+
+final authServiceProvider = Provider<GoogleAuthService>(
+  (ref) => GoogleAuthService(),
+);
+
+final authProvider =
+    NotifierProvider<AuthNotifier, AgyAuthStatus>(AuthNotifier.new);
+
+class AuthNotifier extends Notifier<AgyAuthStatus> {
+  StreamSubscription<RuntimeEvent>? _sub;
+
+  @override
+  AgyAuthStatus build() {
+    _sub?.cancel();
+    _sub = RuntimeBridge.instance.events.listen((evt) {
+      if (evt.kind == 'auth_oauth_url' && evt.logLine != null) {
+        final url = UsageOutputParser.extractOAuthUrl(evt.logLine!) ??
+            evt.logLine!.trim();
+        state = state.copyWith(
+          pendingOAuthUrl: url,
+          awaitingCode: true,
+        );
+        ref.read(authServiceProvider).openOAuthUrl(url);
+      } else if (evt.kind == 'auth_completed') {
+        Future.microtask(refresh);
+      } else if (evt.kind == 'auth_error' && evt.logLine != null) {
+        state = state.copyWith(
+          awaitingCode: false,
+          errorMessage: evt.logLine,
+        );
+      }
+    });
+    ref.onDispose(() => _sub?.cancel());
+    Future.microtask(refresh);
+    return const AgyAuthStatus.signedOut();
+  }
+
+  Future<void> refresh() async {
+    final loaded = await ref.read(authServiceProvider).loadStatus();
+    state = loaded;
+  }
+
+  Future<void> startGoogleSignIn({bool enterprise = false}) async {
+    state = state.copyWith(
+      awaitingCode: true,
+      errorMessage: null,
+    );
+    await ref
+        .read(authServiceProvider)
+        .launchGoogleSignIn(enterprise: enterprise);
+  }
+
+  Future<void> submitVerificationCode(String code) async {
+    await ref.read(authServiceProvider).submitVerificationCode(code);
+    await Future<void>.delayed(const Duration(seconds: 2));
+    await refresh();
+  }
+
+  Future<void> saveGeminiApiKey(String key) async {
+    await ref.read(authServiceProvider).saveGeminiApiKey(key);
+    await refresh();
+  }
+
+  Future<void> configureEnterpriseGcp({
+    required String projectId,
+    required String location,
+  }) async {
+    await ref.read(authServiceProvider).configureEnterpriseGcp(
+          projectId: projectId,
+          location: location,
+        );
+    await refresh();
+  }
+
+  Future<void> signOut() async {
+    await ref.read(authServiceProvider).signOut();
+    state = const AgyAuthStatus.signedOut();
+  }
+}

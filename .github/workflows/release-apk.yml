@@ -1,0 +1,140 @@
+name: Release APK (AOSP release key)
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (defaults to v<pubspec version>)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: 3.47.7
+  GRADLE_VERSION: 9.3.1
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+
+      - name: Configure Flutter & Android SDK
+        working-directory: app
+        run: |
+          flutter pub get
+          printf 'sdk.dir=%s\nflutter.sdk=%s\n' "${ANDROID_HOME:-$ANDROID_SDK_ROOT}" "$FLUTTER_ROOT" > android/local.properties
+
+      - name: Prepare AOSP release/testkey keystore
+        run: |
+          set -euo pipefail
+          pem="$RUNNER_TEMP/testkey.x509.pem"
+          pk8="$RUNNER_TEMP/testkey.pk8"
+          fetch_aosp() {
+            local file="$1" out="$2"
+            if curl -fsSL "https://android.googlesource.com/platform/build/+/refs/heads/main/target/product/security/${file}?format=TEXT" \
+              | base64 -d > "$out" 2>/dev/null && [[ -s "$out" ]]; then
+              return 0
+            fi
+            curl -fsSL "https://raw.githubusercontent.com/aosp-mirror/platform_build/master/target/product/security/${file}" -o "$out"
+          }
+          fetch_aosp testkey.x509.pem "$pem"
+          fetch_aosp testkey.pk8 "$pk8"
+
+          fp="$(openssl x509 -in "$pem" -noout -fingerprint -sha256 | sed 's/.*=//; s/://g' | tr '[:upper:]' '[:lower:]')"
+          expected_fp="a40da80a59d170caa950cf15c18c454d47a39b26989d8b640ecd745ba71bf5dc"
+          if [[ "$fp" != "$expected_fp" ]]; then
+            echo "Unexpected AOSP testkey SHA-256 fingerprint: $fp (expected $expected_fp)" >&2
+            exit 1
+          fi
+
+          key_pem="$RUNNER_TEMP/testkey.key.pem"
+          p12="$RUNNER_TEMP/aosp-testkey.p12"
+          jks="$RUNNER_TEMP/aosp-testkey.jks"
+          openssl pkcs8 -inform DER -nocrypt -in "$pk8" -out "$key_pem"
+          openssl pkcs12 -export \
+            -in "$pem" \
+            -inkey "$key_pem" \
+            -name testkey \
+            -out "$p12" \
+            -passout pass:android
+          keytool -importkeystore -noprompt \
+            -srckeystore "$p12" -srcstoretype PKCS12 -srcstorepass android \
+            -destkeystore "$jks" -deststoretype JKS -deststorepass android -destkeypass android
+
+          printf 'storeFile=%s\nstorePassword=android\nkeyAlias=testkey\nkeyPassword=android\n' "$jks" > app/android/key.properties
+
+      - name: Build signed release APKs (arm64 + x64)
+        run: bash tooling/build-apk.sh -f all --release
+
+      - name: Clean temporary signing files
+        if: always()
+        run: rm -f app/android/key.properties "$RUNNER_TEMP"/testkey.* "$RUNNER_TEMP"/aosp-testkey.*
+
+      - name: Verify release APK signatures and package assets
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          sdk="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          apksigner="$(ls -1d "$sdk"/build-tools/*/apksigner | sort -V | tail -n 1)"
+          for flavor in arm64 x64; do
+            apk="app/build/app/outputs/flutter-apk/app-${flavor}-release.apk"
+            "$apksigner" verify -v --min-sdk-version 26 --print-certs "$apk"
+            "$apksigner" verify --print-certs "$apk" | grep -qi "a40da80a59d170caa950cf15c18c454d47a39b26989d8b640ecd745ba71bf5dc"
+          done
+          python3 tooling/release_assets.py
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: antigravity-go-release-apks
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          version="$(python3 -c 'import re; print(re.search(r"^version:\s*([^+\s]+)", open("app/pubspec.yaml").read(), re.M).group(1))')"
+          tag="${INPUT_TAG:-${GITHUB_REF_NAME:-v$version}}"
+          if [[ "$tag" == "main" || -z "$tag" ]]; then
+            tag="v$version"
+          fi
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/antigravity-go-*.apk dist/SHA256SUMS dist/update.json --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$tag" dist/antigravity-go-*.apk dist/SHA256SUMS dist/update.json \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "Antigravity Go $version (AOSP release key)" \
+              --notes "Signed release APKs (arm64 + x64) built from \`$GITHUB_SHA\` with AOSP release/testkey (\`a40da80a59d170caa950cf15c18c454d47a39b26989d8b640ecd745ba71bf5dc\`)."
+          fi

@@ -1,0 +1,40 @@
+import 'package:agy_client/agy_client.dart';
+import 'package:test/test.dart';
+
+void main() {
+  group('UsageOutputParser', () {
+    test('extracts OAuth URL and email from ANSI output', () {
+      const sample =
+          '\x1B[36mOpen this URL to sign in:\x1B[0m https://accounts.google.com/o/oauth2/v2/auth?client_id=123&scope=openid\nSigned in as developer@gmail.com\n';
+      expect(
+        UsageOutputParser.extractOAuthUrl(sample),
+        'https://accounts.google.com/o/oauth2/v2/auth?client_id=123&scope=openid',
+      );
+      expect(UsageOutputParser.extractEmail(sample), 'developer@gmail.com');
+    });
+
+    test('parses 5h, weekly, Gemini Argon/Pro/Flash, Claude & GPT quotas and AI credits', () {
+      const usageDump = '''
+Models & Quota
+5-hour window: 82% remaining (resets in 3h 14m)
+Weekly limit: 64% remaining (resets in 4d 11h)
+Gemini 4 Argon        75% remaining (resets in 2h 45m)
+Gemini Pro (Neon / Carbon)  80% remaining
+Gemini Flash & Hydrogen     95% remaining
+Claude & GPT                55% remaining (weekly resets in 5d)
+AI Credits balance: 420
+''';
+      final parsed = UsageOutputParser.parseUsageText(usageDump);
+      expect(parsed.overallFiveHourRemainingPct, 82);
+      expect(parsed.overallWeeklyRemainingPct, 64);
+      expect(parsed.overallFiveHourResetText, '3h 14m');
+      expect(parsed.aiCreditsRemaining, 420);
+
+      final argon = parsed.entries.firstWhere((e) => e.id == 'gemini-4-argon');
+      expect(argon.fiveHourRemainingPct, 75);
+
+      final claudeGpt = parsed.entries.firstWhere((e) => e.id == 'claude-gpt');
+      expect(claudeGpt.weeklyRemainingPct, 55);
+    });
+  });
+}
