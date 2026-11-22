@@ -17,12 +17,24 @@ class TokenUsage {
   final int totalTokens;
 
   factory TokenUsage.fromJson(Map<String, dynamic> json) {
+    int readInt(String snake, String camel) {
+      final v = json[snake] ?? json[camel];
+      return (v as num?)?.toInt() ?? 0;
+    }
+
+    final input = readInt('input_tokens', 'inputTokens');
+    final output = readInt('output_tokens', 'outputTokens');
+    final thinking = readInt('thinking_tokens', 'thinkingTokens');
+    final cacheRead = readInt('cache_read_tokens', 'cacheReadTokens');
+    final explicitTotal = readInt('total_tokens', 'totalTokens');
+    final total = explicitTotal > 0 ? explicitTotal : (input + output + thinking);
+
     return TokenUsage(
-      inputTokens: (json['input_tokens'] as num?)?.toInt() ?? 0,
-      outputTokens: (json['output_tokens'] as num?)?.toInt() ?? 0,
-      thinkingTokens: (json['thinking_tokens'] as num?)?.toInt() ?? 0,
-      cacheReadTokens: (json['cache_read_tokens'] as num?)?.toInt() ?? 0,
-      totalTokens: (json['total_tokens'] as num?)?.toInt() ?? 0,
+      inputTokens: input,
+      outputTokens: output,
+      thinkingTokens: thinking,
+      cacheReadTokens: cacheRead,
+      totalTokens: total,
     );
   }
 

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../state/auth_state.dart';
+import '../../state/chat_state.dart';
 import '../../state/hosts_state.dart';
 import '../../state/permissions_state.dart';
 import '../../state/projects_state.dart';
@@ -35,6 +36,9 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
   @override
   Widget build(BuildContext context) {
     final sessions = ref.watch(sessionsProvider);
+    final bgSessionIds = ref.watch(
+      chatProvider.select((c) => c.activeBackgroundSessionIds),
+    );
     final hosts = ref.watch(hostsProvider);
     final projects = ref.watch(projectsProvider);
     final auth = ref.watch(authProvider);
@@ -306,6 +310,7 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
 
           Widget buildSessionTile(AgySessionSummary s) {
             final active = s.id == sessions.activeSessionId;
+            final isRunning = bgSessionIds.contains(s.id);
             return GestureDetector(
               onSecondaryTapUp: (details) async {
                 final action = await showMenu<String>(
@@ -332,12 +337,21 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
               child: ListTile(
                 dense: true,
                 selected: active,
-                leading: Icon(
-                  s.hostKind == AgyHostKind.ssh
-                      ? Icons.computer
-                      : Icons.chat_bubble_outline,
-                  size: 16,
-                ),
+                leading: isRunning
+                    ? SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: theme.colorScheme.primary,
+                        ),
+                      )
+                    : Icon(
+                        s.hostKind == AgyHostKind.ssh
+                            ? Icons.computer
+                            : Icons.chat_bubble_outline,
+                        size: 16,
+                      ),
                 title: Text(
                   s.title,
                   maxLines: 1,

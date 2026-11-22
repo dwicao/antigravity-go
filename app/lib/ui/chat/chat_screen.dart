@@ -18,6 +18,7 @@ import '../../state/sessions_state.dart';
 import '../../state/settings_state.dart';
 import '../../state/side_panel_state.dart';
 import '../auth/google_login_sheet.dart';
+import '../shell/background_tasks_sheet.dart';
 import '../shell/command_palette.dart';
 import '../usage/usage_page.dart';
 import 'message_bubble.dart';
@@ -295,6 +296,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             ],
           ),
           actions: [
+            const BackgroundTasksAppBarPill(),
             IconButton(
               tooltip: 'Command Palette (Ctrl+K)',
               onPressed: () => CommandPaletteDialog.show(context),
@@ -426,6 +428,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               ),
             ),
           ),
+        wrapCentered(const BackgroundTasksBanner()),
         if (chat.pendingPermission != null)
           wrapCentered(
             ToolApprovalCard(

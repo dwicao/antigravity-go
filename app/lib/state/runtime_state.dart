@@ -10,21 +10,25 @@ class RuntimeUiState {
     this.status = const RuntimeStatus.initial(),
     this.logs = const [],
     this.busy = false,
+    this.backgroundTasks = const [],
   });
 
   final RuntimeStatus status;
   final List<String> logs;
   final bool busy;
+  final List<NativeBackgroundTask> backgroundTasks;
 
   RuntimeUiState copyWith({
     RuntimeStatus? status,
     List<String>? logs,
     bool? busy,
+    List<NativeBackgroundTask>? backgroundTasks,
   }) {
     return RuntimeUiState(
       status: status ?? this.status,
       logs: logs ?? this.logs,
       busy: busy ?? this.busy,
+      backgroundTasks: backgroundTasks ?? this.backgroundTasks,
     );
   }
 }
@@ -42,6 +46,9 @@ class RuntimeNotifier extends Notifier<RuntimeUiState> {
       if (evt.status != null) {
         state = state.copyWith(status: evt.status);
       }
+      if (evt.kind == 'background_tasks') {
+        state = state.copyWith(backgroundTasks: evt.backgroundTasks);
+      }
       if (evt.logLine != null) {
         final next = [...state.logs, evt.logLine!];
         if (next.length > 250) {
@@ -58,7 +65,18 @@ class RuntimeNotifier extends Notifier<RuntimeUiState> {
   Future<void> refresh() async {
     final status = await RuntimeBridge.instance.getStatus();
     final logs = await RuntimeBridge.instance.getLogs();
-    state = state.copyWith(status: status, logs: logs);
+    final tasks = await RuntimeBridge.instance.getBackgroundTasks();
+    state = state.copyWith(
+      status: status,
+      logs: logs,
+      backgroundTasks: tasks,
+    );
+  }
+
+  Future<bool> cancelBackgroundTask(String taskId) async {
+    final ok = await RuntimeBridge.instance.cancelBackgroundTask(taskId);
+    await refresh();
+    return ok;
   }
 
   Future<void> installAndStart() async {

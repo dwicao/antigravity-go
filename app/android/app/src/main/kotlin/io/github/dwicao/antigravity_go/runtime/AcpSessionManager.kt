@@ -20,9 +20,12 @@ class AcpSessionManager(
     private val executor: ExecutorService,
     private val emit: (Map<String, Any?>) -> Unit,
     private val log: (String) -> Unit,
+    private val onTasksChanged: () -> Unit = {},
 ) {
     private class TerminalProc(
         val process: Process,
+        val command: String,
+        val startedAtMs: Long = System.currentTimeMillis(),
         val output: StringBuffer = StringBuffer(),
         @Volatile var exitCode: Int? = null,
     )
@@ -32,6 +35,8 @@ class AcpSessionManager(
         val writer: OutputStreamWriter,
         val env: Map<String, String>,
         val defaultCwd: File,
+        val promptSummary: String,
+        val startedAtMs: Long = System.currentTimeMillis(),
         val nextId: AtomicInteger = AtomicInteger(1),
         @Volatile var sessionId: String? = null,
         val terminals: ConcurrentHashMap<String, TerminalProc> = ConcurrentHashMap(),
@@ -50,6 +55,57 @@ class AcpSessionManager(
             if (!promptSent && method == "session/update") return false
             return true
         }
+
+        fun summarizeCommand(raw: String, maxLen: Int = 80): String {
+            val singleLine = raw.trim().replace(Regex("\\s+"), " ")
+            if (singleLine.isEmpty()) return "Shell command"
+            return if (singleLine.length > maxLen) "${singleLine.take(maxLen - 1)}…" else singleLine
+        }
+    }
+
+    fun listBackgroundTasks(): List<Map<String, Any?>> {
+        val out = mutableListOf<Map<String, Any?>>()
+        for ((turnId, active) in sessions) {
+            out.add(
+                mapOf(
+                    "id" to "turn:$turnId",
+                    "turnId" to turnId,
+                    "kind" to "turn",
+                    "title" to active.promptSummary,
+                    "status" to "running",
+                    "startedAtMs" to active.startedAtMs,
+                )
+            )
+            for ((termId, tp) in active.terminals) {
+                if (tp.exitCode == null && tp.process.isAlive) {
+                    out.add(
+                        mapOf(
+                            "id" to termId,
+                            "turnId" to turnId,
+                            "kind" to "terminal",
+                            "title" to tp.command,
+                            "status" to "running",
+                            "startedAtMs" to tp.startedAtMs,
+                        )
+                    )
+                }
+            }
+        }
+        out.sortBy { (it["startedAtMs"] as? Long) ?: 0L }
+        return out
+    }
+
+    fun cancelTerminal(termId: String): Boolean {
+        for (active in sessions.values) {
+            val tp = active.terminals[termId] ?: continue
+            try {
+                tp.process.destroyForcibly()
+            } catch (_: Throwable) {}
+            tp.exitCode = -1
+            onTasksChanged()
+            return true
+        }
+        return false
     }
 
     fun startTurn(
@@ -89,8 +145,10 @@ class AcpSessionManager(
                     writer = writer,
                     env = env,
                     defaultCwd = cwd,
+                    promptSummary = summarizeCommand(prompt, maxLen = 64),
                 )
                 sessions[turnId] = active
+                onTasksChanged()
 
                 val errFuture = executor.submit {
                     BufferedReader(InputStreamReader(proc.errorStream)).use { err ->
@@ -372,6 +430,9 @@ class AcpSessionManager(
                         term.process.destroyForcibly()
                     } catch (_: Throwable) {}
                 }
+                if (removed != null) {
+                    onTasksChanged()
+                }
                 try {
                     proc?.destroy()
                 } catch (_: Throwable) {}
@@ -409,6 +470,7 @@ class AcpSessionManager(
                 term.process.destroyForcibly()
             } catch (_: Throwable) {}
         }
+        onTasksChanged()
         val sid = active.sessionId
         if (!sid.isNullOrBlank()) {
             try {
@@ -470,8 +532,12 @@ class AcpSessionManager(
                     pb.redirectErrorStream(true)
                     val proc = pb.start()
                     val termId = "term-${active.nextId.getAndIncrement()}"
-                    val tp = TerminalProc(process = proc)
+                    val displayCmd = summarizeCommand(
+                        if (cmdList.size >= 3 && cmdList[1] == "-c") cmdList[2] else cmdList.joinToString(" "),
+                    )
+                    val tp = TerminalProc(process = proc, command = displayCmd)
                     active.terminals[termId] = tp
+                    onTasksChanged()
 
                     executor.submit {
                         try {
@@ -490,6 +556,7 @@ class AcpSessionManager(
                         } catch (_: Throwable) {
                             -1
                         }
+                        onTasksChanged()
                     }
 
                     sendJson(
@@ -521,6 +588,7 @@ class AcpSessionManager(
                     val tp = active.terminals[termId]
                     val code = tp?.process?.waitFor() ?: tp?.exitCode ?: 0
                     tp?.exitCode = code
+                    onTasksChanged()
                     sendJson(
                         active.writer,
                         JSONObject()
@@ -532,7 +600,11 @@ class AcpSessionManager(
 
                 "terminal/kill" -> {
                     val termId = params?.optString("terminalId", "") ?: ""
-                    active.terminals[termId]?.process?.destroyForcibly()
+                    active.terminals[termId]?.let { tp ->
+                        tp.process.destroyForcibly()
+                        tp.exitCode = -1
+                        onTasksChanged()
+                    }
                     sendJson(
                         active.writer,
                         JSONObject().put("jsonrpc", "2.0").put("id", id).put("result", JSONObject())
@@ -541,7 +613,10 @@ class AcpSessionManager(
 
                 "terminal/release" -> {
                     val termId = params?.optString("terminalId", "") ?: ""
-                    active.terminals.remove(termId)?.process?.destroyForcibly()
+                    active.terminals.remove(termId)?.let { tp ->
+                        tp.process.destroyForcibly()
+                        onTasksChanged()
+                    }
                     sendJson(
                         active.writer,
                         JSONObject().put("jsonrpc", "2.0").put("id", id).put("result", JSONObject())

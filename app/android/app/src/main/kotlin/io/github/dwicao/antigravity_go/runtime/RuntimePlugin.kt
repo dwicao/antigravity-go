@@ -155,6 +155,11 @@ class RuntimePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChann
                 ctrl.cancelTurn(call.argument<String>("turnId") ?: "")
                 result.success(null)
             }
+            "backgroundTasks" -> result.success(ctrl.listBackgroundTasks())
+            "cancelBackgroundTask" -> {
+                val ok = ctrl.cancelBackgroundTask(call.argument<String>("taskId") ?: "")
+                result.success(ok)
+            }
             "writeFile" -> {
                 val ok = ctrl.writeTextFile(
                     call.argument<String>("path") ?: "",

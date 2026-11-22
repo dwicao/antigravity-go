@@ -45,11 +45,14 @@ void main() {
       expect((init! as AgyInitEvent).conversationId, 'sess-99');
 
       final res = codec.parseNotificationOrRequest(
-        '{"jsonrpc":"2.0","id":3,"result":{"sessionId":"sess-99","stopReason":"end_turn","usage":{"total_tokens":345}}}',
+        '{"jsonrpc":"2.0","id":3,"result":{"sessionId":"sess-99","stopReason":"end_turn","durationMs":2400,"usage":{"inputTokens":200,"outputTokens":145,"totalTokens":345}}}',
       );
       expect(res, isA<AgyTurnResultEvent>());
       final turn = res! as AgyTurnResultEvent;
       expect(turn.status, 'SUCCESS');
+      expect(turn.durationSeconds, 2.4);
+      expect(turn.usage.inputTokens, 200);
+      expect(turn.usage.outputTokens, 145);
       expect(turn.usage.totalTokens, 345);
     });
 

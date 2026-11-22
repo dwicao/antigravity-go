@@ -28,6 +28,7 @@ class ChatToolStep {
     this.output,
     this.error,
     this.durationSeconds,
+    this.startedAt,
   });
 
   final String id;
@@ -37,6 +38,7 @@ class ChatToolStep {
   final String? output;
   final String? error;
   final double? durationSeconds;
+  final DateTime? startedAt;
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -46,6 +48,7 @@ class ChatToolStep {
         if (output != null) 'output': output,
         if (error != null) 'error': error,
         if (durationSeconds != null) 'durationSeconds': durationSeconds,
+        if (startedAt != null) 'startedAt': startedAt!.toIso8601String(),
       };
 
   factory ChatToolStep.fromJson(Map<String, dynamic> json) {
@@ -61,6 +64,7 @@ class ChatToolStep {
       output: json['output'] as String?,
       error: json['error'] as String?,
       durationSeconds: (json['durationSeconds'] as num?)?.toDouble(),
+      startedAt: DateTime.tryParse(json['startedAt'] as String? ?? ''),
     );
   }
 }
@@ -77,6 +81,10 @@ class ChatMessage {
     this.attachments = const [],
     this.isStreaming = false,
     this.requiresAuth = false,
+    this.durationSeconds,
+    this.tokensPerSecond,
+    this.modelId,
+    this.completedAt,
   });
 
   final String id;
@@ -89,6 +97,10 @@ class ChatMessage {
   final List<String> attachments;
   final bool isStreaming;
   final bool requiresAuth;
+  final double? durationSeconds;
+  final double? tokensPerSecond;
+  final String? modelId;
+  final DateTime? completedAt;
 
   ChatMessage copyWith({
     String? text,
@@ -97,6 +109,10 @@ class ChatMessage {
     TokenUsage? usage,
     bool? isStreaming,
     bool? requiresAuth,
+    double? durationSeconds,
+    double? tokensPerSecond,
+    String? modelId,
+    DateTime? completedAt,
   }) {
     return ChatMessage(
       id: id,
@@ -109,6 +125,10 @@ class ChatMessage {
       attachments: attachments,
       isStreaming: isStreaming ?? this.isStreaming,
       requiresAuth: requiresAuth ?? this.requiresAuth,
+      durationSeconds: durationSeconds ?? this.durationSeconds,
+      tokensPerSecond: tokensPerSecond ?? this.tokensPerSecond,
+      modelId: modelId ?? this.modelId,
+      completedAt: completedAt ?? this.completedAt,
     );
   }
 
@@ -121,6 +141,10 @@ class ChatMessage {
         if (tools.isNotEmpty) 'tools': tools.map((t) => t.toJson()).toList(),
         if (usage != null) 'usage': usage!.toJson(),
         if (attachments.isNotEmpty) 'attachments': attachments,
+        if (durationSeconds != null) 'durationSeconds': durationSeconds,
+        if (tokensPerSecond != null) 'tokensPerSecond': tokensPerSecond,
+        if (modelId != null) 'modelId': modelId,
+        if (completedAt != null) 'completedAt': completedAt!.toIso8601String(),
       };
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) {
@@ -145,6 +169,10 @@ class ChatMessage {
       attachments: (json['attachments'] as List<dynamic>? ?? const [])
           .map((e) => e.toString())
           .toList(),
+      durationSeconds: (json['durationSeconds'] as num?)?.toDouble(),
+      tokensPerSecond: (json['tokensPerSecond'] as num?)?.toDouble(),
+      modelId: json['modelId'] as String?,
+      completedAt: DateTime.tryParse(json['completedAt'] as String? ?? ''),
     );
   }
 }
@@ -158,6 +186,7 @@ class ChatThreadState {
     this.activeTurnId,
     this.tokensPerSecond = 0,
     this.stallWarning,
+    this.activeBackgroundSessionIds = const {},
   });
 
   final List<ChatMessage> messages;
@@ -167,6 +196,7 @@ class ChatThreadState {
   final String? activeTurnId;
   final double tokensPerSecond;
   final String? stallWarning;
+  final Set<String> activeBackgroundSessionIds;
 
   ChatThreadState copyWith({
     List<ChatMessage>? messages,
@@ -178,6 +208,7 @@ class ChatThreadState {
     double? tokensPerSecond,
     String? stallWarning,
     bool clearStallWarning = false,
+    Set<String>? activeBackgroundSessionIds,
   }) {
     return ChatThreadState(
       messages: messages ?? this.messages,
@@ -190,6 +221,8 @@ class ChatThreadState {
       tokensPerSecond: tokensPerSecond ?? this.tokensPerSecond,
       stallWarning:
           clearStallWarning ? null : (stallWarning ?? this.stallWarning),
+      activeBackgroundSessionIds:
+          activeBackgroundSessionIds ?? this.activeBackgroundSessionIds,
     );
   }
 }
@@ -206,6 +239,11 @@ class ChatNotifier extends Notifier<ChatThreadState> {
   AgyPromptRequest? _activeLocalRequest;
   DateTime? _streamBurstStart;
   final List<({DateTime at, double tokens})> _rateSamples = [];
+  final Map<String, List<ChatMessage>> _inFlightMessages = {};
+  final Map<String, DateTime> _turnStartedAt = {};
+  final Map<String, DateTime> _firstOutputAt = {};
+  final Map<String, String> _turnModelId = {};
+  String? _activeStreamingSessionId;
 
   double _recordRateSample(String delta) {
     if (delta.isEmpty) return state.tokensPerSecond;
@@ -232,9 +270,9 @@ class ChatNotifier extends Notifier<ChatThreadState> {
 
   void _resetWatchdog() {
     _stallWatchdog?.cancel();
-    if (!state.isStreaming) return;
+    if (_activeStreamingSessionId == null) return;
     _stallWatchdog = Timer(const Duration(seconds: 180), () {
-      if (state.isStreaming && ref.mounted) {
+      if (_activeStreamingSessionId != null && ref.mounted) {
         state = state.copyWith(
           stallWarning:
               'Agent turn has had no output for 3 minutes — check connection or tap Stop & Regenerate.',
@@ -260,10 +298,22 @@ class ChatNotifier extends Notifier<ChatThreadState> {
   }
 
   Future<void> _loadMessages(String sessionId) async {
+    final inFlight = _inFlightMessages[sessionId];
+    if (inFlight != null) {
+      state = state.copyWith(
+        messages: List<ChatMessage>.from(inFlight),
+        isStreaming: _activeStreamingSessionId == sessionId,
+        clearPermission: true,
+        clearStallWarning: true,
+      );
+      return;
+    }
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString('agy_msgs_$sessionId');
     if (raw == null || raw.isEmpty) {
-      state = const ChatThreadState();
+      state = ChatThreadState(
+        activeBackgroundSessionIds: state.activeBackgroundSessionIds,
+      );
       return;
     }
     try {
@@ -271,9 +321,14 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           .whereType<Map<String, dynamic>>()
           .map(ChatMessage.fromJson)
           .toList();
-      state = ChatThreadState(messages: list);
+      state = ChatThreadState(
+        messages: list,
+        activeBackgroundSessionIds: state.activeBackgroundSessionIds,
+      );
     } catch (_) {
-      state = const ChatThreadState();
+      state = ChatThreadState(
+        activeBackgroundSessionIds: state.activeBackgroundSessionIds,
+      );
     }
   }
 
@@ -285,6 +340,55 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     );
   }
 
+  List<ChatMessage> _messagesForSession(String sessionId) {
+    if (_loadedSessionId == sessionId) {
+      return state.messages;
+    }
+    return _inFlightMessages[sessionId] ?? const [];
+  }
+
+  void _updateSessionMessages(String sessionId, List<ChatMessage> next) {
+    _inFlightMessages[sessionId] = next;
+    if (_loadedSessionId == sessionId) {
+      state = state.copyWith(messages: next);
+    }
+  }
+
+  ({double? durationSec, double? tokPerSec}) _computeTurnStats({
+    required String assistantId,
+    required String text,
+    required String thoughts,
+    TokenUsage? usage,
+    double reportedDurationSeconds = 0,
+  }) {
+    final now = DateTime.now();
+    final startedAt = _turnStartedAt[assistantId];
+    final wallSec = startedAt != null
+        ? now.difference(startedAt).inMilliseconds / 1000.0
+        : 0.0;
+    final durationSec = reportedDurationSeconds > 0
+        ? reportedDurationSeconds
+        : (wallSec > 0 ? wallSec : null);
+
+    final genStart = _firstOutputAt[assistantId] ?? startedAt;
+    final genSec = genStart != null
+        ? now.difference(genStart).inMilliseconds / 1000.0
+        : (durationSec ?? 0.0);
+    final safeGenSec = genSec < 0.1 ? 0.1 : genSec;
+
+    double? tokPerSec;
+    final outTokens = (usage?.outputTokens ?? 0) + (usage?.thinkingTokens ?? 0);
+    if (outTokens > 0) {
+      tokPerSec = outTokens / safeGenSec;
+    } else {
+      final charLen = text.trim().length + thoughts.trim().length;
+      if (charLen > 0) {
+        tokPerSec = (charLen * 0.35) / safeGenSec;
+      }
+    }
+    return (durationSec: durationSec, tokPerSec: tokPerSec);
+  }
+
   Future<void> sendPrompt(
     String rawText, {
     List<String> attachments = const [],
@@ -292,7 +396,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     final prompt = rawText.trim();
     if (prompt.isEmpty) return;
 
-    if (state.isStreaming) {
+    if (state.isStreaming || _activeStreamingSessionId != null) {
       state = state.copyWith(
         queuedPrompts: [...state.queuedPrompts, prompt],
       );
@@ -302,16 +406,18 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     var session = ref.read(sessionsProvider).activeSession;
     session ??= await ref.read(sessionsProvider.notifier).createSession();
 
+    final settings = ref.read(settingsProvider);
     final attachmentNote = attachments.isEmpty
         ? ''
         : '\n\n[Attached files: ${attachments.join(', ')}]';
     final effectivePrompt = '$prompt$attachmentNote';
+    final now = DateTime.now();
 
     final userMsg = ChatMessage(
       id: const Uuid().v4(),
       role: ChatRole.user,
       text: prompt,
-      createdAt: DateTime.now(),
+      createdAt: now,
       attachments: attachments,
     );
 
@@ -320,16 +426,24 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       id: assistantId,
       role: ChatRole.assistant,
       text: '',
-      createdAt: DateTime.now(),
+      createdAt: now,
+      modelId: settings.selectedModelId,
       isStreaming: true,
     );
 
     final nextMessages = [...state.messages, userMsg, assistantMsg];
     final turnId = const Uuid().v4();
+    _loadedSessionId = session.id;
+    _activeStreamingSessionId = session.id;
+    _turnStartedAt[assistantId] = now;
+    _turnModelId[assistantId] = settings.selectedModelId;
+    _inFlightMessages[session.id] = nextMessages;
+    final bgIds = {...state.activeBackgroundSessionIds, session.id};
     state = state.copyWith(
       messages: nextMessages,
       isStreaming: true,
       activeTurnId: turnId,
+      activeBackgroundSessionIds: bgIds,
       clearPermission: true,
     );
 
@@ -346,7 +460,6 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           ),
         );
 
-    final settings = ref.read(settingsProvider);
     final hosts = ref.read(hostsProvider);
     final runtime = ref.read(runtimeProvider);
     final project = ref.read(projectsProvider).activeProject;
@@ -442,13 +555,17 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     if (state.stallWarning != null) {
       state = state.copyWith(clearStallWarning: true);
     }
-    final idx = state.messages.indexWhere((m) => m.id == assistantId);
+    final msgs = _messagesForSession(session.id);
+    final idx = msgs.indexWhere((m) => m.id == assistantId);
     if (idx < 0) return;
-    final current = state.messages[idx];
+    final current = msgs[idx];
 
     switch (evt) {
       case AgyInitEvent():
         ref.read(authProvider.notifier).markAuthenticatedFromTurn();
+        if (evt.model != null && evt.model!.isNotEmpty) {
+          _turnModelId[assistantId] = evt.model!;
+        }
         if (evt.conversationId.isNotEmpty) {
           ref.read(sessionsProvider.notifier).updateSession(
                 session.copyWith(remoteConversationId: evt.conversationId),
@@ -456,17 +573,25 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         }
       case AgyThoughtDeltaEvent():
         _receivedTurnContent = true;
-        final rate = _recordRateSample(evt.delta);
-        state = state.copyWith(tokensPerSecond: rate);
-        _replaceMessage(
+        _firstOutputAt.putIfAbsent(assistantId, DateTime.now);
+        if (_loadedSessionId == session.id) {
+          final rate = _recordRateSample(evt.delta);
+          state = state.copyWith(tokensPerSecond: rate);
+        }
+        _replaceMessageInSession(
+          session.id,
           idx,
           current.copyWith(thoughts: '${current.thoughts}${evt.delta}'),
         );
       case AgyTextDeltaEvent():
         _receivedTurnContent = true;
-        final rate = _recordRateSample(evt.delta);
-        state = state.copyWith(tokensPerSecond: rate);
-        _replaceMessage(
+        _firstOutputAt.putIfAbsent(assistantId, DateTime.now);
+        if (_loadedSessionId == session.id) {
+          final rate = _recordRateSample(evt.delta);
+          state = state.copyWith(tokensPerSecond: rate);
+        }
+        _replaceMessageInSession(
+          session.id,
           idx,
           current.copyWith(text: '${current.text}${evt.delta}'),
         );
@@ -485,6 +610,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
             output: evt.output ?? prev.output,
             error: evt.errorMessage ?? prev.error,
             durationSeconds: evt.durationSeconds ?? prev.durationSeconds,
+            startedAt: prev.startedAt,
           );
         } else {
           tools.add(
@@ -496,13 +622,19 @@ class ChatNotifier extends Notifier<ChatThreadState> {
               output: evt.output,
               error: evt.errorMessage,
               durationSeconds: evt.durationSeconds,
+              startedAt:
+                  evt.state == ToolCallState.running ? DateTime.now() : null,
             ),
           );
         }
-        _replaceMessage(idx, current.copyWith(tools: tools));
+        _replaceMessageInSession(
+          session.id,
+          idx,
+          current.copyWith(tools: tools),
+        );
         // Checkpoint completed tool steps mid-turn against OS process kills.
         if (evt.state != ToolCallState.running) {
-          unawaited(_persistMessages(session.id, state.messages));
+          unawaited(_persistMessages(session.id, _messagesForSession(session.id)));
         }
       case AgyPermissionRequestEvent():
         state = state.copyWith(pendingPermission: evt);
@@ -512,11 +644,23 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           ref.read(authProvider.notifier).markAuthenticatedFromTurn();
         }
         final finalText = current.text.isEmpty ? evt.response : current.text;
-        _replaceMessage(
+        final stats = _computeTurnStats(
+          assistantId: assistantId,
+          text: finalText,
+          thoughts: current.thoughts,
+          usage: evt.usage,
+          reportedDurationSeconds: evt.durationSeconds,
+        );
+        _replaceMessageInSession(
+          session.id,
           idx,
           current.copyWith(
             text: finalText,
             usage: evt.usage,
+            durationSeconds: stats.durationSec,
+            tokensPerSecond: stats.tokPerSec,
+            modelId: _turnModelId[assistantId] ?? current.modelId,
+            completedAt: DateTime.now(),
             isStreaming: false,
           ),
         );
@@ -530,7 +674,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
               );
         }
         ref.read(usageProvider.notifier).recordTurn(
-              modelId: ref.read(settingsProvider).selectedModelId,
+              modelId: _turnModelId[assistantId] ??
+                  ref.read(settingsProvider).selectedModelId,
               usage: evt.usage,
               sessionId: session.id,
             );
@@ -561,12 +706,23 @@ class ChatNotifier extends Notifier<ChatThreadState> {
               );
           return;
         }
-        _replaceMessage(
+        final stats = _computeTurnStats(
+          assistantId: assistantId,
+          text: current.text,
+          thoughts: current.thoughts,
+          usage: current.usage,
+        );
+        _replaceMessageInSession(
+          session.id,
           idx,
           current.copyWith(
             text: current.text.isEmpty
                 ? evt.message
                 : '${current.text}\n\n${evt.message}',
+            durationSeconds: current.durationSeconds ?? stats.durationSec,
+            tokensPerSecond: current.tokensPerSecond ?? stats.tokPerSec,
+            modelId: _turnModelId[assistantId] ?? current.modelId,
+            completedAt: current.completedAt ?? DateTime.now(),
             isStreaming: false,
             requiresAuth: evt.requiresAuth,
           ),
@@ -574,10 +730,15 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     }
   }
 
-  void _replaceMessage(int idx, ChatMessage updated) {
-    final list = [...state.messages];
+  void _replaceMessageInSession(
+    String sessionId,
+    int idx,
+    ChatMessage updated,
+  ) {
+    final list = [..._messagesForSession(sessionId)];
+    if (idx < 0 || idx >= list.length) return;
     list[idx] = updated;
-    state = state.copyWith(messages: list);
+    _updateSessionMessages(sessionId, list);
   }
 
   void _finishAssistantMessage({
@@ -585,11 +746,27 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     required String assistantId,
     required String text,
   }) {
-    final idx = state.messages.indexWhere((m) => m.id == assistantId);
+    final msgs = _messagesForSession(session.id);
+    final idx = msgs.indexWhere((m) => m.id == assistantId);
     if (idx >= 0) {
-      _replaceMessage(
+      final cur = msgs[idx];
+      final stats = _computeTurnStats(
+        assistantId: assistantId,
+        text: text,
+        thoughts: cur.thoughts,
+        usage: cur.usage,
+      );
+      _replaceMessageInSession(
+        session.id,
         idx,
-        state.messages[idx].copyWith(text: text, isStreaming: false),
+        cur.copyWith(
+          text: text,
+          durationSeconds: cur.durationSeconds ?? stats.durationSec,
+          tokensPerSecond: cur.tokensPerSecond ?? stats.tokPerSec,
+          modelId: _turnModelId[assistantId] ?? cur.modelId,
+          completedAt: cur.completedAt ?? DateTime.now(),
+          isStreaming: false,
+        ),
       );
     }
     _completeStreaming(session, assistantId);
@@ -602,20 +779,48 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     _stallWatchdog?.cancel();
     _stallWatchdog = null;
     _activeLocalRequest = null;
-    final idx = state.messages.indexWhere((m) => m.id == assistantId);
-    if (idx >= 0 && state.messages[idx].isStreaming) {
-      _replaceMessage(
-        idx,
-        state.messages[idx].copyWith(isStreaming: false),
-      );
+    if (_activeStreamingSessionId == session.id) {
+      _activeStreamingSessionId = null;
     }
+    final msgs = _messagesForSession(session.id);
+    final idx = msgs.indexWhere((m) => m.id == assistantId);
+    if (idx >= 0) {
+      final cur = msgs[idx];
+      if (cur.isStreaming || cur.durationSeconds == null || cur.completedAt == null) {
+        final stats = _computeTurnStats(
+          assistantId: assistantId,
+          text: cur.text,
+          thoughts: cur.thoughts,
+          usage: cur.usage,
+        );
+        _replaceMessageInSession(
+          session.id,
+          idx,
+          cur.copyWith(
+            isStreaming: false,
+            durationSeconds: cur.durationSeconds ?? stats.durationSec,
+            tokensPerSecond: cur.tokensPerSecond ?? stats.tokPerSec,
+            modelId: _turnModelId[assistantId] ?? cur.modelId,
+            completedAt: cur.completedAt ?? DateTime.now(),
+          ),
+        );
+      }
+    }
+    final persisted = _messagesForSession(session.id);
+    _inFlightMessages.remove(session.id);
+    _turnStartedAt.remove(assistantId);
+    _firstOutputAt.remove(assistantId);
+    _turnModelId.remove(assistantId);
+
+    final nextBgIds = {...state.activeBackgroundSessionIds}..remove(session.id);
     state = state.copyWith(
-      isStreaming: false,
+      isStreaming: _loadedSessionId == session.id ? false : state.isStreaming,
       tokensPerSecond: 0,
+      activeBackgroundSessionIds: nextBgIds,
       clearPermission: true,
       clearStallWarning: true,
     );
-    await _persistMessages(session.id, state.messages);
+    await _persistMessages(session.id, persisted);
 
     if (state.queuedPrompts.isNotEmpty) {
       final nextPrompt = state.queuedPrompts.first;
@@ -628,6 +833,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
 
   Future<void> stopStreaming() async {
     final turnId = state.activeTurnId;
+    final streamingSid = _activeStreamingSessionId;
     await _activeSub?.cancel();
     _activeSub = null;
     if (turnId != null) {
@@ -638,16 +844,31 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     _stallWatchdog?.cancel();
     _stallWatchdog = null;
     _activeLocalRequest = null;
+    _activeStreamingSessionId = null;
     try {
       await SshAgyRunner.instance.cancelActive();
     } catch (_) {}
     final updated = state.messages
-        .map((m) => m.isStreaming ? m.copyWith(isStreaming: false) : m)
+        .map((m) => m.isStreaming
+            ? m.copyWith(isStreaming: false, completedAt: DateTime.now())
+            : m)
         .toList();
+    if (streamingSid != null) {
+      final bgMsgs = _inFlightMessages.remove(streamingSid);
+      if (bgMsgs != null && streamingSid != _loadedSessionId) {
+        final cleanedBg = bgMsgs
+            .map((m) => m.isStreaming
+                ? m.copyWith(isStreaming: false, completedAt: DateTime.now())
+                : m)
+            .toList();
+        await _persistMessages(streamingSid, cleanedBg);
+      }
+    }
     state = state.copyWith(
       messages: updated,
       isStreaming: false,
       tokensPerSecond: 0,
+      activeBackgroundSessionIds: const {},
       clearPermission: true,
       clearStallWarning: true,
     );

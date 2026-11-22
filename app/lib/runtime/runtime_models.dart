@@ -60,6 +60,38 @@ class RuntimeStatus {
   }
 }
 
+class NativeBackgroundTask {
+  const NativeBackgroundTask({
+    required this.id,
+    required this.turnId,
+    required this.kind,
+    required this.title,
+    required this.status,
+    required this.startedAt,
+  });
+
+  final String id;
+  final String turnId;
+  final String kind;
+  final String title;
+  final String status;
+  final DateTime startedAt;
+
+  factory NativeBackgroundTask.fromMap(Map<Object?, Object?> map) {
+    final ms = (map['startedAtMs'] as num?)?.toInt() ?? 0;
+    return NativeBackgroundTask(
+      id: map['id']?.toString() ?? '',
+      turnId: map['turnId']?.toString() ?? '',
+      kind: map['kind']?.toString() ?? 'terminal',
+      title: map['title']?.toString() ?? 'Background task',
+      status: map['status']?.toString() ?? 'running',
+      startedAt: ms > 0
+          ? DateTime.fromMillisecondsSinceEpoch(ms)
+          : DateTime.now(),
+    );
+  }
+}
+
 class RuntimeEvent {
   const RuntimeEvent({
     required this.kind,
@@ -69,6 +101,7 @@ class RuntimeEvent {
     this.stdoutLine,
     this.stderrLine,
     this.exitCode,
+    this.backgroundTasks = const [],
   });
 
   final String kind;
@@ -78,10 +111,18 @@ class RuntimeEvent {
   final String? stdoutLine;
   final String? stderrLine;
   final int? exitCode;
+  final List<NativeBackgroundTask> backgroundTasks;
 
   factory RuntimeEvent.fromMap(Map<Object?, Object?> map) {
     final kind = map['kind']?.toString() ?? 'log';
     final statusRaw = map['status'];
+    final rawTasks = map['tasks'];
+    final tasks = rawTasks is List
+        ? rawTasks
+            .whereType<Map<Object?, Object?>>()
+            .map(NativeBackgroundTask.fromMap)
+            .toList()
+        : const <NativeBackgroundTask>[];
     return RuntimeEvent(
       kind: kind,
       status: statusRaw is Map<Object?, Object?>
@@ -92,6 +133,7 @@ class RuntimeEvent {
       stdoutLine: map['stdoutLine']?.toString(),
       stderrLine: map['stderrLine']?.toString(),
       exitCode: (map['exitCode'] as num?)?.toInt(),
+      backgroundTasks: tasks,
     );
   }
 }

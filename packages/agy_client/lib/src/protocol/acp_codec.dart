@@ -192,8 +192,13 @@ class AcpCodec {
         case 'tool_call_update':
           return AgyToolCallEvent(
             callId: update['toolCallId']?.toString() ?? '',
-            toolName: update['title']?.toString() ?? 'tool',
+            toolName: update['title']?.toString() ??
+                update['kind']?.toString() ??
+                'tool',
             state: _mapToolStatus(update['status'] as String?),
+            parameters: update['rawInput'] is Map<String, dynamic>
+                ? update['rawInput'] as Map<String, dynamic>
+                : const {},
             output: update['rawOutput']?.toString(),
           );
         default:
@@ -233,13 +238,22 @@ class AcpCodec {
         );
       }
       if (result.containsKey('stopReason')) {
-        final usageMap = result['usage'] as Map<String, dynamic>? ?? const {};
+        final meta = result['_meta'] as Map<String, dynamic>?;
+        final usageMap = (result['usage'] as Map<String, dynamic>?) ??
+            (result['tokenUsage'] as Map<String, dynamic>?) ??
+            (meta?['usage'] as Map<String, dynamic>?) ??
+            const {};
+        final durationSec = (result['durationSeconds'] as num?)?.toDouble() ??
+            (result['duration_seconds'] as num?)?.toDouble() ??
+            (meta?['durationSeconds'] as num?)?.toDouble() ??
+            (((result['durationMs'] as num?)?.toDouble() ?? 0) / 1000.0);
         return AgyTurnResultEvent(
           conversationId: result['sessionId']?.toString() ?? '',
           status: result['stopReason']?.toString() == 'cancelled'
               ? 'CANCELED'
               : 'SUCCESS',
           response: '',
+          durationSeconds: durationSec,
           usage: TokenUsage.fromJson(usageMap),
         );
       }

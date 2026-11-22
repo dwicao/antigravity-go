@@ -47,10 +47,12 @@ class RuntimeController private constructor(private val appContext: Context) {
     private val logs = CopyOnWriteArrayList<String>()
     private val runTail = ArrayDeque<String>()
     private val activeTurns = ConcurrentHashMap<String, Process>()
+    private val nonAcpTurnMeta = ConcurrentHashMap<String, Pair<String, Long>>()
     private val acpManager = AcpSessionManager(
         executor = executor,
         emit = { payload -> handleAcpOrProcessEvent(payload) },
         log = { msg -> log(msg) },
+        onTasksChanged = { emitBackgroundTasks() },
     )
 
     @Volatile
@@ -252,6 +254,61 @@ class RuntimeController private constructor(private val appContext: Context) {
 
     fun getLogs(): List<String> = logs.toList()
 
+    fun listBackgroundTasks(): List<Map<String, Any?>> {
+        val tasks = mutableListOf<Map<String, Any?>>()
+        tasks.addAll(acpManager.listBackgroundTasks())
+        for ((turnId, meta) in nonAcpTurnMeta) {
+            if (activeTurns.containsKey(turnId)) {
+                tasks.add(
+                    mapOf(
+                        "id" to "turn:$turnId",
+                        "turnId" to turnId,
+                        "kind" to "turn",
+                        "title" to meta.first,
+                        "status" to "running",
+                        "startedAtMs" to meta.second,
+                    )
+                )
+            }
+        }
+        tasks.sortBy { (it["startedAtMs"] as? Long) ?: 0L }
+        return tasks
+    }
+
+    private fun emitBackgroundTasks() {
+        val tasks = listBackgroundTasks()
+        emit(mapOf("kind" to "background_tasks", "tasks" to tasks))
+        if (AgyService.running) {
+            val terminalCount = tasks.count { it["kind"] == "terminal" }
+            val turnCount = tasks.count { it["kind"] == "turn" }
+            val statusText = when {
+                terminalCount > 0 ->
+                    "Running $terminalCount background command${if (terminalCount == 1) "" else "s"}…"
+                turnCount > 0 ->
+                    "Agent running ($turnCount active)…"
+                else ->
+                    "On-device Antigravity CLI harness active"
+            }
+            AgyService.updateTurnStatus(appContext, statusText)
+        }
+    }
+
+    fun cancelBackgroundTask(taskId: String): Boolean {
+        if (taskId.startsWith("turn:")) {
+            val turnId = taskId.removePrefix("turn:")
+            cancelTurn(turnId)
+            return true
+        }
+        if (acpManager.cancelTerminal(taskId)) {
+            return true
+        }
+        if (activeTurns.containsKey(taskId)) {
+            cancelTurn(taskId)
+            return true
+        }
+        return false
+    }
+
     fun statusMap(): Map<String, Any?> {
         val versionFile = File(runtimeDir, "version.txt")
         val version = if (versionFile.exists()) versionFile.readText().trim() else null
@@ -331,10 +388,12 @@ class RuntimeController private constructor(private val appContext: Context) {
             proc.destroyForcibly()
         }
         activeTurns.clear()
+        nonAcpTurnMeta.clear()
         appContext.stopService(Intent(appContext, AgyService::class.java))
         phase = if (binaryFile.exists()) RuntimePhase.stopped else RuntimePhase.uninstalled
         statusMessage = "Stopped"
         log("Runtime stopped")
+        emitBackgroundTasks()
         emitStatus()
     }
 
@@ -1021,6 +1080,11 @@ class RuntimeController private constructor(private val appContext: Context) {
                 pb.environment().putAll(buildEnv(extraEnv))
                 val proc = pb.start()
                 activeTurns[turnId] = proc
+                nonAcpTurnMeta[turnId] = Pair(
+                    AcpSessionManager.summarizeCommand(prompt, maxLen = 64),
+                    System.currentTimeMillis(),
+                )
+                emitBackgroundTasks()
 
                 val errFuture = executor.submit {
                     val redactor = LogRedactor()
@@ -1069,6 +1133,8 @@ class RuntimeController private constructor(private val appContext: Context) {
                 handleAcpOrProcessEvent(mapOf("kind" to "turn_exit", "turnId" to turnId, "exitCode" to 1))
             } finally {
                 activeTurns.remove(turnId)
+                nonAcpTurnMeta.remove(turnId)
+                emitBackgroundTasks()
             }
         }
     }
@@ -1080,6 +1146,8 @@ class RuntimeController private constructor(private val appContext: Context) {
     fun cancelTurn(turnId: String) {
         acpManager.cancel(turnId)
         activeTurns.remove(turnId)?.destroyForcibly()
+        nonAcpTurnMeta.remove(turnId)
+        emitBackgroundTasks()
     }
 
     fun writeTextFile(path: String, content: String): Boolean {

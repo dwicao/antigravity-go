@@ -108,4 +108,14 @@ class CrashClassifierAndSafePolicyTest {
         assertTrue(AcpSessionManager.shouldForwardAcpNotification("session/update", promptSent = true))
         assertTrue(AcpSessionManager.shouldForwardAcpNotification("", promptSent = false))
     }
+
+    @Test
+    fun `AcpSessionManager summarizeCommand collapses whitespace and truncates long commands`() {
+        assertEquals("Shell command", AcpSessionManager.summarizeCommand("   \n  "))
+        assertEquals("ls -la /sdcard", AcpSessionManager.summarizeCommand("ls\n  -la   /sdcard"))
+        val longCmd = "echo " + "a".repeat(100)
+        val summarized = AcpSessionManager.summarizeCommand(longCmd, maxLen = 20)
+        assertEquals(20, summarized.length)
+        assertTrue(summarized.endsWith("…"))
+    }
 }

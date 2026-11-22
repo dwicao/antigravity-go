@@ -1,12 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../state/background_tasks_state.dart';
 import '../../state/chat_state.dart';
 import '../../state/phone_state.dart';
+import '../../state/runtime_state.dart';
+import '../../state/sessions_state.dart';
 import '../../state/settings_state.dart';
 import '../../state/side_panel_state.dart';
 import '../../state/usage_state.dart';
+import '../chat/secret_mask.dart';
 import '../phone/phone_control_page.dart';
+import '../shell/background_tasks_sheet.dart';
 import '../usage/usage_page.dart';
 
 /// 1:1 Antigravity App Overview Panel:
@@ -20,6 +25,7 @@ class OverviewPanel extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final chat = ref.watch(chatProvider);
+    final bgTasks = ref.watch(backgroundTasksProvider);
     final usage = ref.watch(usageProvider);
     final phone = ref.watch(phoneProvider);
     final settings = ref.watch(settingsProvider);
@@ -147,6 +153,125 @@ class OverviewPanel extends ConsumerWidget {
                           ),
                         ),
                       ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+
+                  // Background Tasks Section
+                  Card(
+                    margin: EdgeInsets.zero,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(18),
+                      onTap: () => BackgroundTasksSheet.show(context),
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                if (bgTasks.isNotEmpty)
+                                  SizedBox(
+                                    width: 15,
+                                    height: 15,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: theme.colorScheme.primary,
+                                    ),
+                                  )
+                                else
+                                  Icon(
+                                    Icons.layers_outlined,
+                                    size: 18,
+                                    color: theme.colorScheme.primary,
+                                  ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  bgTasks.isEmpty
+                                      ? 'Background Tasks'
+                                      : 'Background Tasks (${bgTasks.length})',
+                                  style: theme.textTheme.labelLarge?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                const Spacer(),
+                                const Icon(Icons.open_in_new, size: 15),
+                              ],
+                            ),
+                            const SizedBox(height: 6),
+                            if (bgTasks.isEmpty)
+                              Text(
+                                'No active background tasks',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              )
+                            else
+                              for (final task in bgTasks.take(3))
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 4),
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        iconForBackgroundTask(task.kind),
+                                        size: 14,
+                                        color: theme.colorScheme.primary,
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Expanded(
+                                        child: Text(
+                                          AgySecretMask.mask(task.title),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: theme.textTheme.bodySmall,
+                                        ),
+                                      ),
+                                      if (task.canCancel &&
+                                          task.nativeTaskId != null)
+                                        IconButton(
+                                          iconSize: 16,
+                                          padding: EdgeInsets.zero,
+                                          constraints: const BoxConstraints(
+                                            minWidth: 24,
+                                            minHeight: 24,
+                                          ),
+                                          tooltip: 'Stop task',
+                                          onPressed: () => ref
+                                              .read(runtimeProvider.notifier)
+                                              .cancelBackgroundTask(
+                                                task.nativeTaskId!,
+                                              ),
+                                          icon: Icon(
+                                            Icons.stop_circle_outlined,
+                                            color: theme.colorScheme.error,
+                                          ),
+                                        )
+                                      else if (task.kind ==
+                                              BackgroundTaskKind.session &&
+                                          task.sessionId != null)
+                                        TextButton(
+                                          style: TextButton.styleFrom(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 6,
+                                            ),
+                                            minimumSize: const Size(0, 24),
+                                            tapTargetSize: MaterialTapTargetSize
+                                                .shrinkWrap,
+                                          ),
+                                          onPressed: () {
+                                            ref
+                                                .read(sessionsProvider.notifier)
+                                                .selectSession(task.sessionId!);
+                                            onClose?.call();
+                                          },
+                                          child: const Text('Open'),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
                   const SizedBox(height: 12),

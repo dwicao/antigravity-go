@@ -241,6 +241,31 @@ class RuntimeBridge {
     await _method.invokeMethod<void>('cancelTurn', {'turnId': turnId});
   }
 
+  Future<List<NativeBackgroundTask>> getBackgroundTasks() async {
+    try {
+      final raw = await _method.invokeMethod<List<Object?>>('backgroundTasks');
+      if (raw == null) return const [];
+      return raw
+          .whereType<Map<Object?, Object?>>()
+          .map(NativeBackgroundTask.fromMap)
+          .toList();
+    } on MissingPluginException {
+      return const [];
+    }
+  }
+
+  Future<bool> cancelBackgroundTask(String taskId) async {
+    try {
+      return await _method.invokeMethod<bool>(
+            'cancelBackgroundTask',
+            {'taskId': taskId},
+          ) ??
+          false;
+    } on MissingPluginException {
+      return false;
+    }
+  }
+
   Future<bool> writeWorkspaceFile(String path, String content) async {
     try {
       return await _method.invokeMethod<bool>('writeFile', {
