@@ -96,10 +96,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Future<void> _pickFile() async {
-    final res = await FilePicker.platform.pickFiles(allowMultiple: true);
-    if (res == null) return;
+    final files = await FilePicker.pickFiles();
+    if (files.isEmpty) return;
     setState(() {
-      for (final f in res.files) {
+      for (final f in files) {
         if (f.path != null) _attachments.add(f.path!);
       }
     });

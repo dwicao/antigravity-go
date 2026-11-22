@@ -36,7 +36,7 @@ class RuntimeBridge {
 
   Future<void> installRuntime({String? customManifestUrl}) async {
     await _method.invokeMethod<void>('install', {
-      if (customManifestUrl != null) 'manifestUrl': customManifestUrl,
+      'manifestUrl': ?customManifestUrl,
     });
   }
 
@@ -113,8 +113,8 @@ class RuntimeBridge {
   }) async {
     final result = await _method.invokeMethod<String>('runCapture', {
       'args': args,
-      if (cwd != null) 'cwd': cwd,
-      if (env != null) 'env': env,
+      'cwd': ?cwd,
+      'env': ?env,
       'timeoutSeconds': timeoutSeconds,
     });
     return result ?? '';
@@ -126,7 +126,7 @@ class RuntimeBridge {
   }) async {
     final result = await _method.invokeMethod<String>('runShell', {
       'command': command,
-      if (cwd != null) 'cwd': cwd,
+      'cwd': ?cwd,
     });
     return result ?? '';
   }
@@ -168,13 +168,12 @@ class RuntimeBridge {
         'turnId': turnId,
         'prompt': request.prompt,
         'cwd': request.workspacePath,
-        if (request.conversationId != null)
-          'conversationId': request.conversationId,
-        if (request.modelId != null) 'model': request.modelId,
-        if (request.effortCliValue != null) 'effort': request.effortCliValue,
+        'conversationId': ?request.conversationId,
+        'model': ?request.modelId,
+        'effort': ?request.effortCliValue,
         'mode': request.mode.cliValue,
         'skipPermissions': request.dangerouslySkipPermissions,
-        if (request.geminiApiKey != null) 'geminiApiKey': request.geminiApiKey,
+        'geminiApiKey': ?request.geminiApiKey,
       });
 
       await for (final evt in controller.stream) {

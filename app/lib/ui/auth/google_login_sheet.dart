@@ -1,4 +1,3 @@
-import 'package:agy_client/agy_client.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -255,11 +254,12 @@ class _GoogleLoginSheetState extends ConsumerState<GoogleLoginSheet> {
                 FilledButton(
                   onPressed: () async {
                     if (_codeController.text.trim().isEmpty) return;
+                    final nav = Navigator.of(context);
                     await ref
                         .read(authProvider.notifier)
                         .submitVerificationCode(_codeController.text);
                     if (mounted && ref.read(authProvider).isAuthenticated) {
-                      Navigator.of(context).pop();
+                      nav.pop();
                     }
                   },
                   child: const Text('Complete Google Sign-In'),
@@ -323,10 +323,11 @@ class _GoogleLoginSheetState extends ConsumerState<GoogleLoginSheet> {
               const SizedBox(height: 12),
               FilledButton.icon(
                 onPressed: () async {
+                  final nav = Navigator.of(context);
                   await ref
                       .read(authProvider.notifier)
                       .saveGeminiApiKey(_apiKeyController.text);
-                  if (mounted) Navigator.of(context).pop();
+                  if (mounted) nav.pop();
                 },
                 icon: const Icon(Icons.key),
                 label: const Text('Save API Key Securely'),

@@ -6,7 +6,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
-import '../auth/google_auth_service.dart';
 import '../remote/ssh_agy_runner.dart';
 import '../runtime/runtime_bridge.dart';
 import 'auth_state.dart';

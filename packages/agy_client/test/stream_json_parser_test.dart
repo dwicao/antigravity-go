@@ -17,8 +17,9 @@ void main() {
         '{"event":"step_update","step_update":{"conversation_id":"c-1","step_index":2,"state":"ACTIVE","step_type":"agent_response","text_delta":"Hello "}}',
       );
       expect(deltaEvt, isA<AgyTextDeltaEvent>());
-      expect((deltaEvt! as AgyTextDeltaEvent).delta, 'Hello ');
-      expect(deltaEvt.isDone, isFalse);
+      final delta = deltaEvt! as AgyTextDeltaEvent;
+      expect(delta.delta, 'Hello ');
+      expect(delta.isDone, isFalse);
 
       final toolEvt = StreamJsonParser.parseLine(
         '{"event":"step_update","step_update":{"conversation_id":"c-1","step_index":3,"state":"DONE","step_type":"tool","tool_name":"run_command","duration_seconds":0.25,"tool_info":{"name":"run_command","parameters":{"CommandLine":"ls"},"output":"README.md"}}}',
