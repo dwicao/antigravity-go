@@ -39,6 +39,19 @@ class AcpSessionManager(
 
     private val sessions = ConcurrentHashMap<String, ActiveAcp>()
 
+    companion object {
+        /**
+         * `session/load` replays all prior historical `session/update` notifications
+         * before responding with its JSON-RPC result. Suppress `session/update`
+         * until `session/prompt` has actually been sent so previous chat results are
+         * never duplicated into the new assistant reply bubble.
+         */
+        fun shouldForwardAcpNotification(method: String, promptSent: Boolean): Boolean {
+            if (!promptSent && method == "session/update") return false
+            return true
+        }
+    }
+
     fun startTurn(
         turnId: String,
         binaryPath: String,
@@ -132,6 +145,8 @@ class AcpSessionManager(
                 var acpSessionId: String? = null
                 var newSessionReqId = -1
                 var promptReqId = -1
+                var promptSent = false
+                var triedLoadFallback = false
                 var gotTurnResult = false
 
                 BufferedReader(InputStreamReader(proc.inputStream)).use { reader ->
@@ -197,9 +212,27 @@ class AcpSessionManager(
 
                         // Handle session/new or session/load response -> send prompt
                         if (msgId is Number && msgId.toInt() == newSessionReqId) {
+                            if (msg.has("error") && !existingSessionId.isNullOrBlank() && !triedLoadFallback) {
+                                triedLoadFallback = true
+                                newSessionReqId = active.nextId.getAndIncrement()
+                                sendJson(
+                                    writer,
+                                    JSONObject()
+                                        .put("jsonrpc", "2.0")
+                                        .put("id", newSessionReqId)
+                                        .put("method", "session/new")
+                                        .put(
+                                            "params",
+                                            JSONObject()
+                                                .put("cwd", cwd.absolutePath)
+                                                .put("mcpServers", JSONArray())
+                                        )
+                                )
+                                continue
+                            }
                             val res = msg.optJSONObject("result")
                             acpSessionId = res?.optString("sessionId")
-                                ?.takeIf { it.isNotBlank() } ?: existingSessionId
+                                ?.takeIf { it.isNotBlank() } ?: if (res != null) existingSessionId else null
 
                             emit(
                                 mapOf(
@@ -249,6 +282,7 @@ class AcpSessionManager(
                                 }
 
                                 promptReqId = active.nextId.getAndIncrement()
+                                promptSent = true
                                 sendJson(
                                     writer,
                                     JSONObject()
@@ -286,6 +320,11 @@ class AcpSessionManager(
                         }
                         if (method.startsWith("terminal/") && msgId != null) {
                             handleTerminalRpc(active, method, msgId, msg.optJSONObject("params"))
+                            continue
+                        }
+
+                        // Ignore historical replay notifications from session/load until session/prompt is sent.
+                        if (!shouldForwardAcpNotification(method, promptSent)) {
                             continue
                         }
 

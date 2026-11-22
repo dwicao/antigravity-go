@@ -101,4 +101,11 @@ class CrashClassifierAndSafePolicyTest {
         assertNull(SafePolicy.autoRestartDelay(FailureKind.KILLED, 137, 45_000L, listOf(now - 15_000, now - 10_000, now - 5_000), now))
         assertNotNull(SafePolicy.autoRestartDelay(FailureKind.NETWORK_ERROR, 1, null, emptyList(), now))
     }
+
+    @Test
+    fun `AcpSessionManager suppresses session_load history replay before session_prompt`() {
+        assertFalse(AcpSessionManager.shouldForwardAcpNotification("session/update", promptSent = false))
+        assertTrue(AcpSessionManager.shouldForwardAcpNotification("session/update", promptSent = true))
+        assertTrue(AcpSessionManager.shouldForwardAcpNotification("", promptSent = false))
+    }
 }
