@@ -107,7 +107,7 @@ class AgyMarkdown extends StatelessWidget {
           markerTextStyle: TextStyle(color: semantic.textSecondary),
         ),
         alert: AlertStyle(
-          borderRadius: const BorderRadius.circular(10),
+          borderRadius: const Radius.circular(10),
           padding: const EdgeInsetsDirectional.fromSTEB(12, 10, 14, 10),
           margin: EdgeInsets.zero,
           titleStyle: TextStyle(

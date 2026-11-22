@@ -1,3 +1,4 @@
+import 'package:agy_client/agy_client.dart';
 import 'package:antigravity_go/state/chat_state.dart';
 import 'package:antigravity_go/state/draft_store.dart';
 import 'package:antigravity_go/theme/app_theme.dart';

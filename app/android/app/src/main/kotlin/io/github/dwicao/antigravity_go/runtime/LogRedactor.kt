@@ -29,7 +29,8 @@ class LogRedactor {
                 val end = KEY_END.find(clean, begin.range.last + 1)
                 if (end == null) {
                     privateKeyLines = 1
-                    return redact(sb.append(begin.value).toString())
+                    val prefix = redact(sb.toString())
+                    return "$prefix${begin.value}"
                 }
                 sb.append(MASK)
                 at = end.range.last + 1
