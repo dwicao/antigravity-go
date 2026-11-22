@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
 import 'hosts_state.dart';
+import 'projects_state.dart';
 import 'runtime_state.dart';
 import 'settings_state.dart';
 
@@ -81,6 +82,7 @@ class SessionsNotifier extends Notifier<SessionsState> {
     final ssh = hosts.activeSshHost;
     final runtime = ref.read(runtimeProvider);
     final settings = ref.read(settingsProvider);
+    final project = ref.read(projectsProvider).activeProject;
 
     return AgySessionSummary(
       id: const Uuid().v4(),
@@ -89,7 +91,10 @@ class SessionsNotifier extends Notifier<SessionsState> {
       hostName: ssh?.name ?? 'On Device',
       hostKind: ssh != null ? AgyHostKind.ssh : AgyHostKind.local,
       workspacePath: ssh?.defaultWorkspace ??
-          (runtime.status.workspaceRoot ?? ''),
+          (project.primaryFolder.isNotEmpty
+              ? project.primaryFolder
+              : (runtime.status.workspaceRoot ?? '')),
+      projectId: project.id,
       modelId: settings.selectedModelId,
       updatedAt: DateTime.now(),
     );

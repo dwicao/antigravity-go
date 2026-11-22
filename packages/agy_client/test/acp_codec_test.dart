@@ -35,5 +35,22 @@ void main() {
       expect(err, isA<AgyErrorEvent>());
       expect((err! as AgyErrorEvent).requiresAuth, isTrue);
     });
+
+    test('parses session/new and session/prompt stopReason results', () {
+      final codec = AcpCodec();
+      final init = codec.parseNotificationOrRequest(
+        '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"sess-99"}}',
+      );
+      expect(init, isA<AgyInitEvent>());
+      expect((init! as AgyInitEvent).conversationId, 'sess-99');
+
+      final res = codec.parseNotificationOrRequest(
+        '{"jsonrpc":"2.0","id":3,"result":{"sessionId":"sess-99","stopReason":"end_turn","usage":{"total_tokens":345}}}',
+      );
+      expect(res, isA<AgyTurnResultEvent>());
+      final turn = res! as AgyTurnResultEvent;
+      expect(turn.status, 'SUCCESS');
+      expect(turn.usage.totalTokens, 345);
+    });
   });
 }

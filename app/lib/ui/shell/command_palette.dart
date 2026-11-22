@@ -1,0 +1,286 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../state/projects_state.dart';
+import '../../state/sessions_state.dart';
+import '../../state/side_panel_state.dart';
+import '../automations/automations_page.dart';
+import '../customizations/customizations_page.dart';
+import '../phone/phone_control_page.dart';
+import '../remote/ssh_hosts_page.dart';
+import '../settings/settings_page.dart';
+import '../usage/usage_page.dart';
+
+/// Antigravity Desktop `Ctrl+K` Search & Command Palette.
+class CommandPaletteDialog extends ConsumerStatefulWidget {
+  const CommandPaletteDialog({super.key});
+
+  static Future<void> show(BuildContext context) {
+    return showDialog<void>(
+      context: context,
+      builder: (_) => const CommandPaletteDialog(),
+    );
+  }
+
+  @override
+  ConsumerState<CommandPaletteDialog> createState() =>
+      _CommandPaletteDialogState();
+}
+
+class _CommandPaletteDialogState extends ConsumerState<CommandPaletteDialog> {
+  String _query = '';
+
+  @override
+  Widget build(BuildContext context) {
+    final sessions = ref.watch(sessionsProvider).sessions;
+    final projects = ref.watch(projectsProvider).projects;
+    final q = _query.toLowerCase().trim();
+
+    final actions = <(String label, String subtitle, IconData icon, VoidCallback run)>[
+      (
+        'New Conversation',
+        'Start a fresh agent chat in the active project',
+        Icons.add_comment_outlined,
+        () {
+          Navigator.of(context).pop();
+          ref.read(sessionsProvider.notifier).createSession();
+        },
+      ),
+      (
+        'Usage Limits & Quotas',
+        'View 5h, Weekly, Gemini Argon/Pro/Flash, Claude & GPT quotas',
+        Icons.speed_rounded,
+        () {
+          Navigator.of(context).pop();
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(builder: (_) => const UsagePage()),
+          );
+        },
+      ),
+      (
+        'Open Side Panel: Files',
+        'Browse workspace files & storage',
+        Icons.folder_outlined,
+        () {
+          Navigator.of(context).pop();
+          ref.read(sidePanelProvider.notifier).openTab(
+                const SidePanelTab(
+                  id: 'files',
+                  kind: SidePanelTabKind.files,
+                  title: 'Files',
+                ),
+              );
+        },
+      ),
+      (
+        'Open Side Panel: Review Changes',
+        'Inspect Git status & uncommitted diffs',
+        Icons.difference_outlined,
+        () {
+          Navigator.of(context).pop();
+          ref.read(sidePanelProvider.notifier).openTab(
+                const SidePanelTab(
+                  id: 'review',
+                  kind: SidePanelTabKind.review,
+                  title: 'Review',
+                ),
+              );
+        },
+      ),
+      (
+        'Open Side Panel: Terminal',
+        'Launch integrated terminal tab',
+        Icons.terminal,
+        () {
+          Navigator.of(context).pop();
+          ref.read(sidePanelProvider.notifier).openTab(
+                const SidePanelTab(
+                  id: 'terminal',
+                  kind: SidePanelTabKind.terminal,
+                  title: 'Terminal',
+                ),
+              );
+        },
+      ),
+      (
+        'Open Side Panel: Built-in Browser',
+        'Browse antigravity.google.com or localhost previews',
+        Icons.public,
+        () {
+          Navigator.of(context).pop();
+          ref.read(sidePanelProvider.notifier).openTab(
+                const SidePanelTab(
+                  id: 'browser',
+                  kind: SidePanelTabKind.browser,
+                  title: 'Browser',
+                ),
+              );
+        },
+      ),
+      (
+        'Automations',
+        'Scheduled & one-click agent tasks',
+        Icons.schedule_rounded,
+        () {
+          Navigator.of(context).pop();
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(builder: (_) => const AutomationsPage()),
+          );
+        },
+      ),
+      (
+        'Customizations (Rules, Skills, MCP)',
+        'Edit GEMINI.md rules, skills & MCP servers',
+        Icons.extension_outlined,
+        () {
+          Navigator.of(context).pop();
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(builder: (_) => const CustomizationsPage()),
+          );
+        },
+      ),
+      (
+        'SSH Remote Workstations',
+        'Connect to Linux/macOS/Windows over SSH',
+        Icons.dns_outlined,
+        () {
+          Navigator.of(context).pop();
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(builder: (_) => const SshHostsPage()),
+          );
+        },
+      ),
+      (
+        'Phone Control & SafetyGate',
+        'Configure Android Accessibility automation',
+        Icons.touch_app_outlined,
+        () {
+          Navigator.of(context).pop();
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(builder: (_) => const PhoneControlPage()),
+          );
+        },
+      ),
+      (
+        'Settings',
+        'Permissions, presets, themes & updates',
+        Icons.settings_outlined,
+        () {
+          Navigator.of(context).pop();
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(builder: (_) => const SettingsPage()),
+          );
+        },
+      ),
+    ];
+
+    final matchedActions = actions
+        .where(
+          (a) =>
+              q.isEmpty ||
+              a.$1.toLowerCase().contains(q) ||
+              a.$2.toLowerCase().contains(q),
+        )
+        .toList();
+
+    final matchedProjects = projects
+        .where((p) => q.isEmpty || p.name.toLowerCase().contains(q))
+        .toList();
+
+    final matchedSessions = sessions
+        .where(
+          (s) =>
+              q.isEmpty ||
+              s.title.toLowerCase().contains(q) ||
+              (s.lastPreview?.toLowerCase().contains(q) ?? false),
+        )
+        .take(8)
+        .toList();
+
+    return Dialog(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 620, maxHeight: 540),
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(14),
+              child: TextField(
+                autofocus: true,
+                onChanged: (v) => setState(() => _query = v),
+                decoration: const InputDecoration(
+                  hintText: 'Search conversations, projects, or commands…',
+                  prefixIcon: Icon(Icons.search),
+                ),
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: ListView(
+                children: [
+                  for (final a in matchedActions)
+                    ListTile(
+                      dense: true,
+                      leading: Icon(a.$3, size: 18),
+                      title: Text(a.$1),
+                      subtitle: Text(a.$2),
+                      onTap: a.$4,
+                    ),
+                  if (matchedProjects.isNotEmpty) ...[
+                    const Divider(),
+                    const Padding(
+                      padding: EdgeInsets.fromLTRB(16, 6, 16, 4),
+                      child: Text(
+                        'Projects',
+                        style: TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                    for (final p in matchedProjects)
+                      ListTile(
+                        dense: true,
+                        leading: const Icon(Icons.workspaces_outline, size: 18),
+                        title: Text(p.name),
+                        subtitle: Text(
+                          p.primaryFolder.isEmpty
+                              ? 'App Workspace'
+                              : p.primaryFolder,
+                        ),
+                        onTap: () {
+                          ref
+                              .read(projectsProvider.notifier)
+                              .selectProject(p.id);
+                          Navigator.of(context).pop();
+                        },
+                      ),
+                  ],
+                  if (matchedSessions.isNotEmpty) ...[
+                    const Divider(),
+                    const Padding(
+                      padding: EdgeInsets.fromLTRB(16, 6, 16, 4),
+                      child: Text(
+                        'Conversations',
+                        style: TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                    for (final s in matchedSessions)
+                      ListTile(
+                        dense: true,
+                        leading: const Icon(Icons.chat_bubble_outline, size: 18),
+                        title: Text(s.title),
+                        subtitle: Text(s.lastPreview ?? s.modelId),
+                        onTap: () {
+                          ref
+                              .read(sessionsProvider.notifier)
+                              .selectSession(s.id);
+                          Navigator.of(context).pop();
+                        },
+                      ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

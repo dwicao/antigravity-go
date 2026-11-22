@@ -150,14 +150,24 @@ class RuntimeBridge {
     return result ?? '';
   }
 
-  /// Starts a streaming `agy -p ... --output-format stream-json` turn on device.
-  Stream<AgyChatEvent> runPrompt(AgyPromptRequest request, String turnId) async* {
+  /// Starts a streaming turn (`agy acp` by default for interactive permissions, or `-p stream-json`).
+  Stream<AgyChatEvent> runPrompt(
+    AgyPromptRequest request,
+    String turnId, {
+    bool useAcp = true,
+  }) async* {
     final controller = StreamController<AgyChatEvent>();
+    final acpCodec = AcpCodec();
     late final StreamSubscription<RuntimeEvent> sub;
 
     sub = events.listen((evt) {
       if (evt.turnId != turnId) return;
-      if (evt.kind == 'turn_stdout' && evt.stdoutLine != null) {
+      if (evt.kind == 'turn_acp_line' && evt.stdoutLine != null) {
+        final parsed = acpCodec.parseNotificationOrRequest(evt.stdoutLine!);
+        if (parsed != null) {
+          controller.add(parsed);
+        }
+      } else if (evt.kind == 'turn_stdout' && evt.stdoutLine != null) {
         final parsed = StreamJsonParser.parseLine(evt.stdoutLine!);
         if (parsed != null) {
           controller.add(parsed);
@@ -187,11 +197,14 @@ class RuntimeBridge {
         'turnId': turnId,
         'prompt': request.prompt,
         'cwd': request.workspacePath,
+        'extraDirs': request.extraDirs,
         'conversationId': ?request.conversationId,
         'model': ?request.modelId,
         'effort': ?request.effortCliValue,
         'mode': request.mode.cliValue,
         'skipPermissions': request.dangerouslySkipPermissions,
+        'allowNonWorkspaceAccess': request.allowNonWorkspaceAccess,
+        'useAcp': useAcp,
         'geminiApiKey': ?request.geminiApiKey,
       });
 
@@ -206,8 +219,75 @@ class RuntimeBridge {
     }
   }
 
+  Future<void> respondPermission({
+    required String turnId,
+    required Object requestId,
+    required String optionId,
+  }) async {
+    await _method.invokeMethod<void>('respondPermission', {
+      'turnId': turnId,
+      'requestId': requestId,
+      'optionId': optionId,
+    });
+  }
+
   Future<void> cancelTurn(String turnId) async {
     await _method.invokeMethod<void>('cancelTurn', {'turnId': turnId});
+  }
+
+  Future<bool> writeWorkspaceFile(String path, String content) async {
+    try {
+      return await _method.invokeMethod<bool>('writeFile', {
+            'path': path,
+            'content': content,
+          }) ??
+          false;
+    } on MissingPluginException {
+      return false;
+    }
+  }
+
+  Future<List<CustomizationItem>> listCustomizations(String cwd) async {
+    try {
+      final raw = await _method.invokeMethod<List<Object?>>(
+        'listCustomizations',
+        {'cwd': cwd},
+      );
+      if (raw == null) return const [];
+      return raw.whereType<Map<Object?, Object?>>().map((m) {
+        final kindStr = m['kind']?.toString() ?? 'rule';
+        final kind = CustomizationKind.values.firstWhere(
+          (k) => k.name == kindStr,
+          orElse: () => CustomizationKind.rule,
+        );
+        return CustomizationItem(
+          kind: kind,
+          name: m['name']?.toString() ?? '',
+          scope: m['scope']?.toString() ?? 'Global',
+          pathOrCommand: m['path']?.toString() ?? '',
+          description: m['description']?.toString() ?? '',
+          enabled: m['enabled'] as bool? ?? true,
+          content: m['content']?.toString(),
+        );
+      }).toList();
+    } on MissingPluginException {
+      return const [];
+    }
+  }
+
+  Future<(String status, String diff)> gitDiff(String cwd) async {
+    try {
+      final raw = await _method.invokeMethod<Map<Object?, Object?>>(
+        'gitDiff',
+        {'cwd': cwd},
+      );
+      return (
+        raw?['status']?.toString() ?? '',
+        raw?['diff']?.toString() ?? '',
+      );
+    } on MissingPluginException {
+      return ('', '');
+    }
   }
 
   Future<List<Map<String, String>>> listWorkspaceEntries(String path) async {

@@ -6,21 +6,25 @@ class AgyPromptRequest {
   const AgyPromptRequest({
     required this.prompt,
     required this.workspacePath,
+    this.extraDirs = const [],
     this.conversationId,
     this.modelId,
     this.effortCliValue,
     this.mode = AgyExecutionMode.auto,
     this.dangerouslySkipPermissions = false,
+    this.allowNonWorkspaceAccess = true,
     this.geminiApiKey,
   });
 
   final String prompt;
   final String workspacePath;
+  final List<String> extraDirs;
   final String? conversationId;
   final String? modelId;
   final String? effortCliValue;
   final AgyExecutionMode mode;
   final bool dangerouslySkipPermissions;
+  final bool allowNonWorkspaceAccess;
   final String? geminiApiKey;
 }
 

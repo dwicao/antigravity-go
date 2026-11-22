@@ -130,18 +130,46 @@ class RuntimePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChann
                     turnId = call.argument<String>("turnId") ?: "",
                     prompt = call.argument<String>("prompt") ?: "",
                     cwd = call.argument<String>("cwd"),
+                    extraDirs = call.argument<List<String>>("extraDirs") ?: emptyList(),
                     conversationId = call.argument<String>("conversationId"),
                     model = call.argument<String>("model"),
                     effort = call.argument<String>("effort"),
                     mode = call.argument<String>("mode"),
                     skipPermissions = call.argument<Boolean>("skipPermissions") ?: false,
+                    allowNonWorkspaceAccess = call.argument<Boolean>("allowNonWorkspaceAccess") ?: true,
+                    useAcp = call.argument<Boolean>("useAcp") ?: true,
                     geminiApiKey = call.argument<String>("geminiApiKey"),
                 )
+                result.success(null)
+            }
+            "respondPermission" -> {
+                val turnId = call.argument<String>("turnId") ?: ""
+                val reqId = call.argument<Any>("requestId")
+                val optId = call.argument<String>("optionId") ?: ""
+                if (reqId != null) {
+                    ctrl.respondPermission(turnId, reqId, optId)
+                }
                 result.success(null)
             }
             "cancelTurn" -> {
                 ctrl.cancelTurn(call.argument<String>("turnId") ?: "")
                 result.success(null)
+            }
+            "writeFile" -> {
+                val ok = ctrl.writeTextFile(
+                    call.argument<String>("path") ?: "",
+                    call.argument<String>("content") ?: "",
+                )
+                result.success(ok)
+            }
+            "listCustomizations" -> {
+                result.success(ctrl.listCustomizations(call.argument<String>("cwd")))
+            }
+            "gitDiff" -> {
+                ioExecutor.submit {
+                    val res = ctrl.gitDiff(call.argument<String>("cwd"))
+                    mainHandler.post { result.success(res) }
+                }
             }
             "listWorkspace" -> result.success(ctrl.listWorkspace(call.argument<String>("path")))
             "readFile" -> result.success(ctrl.readFile(call.argument<String>("path") ?: ""))

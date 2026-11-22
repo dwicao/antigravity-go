@@ -10,6 +10,8 @@ import '../remote/ssh_agy_runner.dart';
 import '../runtime/runtime_bridge.dart';
 import 'auth_state.dart';
 import 'hosts_state.dart';
+import 'permissions_state.dart';
+import 'projects_state.dart';
 import 'runtime_state.dart';
 import 'sessions_state.dart';
 import 'settings_state.dart';
@@ -291,18 +293,34 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     final settings = ref.read(settingsProvider);
     final hosts = ref.read(hostsProvider);
     final runtime = ref.read(runtimeProvider);
+    final project = ref.read(projectsProvider).activeProject;
+    final perms = ref.read(permissionsProvider);
     final apiKey = await ref.read(authServiceProvider).readGeminiApiKey();
+
+    final effectivePreset = project.permissionPreset ?? settings.permissionPreset;
+    final skipPerms = effectivePreset == AntigravityPermissionPreset.turbo;
+    final allowNonWorkspace = project.allowNonWorkspaceAccess ??
+        (settings.allowNonWorkspaceAccess || perms.allFilesAccess);
+
+    final effectiveWorkspace = session.workspacePath.isNotEmpty
+        ? session.workspacePath
+        : (project.primaryFolder.isNotEmpty
+            ? project.primaryFolder
+            : (runtime.status.workspaceRoot ?? ''));
 
     final request = AgyPromptRequest(
       prompt: effectivePrompt,
-      workspacePath: session.workspacePath.isNotEmpty
-          ? session.workspacePath
-          : (runtime.status.workspaceRoot ?? ''),
+      workspacePath: effectiveWorkspace,
+      extraDirs: [
+        ...project.folders,
+        if (perms.allFilesAccess) perms.externalStorageRoot,
+      ],
       conversationId: session.remoteConversationId,
       modelId: settings.selectedModelId,
       effortCliValue: settings.reasoningEffort,
       mode: AgyExecutionMode.fromCli(settings.executionMode),
-      dangerouslySkipPermissions: settings.dangerouslySkipPermissions,
+      dangerouslySkipPermissions: skipPerms,
+      allowNonWorkspaceAccess: allowNonWorkspace,
       geminiApiKey: apiKey,
     );
 
@@ -505,8 +523,19 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     await sendPrompt(nextPrompt);
   }
 
-  void resolvePermission(String optionId) {
+  Future<void> resolvePermission(String optionId) async {
+    final perm = state.pendingPermission;
+    final turnId = state.activeTurnId;
     state = state.copyWith(clearPermission: true);
+    if (perm != null && turnId != null) {
+      try {
+        await RuntimeBridge.instance.respondPermission(
+          turnId: turnId,
+          requestId: perm.requestId,
+          optionId: optionId,
+        );
+      } catch (_) {}
+    }
   }
 
   Future<void> clearCurrentThread() async {

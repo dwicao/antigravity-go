@@ -3,6 +3,8 @@ package io.github.dwicao.antigravity_go.runtime
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.Environment
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.File
@@ -42,6 +44,11 @@ class RuntimeController private constructor(private val appContext: Context) {
     private val listeners = CopyOnWriteArrayList<(Map<String, Any?>) -> Unit>()
     private val logs = CopyOnWriteArrayList<String>()
     private val activeTurns = ConcurrentHashMap<String, Process>()
+    private val acpManager = AcpSessionManager(
+        executor = executor,
+        emit = { payload -> emit(payload) },
+        log = { msg -> log(msg) },
+    )
 
     @Volatile
     private var loginProcess: Process? = null
@@ -573,21 +580,89 @@ class RuntimeController private constructor(private val appContext: Context) {
         return out
     }
 
+    private fun hasStorageAccess(): Boolean {
+        return if (Build.VERSION.SDK_INT >= 30) {
+            Environment.isExternalStorageManager()
+        } else {
+            true
+        }
+    }
+
+    private fun defaultExtraDirs(requested: List<String>): List<String> {
+        val out = LinkedHashSet<String>()
+        for (d in requested) {
+            if (d.isNotBlank()) out.add(d)
+        }
+        if (hasStorageAccess()) {
+            val ext = Environment.getExternalStorageDirectory()?.absolutePath ?: "/storage/emulated/0"
+            out.add(ext)
+            out.add("/sdcard")
+        }
+        return out.toList()
+    }
+
     fun startTurn(
         turnId: String,
         prompt: String,
         cwd: String?,
+        extraDirs: List<String>,
         conversationId: String?,
         model: String?,
         effort: String?,
         mode: String?,
         skipPermissions: Boolean,
+        allowNonWorkspaceAccess: Boolean,
+        useAcp: Boolean,
         geminiApiKey: String?,
     ) {
         if (!binaryFile.exists()) {
             emit(mapOf("kind" to "turn_exit", "turnId" to turnId, "exitCode" to 127))
             return
         }
+
+        // Sync non-workspace & permission settings before running agy.
+        try {
+            val patch = mutableMapOf<String, Any?>(
+                "allowNonWorkspaceAccess" to (allowNonWorkspaceAccess || hasStorageAccess()),
+            )
+            if (skipPermissions) {
+                patch["toolPermission"] = "always-proceed"
+                patch["permissions"] = mapOf(
+                    "allow" to listOf("command(*)", "read_file(*)", "write_file(*)"),
+                )
+            }
+            writeSettings(patch)
+        } catch (_: Throwable) {}
+
+        val effectiveCwd = if (!cwd.isNullOrBlank()) File(cwd) else workspaceDir
+        val mergedDirs = defaultExtraDirs(extraDirs)
+        val extraEnv = mutableMapOf<String, String>()
+        if (!geminiApiKey.isNullOrBlank()) {
+            extraEnv["GEMINI_API_KEY"] = geminiApiKey
+        }
+
+        if (useAcp) {
+            acpManager.startTurn(
+                turnId = turnId,
+                binaryPath = binaryFile.absolutePath,
+                cwd = effectiveCwd,
+                env = buildEnv(extraEnv),
+                prompt = prompt,
+                extraDirs = mergedDirs,
+                existingSessionId = conversationId,
+                modelId = model,
+                modeCli = mode,
+                skipPermissions = skipPermissions,
+                onAuthenticated = {
+                    if (!authMarkerFile.exists()) {
+                        writeAuthMarker(true)
+                        emit(mapOf("kind" to "auth_completed"))
+                    }
+                },
+            )
+            return
+        }
+
         executor.submit {
             try {
                 val cmd = mutableListOf(
@@ -597,6 +672,11 @@ class RuntimeController private constructor(private val appContext: Context) {
                     "--output-format",
                     "stream-json",
                 )
+                for (dir in mergedDirs) {
+                    if (File(dir).exists()) {
+                        cmd.addAll(listOf("--add-dir", dir))
+                    }
+                }
                 if (!mode.isNullOrBlank()) {
                     cmd.addAll(listOf("--mode", mode))
                 }
@@ -615,13 +695,8 @@ class RuntimeController private constructor(private val appContext: Context) {
                     cmd.add("--dangerously-skip-permissions")
                 }
 
-                val extraEnv = mutableMapOf<String, String>()
-                if (!geminiApiKey.isNullOrBlank()) {
-                    extraEnv["GEMINI_API_KEY"] = geminiApiKey
-                }
-
                 val pb = ProcessBuilder(cmd)
-                pb.directory(if (!cwd.isNullOrBlank()) File(cwd) else workspaceDir)
+                pb.directory(effectiveCwd)
                 pb.environment().putAll(buildEnv(extraEnv))
                 val proc = pb.start()
                 activeTurns[turnId] = proc
@@ -676,8 +751,112 @@ class RuntimeController private constructor(private val appContext: Context) {
         }
     }
 
+    fun respondPermission(turnId: String, requestId: Any, optionId: String) {
+        acpManager.respondToPermission(turnId, requestId, optionId)
+    }
+
     fun cancelTurn(turnId: String) {
+        acpManager.cancel(turnId)
         activeTurns.remove(turnId)?.destroyForcibly()
+    }
+
+    fun writeTextFile(path: String, content: String): Boolean {
+        return try {
+            val f = File(path)
+            f.parentFile?.mkdirs()
+            f.writeText(content)
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    fun listCustomizations(cwd: String?): List<Map<String, Any?>> {
+        val items = mutableListOf<Map<String, Any?>>()
+        val projectDir = if (!cwd.isNullOrBlank()) File(cwd) else workspaceDir
+
+        // Rules: global ~/.gemini/GEMINI.md and project .agents/rules/*.md
+        val globalGeminiMd = File(homeDir, ".gemini/GEMINI.md")
+        items.add(
+            mapOf(
+                "kind" to "rule",
+                "name" to "Global Rules (GEMINI.md)",
+                "scope" to "Global",
+                "path" to globalGeminiMd.absolutePath,
+                "description" to "Global instructions applied to every conversation",
+                "enabled" to globalGeminiMd.exists(),
+                "content" to if (globalGeminiMd.exists()) globalGeminiMd.readText() else "",
+            )
+        )
+        val projectRulesDir = File(projectDir, ".agents/rules")
+        if (projectRulesDir.exists() && projectRulesDir.isDirectory) {
+            projectRulesDir.listFiles()?.filter { it.isFile }?.forEach { f ->
+                items.add(
+                    mapOf(
+                        "kind" to "rule",
+                        "name" to f.name,
+                        "scope" to "Project",
+                        "path" to f.absolutePath,
+                        "description" to "Workspace rule",
+                        "enabled" to true,
+                        "content" to f.readText(),
+                    )
+                )
+            }
+        }
+
+        // Skills: ~/.gemini/skills/* & <project>/.agents/skills/*
+        for ((scope, root) in listOf(
+            "Global" to File(homeDir, ".gemini/skills"),
+            "Project" to File(projectDir, ".agents/skills"),
+        )) {
+            if (root.exists() && root.isDirectory) {
+                root.listFiles()?.filter { it.isDirectory }?.forEach { dir ->
+                    val skillMd = File(dir, "SKILL.md")
+                    items.add(
+                        mapOf(
+                            "kind" to "skill",
+                            "name" to dir.name,
+                            "scope" to scope,
+                            "path" to skillMd.absolutePath,
+                            "description" to if (skillMd.exists()) "SKILL.md loaded" else "Skill folder",
+                            "enabled" to skillMd.exists(),
+                            "content" to if (skillMd.exists()) skillMd.readText() else "",
+                        )
+                    )
+                }
+            }
+        }
+
+        // MCP Servers & Hooks from settings.json
+        val settings = readSettings()
+        val mcp = settings["mcpServers"] as? JSONObject
+        if (mcp != null) {
+            for (key in mcp.keys()) {
+                val cfg = mcp.optJSONObject(key)
+                items.add(
+                    mapOf(
+                        "kind" to "mcpServer",
+                        "name" to key,
+                        "scope" to "Global",
+                        "path" to (cfg?.optString("command") ?: cfg?.optString("url") ?: "configured"),
+                        "description" to "Model Context Protocol server",
+                        "enabled" to true,
+                    )
+                )
+            }
+        }
+        return items
+    }
+
+    fun gitDiff(cwd: String?): Map<String, String> {
+        val dir = if (!cwd.isNullOrBlank()) File(cwd) else workspaceDir
+        val status = runShell("git status --short 2>&1 || true", dir.absolutePath)
+        val diff = runShell("git diff 2>&1 || true", dir.absolutePath)
+        return mapOf(
+            "status" to status,
+            "diff" to diff,
+        )
     }
 
     fun listWorkspace(path: String?): List<Map<String, String>> {

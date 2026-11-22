@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import '../models/chat_event.dart';
+import '../models/usage_quota.dart';
 
 /// JSON-RPC 2.0 codec for Antigravity CLI's Agent Client Protocol (`agy acp`).
 class AcpCodec {
@@ -221,6 +222,27 @@ class AcpCodec {
             )
             .toList(),
       );
+    }
+
+    final result = decoded['result'] as Map<String, dynamic>?;
+    if (result != null) {
+      if (result.containsKey('sessionId') && !result.containsKey('stopReason')) {
+        return AgyInitEvent(
+          conversationId: result['sessionId']?.toString() ?? '',
+          cwd: '',
+        );
+      }
+      if (result.containsKey('stopReason')) {
+        final usageMap = result['usage'] as Map<String, dynamic>? ?? const {};
+        return AgyTurnResultEvent(
+          conversationId: result['sessionId']?.toString() ?? '',
+          status: result['stopReason']?.toString() == 'cancelled'
+              ? 'CANCELED'
+              : 'SUCCESS',
+          response: '',
+          usage: TokenUsage.fromJson(usageMap),
+        );
+      }
     }
 
     return null;

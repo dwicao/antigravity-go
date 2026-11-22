@@ -4,10 +4,22 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../state/auth_state.dart';
 import '../../state/hosts_state.dart';
+import '../../state/permissions_state.dart';
+import '../../state/projects_state.dart';
 import '../../state/sessions_state.dart';
 import '../auth/google_login_sheet.dart';
+import '../automations/automations_page.dart';
+import '../customizations/customizations_page.dart';
 import '../remote/ssh_hosts_page.dart';
+import '../settings/settings_page.dart';
+import '../usage/usage_page.dart';
+import 'command_palette.dart';
 
+/// 1:1 Antigravity Desktop Left Sidebar:
+/// - Google Account profile pill + Command Palette (Ctrl+K)
+/// - Projects switcher (+ New Project / SSH Host…)
+/// - Conversations list
+/// - Automations, Customizations, Usage Limits, Settings
 class SessionsDrawer extends ConsumerStatefulWidget {
   const SessionsDrawer({super.key, this.onClose});
 
@@ -24,6 +36,7 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
   Widget build(BuildContext context) {
     final sessions = ref.watch(sessionsProvider);
     final hosts = ref.watch(hostsProvider);
+    final projects = ref.watch(projectsProvider);
     final auth = ref.watch(authProvider);
     final theme = Theme.of(context);
 
@@ -37,7 +50,7 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
       child: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
             child: Row(
               children: [
                 Icon(Icons.auto_awesome, color: theme.colorScheme.primary),
@@ -50,19 +63,27 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
                     ),
                   ),
                 ),
+                IconButton(
+                  tooltip: 'Search & Command Palette (Ctrl+K)',
+                  iconSize: 18,
+                  onPressed: () => CommandPaletteDialog.show(context),
+                  icon: const Icon(Icons.search),
+                ),
                 FilledButton.tonalIcon(
                   onPressed: () async {
                     await ref.read(sessionsProvider.notifier).createSession();
                     widget.onClose?.call();
                   },
-                  icon: const Icon(Icons.add, size: 18),
+                  icon: const Icon(Icons.add, size: 16),
                   label: const Text('New'),
                 ),
               ],
             ),
           ),
+
+          // Google Account card
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
             child: InkWell(
               borderRadius: BorderRadius.circular(14),
               onTap: () => GoogleLoginSheet.show(context),
@@ -117,8 +138,57 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
               ),
             ),
           ),
+
+          // Projects Selector + New Project / SSH Host
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            child: Row(
+              children: [
+                Expanded(
+                  child: DropdownButtonFormField<String>(
+                    value: projects.projects
+                            .any((p) => p.id == projects.activeProjectId)
+                        ? projects.activeProjectId
+                        : projects.projects.first.id,
+                    isDense: true,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Project',
+                      contentPadding:
+                          EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    ),
+                    items: projects.projects
+                        .map(
+                          (p) => DropdownMenuItem(
+                            value: p.id,
+                            child: Text(
+                              p.name,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (v) {
+                      if (v != null) {
+                        ref.read(projectsProvider.notifier).selectProject(v);
+                      }
+                    },
+                  ),
+                ),
+                const SizedBox(width: 4),
+                IconButton(
+                  tooltip: 'New Project',
+                  iconSize: 18,
+                  onPressed: () => _createProjectDialog(context),
+                  icon: const Icon(Icons.create_new_folder_outlined),
+                ),
+              ],
+            ),
+          ),
+
+          // Host Switcher (On-Device vs SSH Workstation)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
             child: Row(
               children: [
                 Expanded(
@@ -129,7 +199,7 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
                     decoration: const InputDecoration(
                       labelText: 'Execution Host',
                       contentPadding:
-                          EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                     ),
                     items: [
                       const DropdownMenuItem(
@@ -155,9 +225,10 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
                     },
                   ),
                 ),
-                const SizedBox(width: 6),
+                const SizedBox(width: 4),
                 IconButton(
-                  tooltip: 'Manage SSH Hosts',
+                  tooltip: 'SSH Hosts',
+                  iconSize: 18,
                   onPressed: () => Navigator.of(context).push(
                     MaterialPageRoute<void>(
                       builder: (_) => const SshHostsPage(),
@@ -168,18 +239,20 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
               ],
             ),
           ),
+
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
             child: TextField(
               onChanged: (v) => setState(() => _query = v),
               decoration: const InputDecoration(
-                hintText: 'Search sessions…',
-                prefixIcon: Icon(Icons.search, size: 18),
+                hintText: 'Filter conversations…',
+                prefixIcon: Icon(Icons.filter_list, size: 18),
                 isDense: true,
               ),
             ),
           ),
-          const Divider(height: 12),
+
+          const Divider(height: 10),
           Expanded(
             child: Scrollbar(
               child: ListView.builder(
@@ -211,12 +284,13 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
                       }
                     },
                     child: ListTile(
+                      dense: true,
                       selected: active,
                       leading: Icon(
                         s.hostKind == AgyHostKind.ssh
                             ? Icons.computer
-                            : Icons.smartphone,
-                        size: 18,
+                            : Icons.chat_bubble_outline,
+                        size: 16,
                       ),
                       title: Text(
                         s.title,
@@ -229,6 +303,7 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
                         overflow: TextOverflow.ellipsis,
                       ),
                       trailing: PopupMenuButton<String>(
+                        iconSize: 16,
                         onSelected: (action) async {
                           if (action == 'delete') {
                             await ref
@@ -255,9 +330,108 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
               ),
             ),
           ),
+
+          // Antigravity Desktop Bottom Sidebar Links
+          const Divider(height: 1),
+          ListTile(
+            dense: true,
+            leading: const Icon(Icons.schedule_rounded, size: 18),
+            title: const Text('Automations'),
+            onTap: () {
+              widget.onClose?.call();
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => const AutomationsPage(),
+                ),
+              );
+            },
+          ),
+          ListTile(
+            dense: true,
+            leading: const Icon(Icons.extension_outlined, size: 18),
+            title: const Text('Customizations'),
+            subtitle: const Text('Rules · Skills · MCP'),
+            onTap: () {
+              widget.onClose?.call();
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => const CustomizationsPage(),
+                ),
+              );
+            },
+          ),
+          ListTile(
+            dense: true,
+            leading: const Icon(Icons.speed_rounded, size: 18),
+            title: const Text('Usage Limits'),
+            onTap: () {
+              widget.onClose?.call();
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(builder: (_) => const UsagePage()),
+              );
+            },
+          ),
+          ListTile(
+            dense: true,
+            leading: const Icon(Icons.settings_outlined, size: 18),
+            title: const Text('Settings'),
+            onTap: () {
+              widget.onClose?.call();
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(builder: (_) => const SettingsPage()),
+              );
+            },
+          ),
         ],
       ),
     );
+  }
+
+  Future<void> _createProjectDialog(BuildContext context) async {
+    final extRoot = ref.read(permissionsProvider).externalStorageRoot;
+    final nameCtrl = TextEditingController();
+    final folderCtrl = TextEditingController(text: '$extRoot/Download/Projects');
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('New Project'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: nameCtrl,
+              decoration: const InputDecoration(labelText: 'Project Name'),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: folderCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Folder Path',
+                hintText: '/storage/emulated/0/Download/Projects',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Create'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true && nameCtrl.text.trim().isNotEmpty) {
+      await ref.read(projectsProvider.notifier).addProject(
+            name: nameCtrl.text,
+            folders: [folderCtrl.text.trim()],
+          );
+    }
+    nameCtrl.dispose();
+    folderCtrl.dispose();
   }
 
   Future<void> _promptRename(

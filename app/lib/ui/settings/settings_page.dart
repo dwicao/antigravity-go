@@ -1,3 +1,4 @@
+import 'package:agy_client/agy_client.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -276,19 +277,78 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             ),
             const SizedBox(height: 12),
             Card(
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Agent Permissions & Desktop Layout',
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    DropdownButtonFormField<AntigravityPermissionPreset>(
+                      value: settings.permissionPreset,
+                      isExpanded: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Global Permission Preset',
+                      ),
+                      items: AntigravityPermissionPreset.values
+                          .map(
+                            (p) => DropdownMenuItem(
+                              value: p,
+                              child: Text(
+                                '${p.label} — ${p.description}',
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (p) {
+                        if (p != null) {
+                          ref
+                              .read(settingsProvider.notifier)
+                              .setPermissionPreset(p);
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    SwitchListTile.adaptive(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Allow Non-Workspace File Access'),
+                      subtitle: const Text(
+                        'Lets agents access /storage/emulated/0, /sdcard, and external folders',
+                      ),
+                      value: settings.allowNonWorkspaceAccess,
+                      onChanged: (v) => ref
+                          .read(settingsProvider.notifier)
+                          .setAllowNonWorkspaceAccess(v),
+                    ),
+                    const SizedBox(height: 8),
+                    SegmentedButton<AntigravityLayoutMode>(
+                      segments: AntigravityLayoutMode.values
+                          .map(
+                            (l) => ButtonSegment(
+                              value: l,
+                              label: Text(l.label),
+                            ),
+                          )
+                          .toList(),
+                      selected: {settings.layoutMode},
+                      onSelectionChanged: (s) => ref
+                          .read(settingsProvider.notifier)
+                          .setLayoutMode(s.first),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Card(
               child: Column(
                 children: [
-                  SwitchListTile.adaptive(
-                    title: const Text('Auto-Approve Tool Permissions'),
-                    subtitle: const Text(
-                      'Passes --dangerously-skip-permissions to agy (use with caution)',
-                    ),
-                    value: settings.dangerouslySkipPermissions,
-                    onChanged: (v) => ref
-                        .read(settingsProvider.notifier)
-                        .setSkipPermissions(v),
-                  ),
-                  const Divider(height: 1),
                   ListTile(
                     leading: const Icon(Icons.system_update_alt),
                     title: const Text('Check for Updates'),

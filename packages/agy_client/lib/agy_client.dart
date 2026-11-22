@@ -4,8 +4,12 @@ library;
 
 export 'src/models/agy_model.dart';
 export 'src/models/auth_status.dart';
+export 'src/models/automation_task.dart';
 export 'src/models/chat_event.dart';
+export 'src/models/customization_item.dart';
 export 'src/models/execution_mode.dart';
+export 'src/models/permission_preset.dart';
+export 'src/models/project_info.dart';
 export 'src/models/session_info.dart';
 export 'src/models/usage_quota.dart';
 export 'src/protocol/acp_codec.dart';

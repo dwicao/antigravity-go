@@ -6,13 +6,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../../runtime/runtime_bridge.dart';
 import '../../state/auth_state.dart';
 import '../../state/chat_state.dart';
 import '../../state/hosts_state.dart';
 import '../../state/permissions_state.dart';
+import '../../state/projects_state.dart';
 import '../../state/runtime_state.dart';
 import '../../state/settings_state.dart';
+import '../../state/side_panel_state.dart';
 import '../auth/google_login_sheet.dart';
+import '../shell/command_palette.dart';
 import '../usage/usage_page.dart';
 import 'message_bubble.dart';
 import 'tool_approval_card.dart';
@@ -52,7 +56,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _inputController = TextEditingController();
   final _scrollController = ScrollController();
   final List<String> _attachments = [];
+  List<Map<String, String>> _mentionFiles = const [];
   bool _showSlashMenu = false;
+  bool _showMentionMenu = false;
   bool _listeningVoice = false;
   bool _enterToSend = true;
 
@@ -63,10 +69,33 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     super.dispose();
   }
 
-  void _onChanged(String val) {
-    final wantMenu = val.startsWith('/') && !val.contains(' ');
-    if (wantMenu != _showSlashMenu) {
-      setState(() => _showSlashMenu = wantMenu);
+  Future<void> _onChanged(String val) async {
+    final wantSlash = val.startsWith('/') && !val.contains(' ');
+    final atIndex = val.lastIndexOf('@');
+    final wantMention =
+        atIndex >= 0 && !val.substring(atIndex).contains(' ') && !wantSlash;
+
+    if (wantMention && !_showMentionMenu) {
+      final projDir = ref.read(projectsProvider).activeProject.primaryFolder;
+      final fallback = ref.read(runtimeProvider).status.workspaceRoot ?? '';
+      final files = await RuntimeBridge.instance.listWorkspaceEntries(
+        projDir.isNotEmpty ? projDir : fallback,
+      );
+      if (mounted) {
+        setState(() {
+          _mentionFiles = files;
+          _showMentionMenu = true;
+          _showSlashMenu = false;
+        });
+      }
+      return;
+    }
+
+    if (wantSlash != _showSlashMenu || wantMention != _showMentionMenu) {
+      setState(() {
+        _showSlashMenu = wantSlash;
+        _showMentionMenu = wantMention;
+      });
     }
   }
 
@@ -76,10 +105,26 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     if (text == '/usage' || text == '/quota') {
       _inputController.clear();
-      setState(() => _showSlashMenu = false);
+      setState(() {
+        _showSlashMenu = false;
+        _showMentionMenu = false;
+      });
       await Navigator.of(context).push(
         MaterialPageRoute<void>(builder: (_) => const UsagePage()),
       );
+      return;
+    }
+
+    if (text == '/diff') {
+      _inputController.clear();
+      setState(() => _showSlashMenu = false);
+      ref.read(sidePanelProvider.notifier).openTab(
+            const SidePanelTab(
+              id: 'review',
+              kind: SidePanelTabKind.review,
+              title: 'Review',
+            ),
+          );
       return;
     }
 
@@ -95,6 +140,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     setState(() {
       _attachments.clear();
       _showSlashMenu = false;
+      _showMentionMenu = false;
     });
     await ref.read(chatProvider.notifier).sendPrompt(text, attachments: files);
   }
@@ -156,9 +202,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final chat = ref.watch(chatProvider);
     final auth = ref.watch(authProvider);
     final hosts = ref.watch(hostsProvider);
+    final project = ref.watch(projectsProvider).activeProject;
     final runtime = ref.watch(runtimeProvider);
     final settings = ref.watch(settingsProvider);
     final perms = ref.watch(permissionsProvider);
+    final sidePanel = ref.watch(sidePanelProvider);
     final theme = Theme.of(context);
 
     final activeModel = AgyModelCatalog.resolve(settings.selectedModelId);
@@ -181,10 +229,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               ? IconButton(
                   tooltip: widget.isDesktopMode
                       ? 'Toggle Sidebar (Ctrl+B)'
-                      : 'Sessions & Hosts',
+                      : 'Sessions & Projects',
                   onPressed: widget.onOpenSessions,
                   icon: Icon(
-                    widget.isDesktopMode ? Icons.view_sidebar_outlined : Icons.menu,
+                    widget.isDesktopMode
+                        ? Icons.view_sidebar_outlined
+                        : Icons.menu,
                   ),
                 )
               : null,
@@ -194,7 +244,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('Antigravity Go'),
+                    Text(
+                      project.name,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                     Text(
                       '$hostLabel · ${activeModel.displayName}',
                       overflow: TextOverflow.ellipsis,
@@ -207,15 +260,33 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               ),
               if (perms.isDexMode) ...[
                 const SizedBox(width: 8),
-                Chip(
+                const Chip(
                   visualDensity: VisualDensity.compact,
-                  avatar: const Icon(Icons.desktop_windows_outlined, size: 14),
-                  label: const Text('DeX'),
+                  avatar: Icon(Icons.desktop_windows_outlined, size: 14),
+                  label: Text('DeX'),
                 ),
               ],
             ],
           ),
           actions: [
+            IconButton(
+              tooltip: 'Command Palette (Ctrl+K)',
+              onPressed: () => CommandPaletteDialog.show(context),
+              icon: const Icon(Icons.search),
+            ),
+            IconButton(
+              tooltip: 'Toggle Side Panel (Ctrl+Shift+B)',
+              onPressed: () =>
+                  ref.read(sidePanelProvider.notifier).toggleSidePanel(),
+              icon: Icon(
+                sidePanel.showSidePanel
+                    ? Icons.vertical_split
+                    : Icons.vertical_split_outlined,
+                color: sidePanel.showSidePanel
+                    ? theme.colorScheme.primary
+                    : null,
+              ),
+            ),
             IconButton(
               tooltip: 'Usage Limits (Ctrl+U)',
               onPressed: () => Navigator.of(context).push(
@@ -246,11 +317,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               ),
             if (widget.onOpenQuickPanel != null)
               IconButton(
-                tooltip: widget.isDesktopMode
-                    ? 'Toggle Inspector (Ctrl+I)'
-                    : 'Controls & Tools',
+                tooltip: 'Toggle Overview Panel (Ctrl+Alt+O)',
                 onPressed: widget.onOpenQuickPanel,
-                icon: const Icon(Icons.tune_rounded),
+                icon: const Icon(Icons.dashboard_outlined),
               ),
           ],
         ),
@@ -355,6 +424,43 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               ),
             ),
           ),
+        if (_showMentionMenu && _mentionFiles.isNotEmpty)
+          wrapCentered(
+            Container(
+              constraints: const BoxConstraints(maxHeight: 200),
+              margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              child: Card(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: _mentionFiles.take(12).map((f) {
+                    final name = f['name'] ?? '';
+                    final path = f['path'] ?? '';
+                    return ListTile(
+                      dense: true,
+                      leading: Icon(
+                        f['type'] == 'dir'
+                            ? Icons.folder
+                            : Icons.insert_drive_file_outlined,
+                        size: 16,
+                      ),
+                      title: Text('@$name'),
+                      subtitle: Text(path, overflow: TextOverflow.ellipsis),
+                      onTap: () {
+                        final text = _inputController.text;
+                        final idx = text.lastIndexOf('@');
+                        final next =
+                            '${text.substring(0, idx)}@$path ';
+                        _inputController.text = next;
+                        _inputController.selection =
+                            TextSelection.collapsed(offset: next.length);
+                        setState(() => _showMentionMenu = false);
+                      },
+                    );
+                  }).toList(),
+                ),
+              ),
+            ),
+          ),
         if (_attachments.isNotEmpty)
           wrapCentered(
             SizedBox(
@@ -381,7 +487,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           top: false,
           child: wrapCentered(
             Padding(
-              padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
+              padding: const EdgeInsets.fromLTRB(12, 4, 12, 10),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -411,8 +517,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                               hintText: chat.isStreaming
                                   ? 'Queue follow-up or steer agent…'
                                   : widget.isDesktopMode && _enterToSend
-                                      ? 'Ask Antigravity… (Enter to send, Shift+Enter for newline)'
-                                      : 'Ask Antigravity or type / for commands…',
+                                      ? 'Ask anything, @ to mention, / for commands (Enter sends)'
+                                      : 'Ask anything, @ to mention, / for commands…',
                               suffixIcon: IconButton(
                                 tooltip: 'Voice input',
                                 onPressed:
@@ -444,20 +550,81 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       ),
                     ],
                   ),
-                  if (widget.isDesktopMode)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4, left: 8, right: 8),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              'Shortcuts: Ctrl+N New · Ctrl+B Sidebar · Ctrl+U Usage · Ctrl+, Settings',
-                              overflow: TextOverflow.ellipsis,
-                              style: theme.textTheme.labelSmall?.copyWith(
-                                color: theme.colorScheme.onSurfaceVariant,
-                              ),
-                            ),
+                  const SizedBox(height: 6),
+                  // 1:1 Antigravity Desktop Inline Composer Bar (Model, Effort, Permission Preset, Mode)
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        _PickerPill<String>(
+                          icon: Icons.auto_awesome,
+                          label: activeModel.displayName,
+                          items: AgyModelCatalog.builtIn
+                              .map(
+                                (m) => PopupMenuItem(
+                                  value: m.id,
+                                  child: Text(m.displayName),
+                                ),
+                              )
+                              .toList(),
+                          onSelected: (v) =>
+                              ref.read(settingsProvider.notifier).setModel(v),
+                        ),
+                        if (activeModel.supportsEffort) ...[
+                          const SizedBox(width: 6),
+                          _PickerPill<String>(
+                            icon: Icons.psychology_outlined,
+                            label: ReasoningEffort.fromString(
+                              settings.reasoningEffort,
+                            ).label,
+                            items: activeModel.availableEfforts
+                                .map(
+                                  (e) => PopupMenuItem(
+                                    value: e.cliValue,
+                                    child: Text(e.label),
+                                  ),
+                                )
+                                .toList(),
+                            onSelected: (v) => ref
+                                .read(settingsProvider.notifier)
+                                .setEffort(v),
                           ),
+                        ],
+                        const SizedBox(width: 6),
+                        _PickerPill<AntigravityPermissionPreset>(
+                          icon: Icons.shield_outlined,
+                          label: settings.permissionPreset.label,
+                          items: AntigravityPermissionPreset.values
+                              .map(
+                                (p) => PopupMenuItem(
+                                  value: p,
+                                  child: Text('${p.label} — ${p.description}'),
+                                ),
+                              )
+                              .toList(),
+                          onSelected: (p) => ref
+                              .read(settingsProvider.notifier)
+                              .setPermissionPreset(p),
+                        ),
+                        const SizedBox(width: 6),
+                        _PickerPill<String>(
+                          icon: Icons.tune,
+                          label: AgyExecutionMode.fromCli(
+                            settings.executionMode,
+                          ).label,
+                          items: AgyExecutionMode.values
+                              .map(
+                                (m) => PopupMenuItem(
+                                  value: m.cliValue,
+                                  child: Text(m.label),
+                                ),
+                              )
+                              .toList(),
+                          onSelected: (v) => ref
+                              .read(settingsProvider.notifier)
+                              .setExecutionMode(v),
+                        ),
+                        if (widget.isDesktopMode) ...[
                           const SizedBox(width: 8),
                           FilterChip(
                             visualDensity: VisualDensity.compact,
@@ -467,14 +634,60 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                 setState(() => _enterToSend = v),
                           ),
                         ],
-                      ),
+                      ],
                     ),
+                  ),
                 ],
               ),
             ),
           ),
         ),
       ],
+    );
+  }
+}
+
+class _PickerPill<T> extends StatelessWidget {
+  const _PickerPill({
+    required this.icon,
+    required this.label,
+    required this.items,
+    required this.onSelected,
+  });
+
+  final IconData icon;
+  final String label;
+  final List<PopupMenuEntry<T>> items;
+  final ValueChanged<T> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return PopupMenuButton<T>(
+      onSelected: onSelected,
+      itemBuilder: (_) => items,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.6),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 14, color: theme.colorScheme.primary),
+            const SizedBox(width: 5),
+            Text(
+              label,
+              style: theme.textTheme.labelMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(width: 2),
+            const Icon(Icons.arrow_drop_down, size: 16),
+          ],
+        ),
+      ),
     );
   }
 }

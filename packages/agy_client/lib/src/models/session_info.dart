@@ -12,6 +12,7 @@ class AgySessionSummary {
     required this.workspacePath,
     required this.modelId,
     required this.updatedAt,
+    this.projectId = 'default',
     this.remoteConversationId,
     this.messageCount = 0,
     this.lastPreview,
@@ -25,6 +26,7 @@ class AgySessionSummary {
   final String workspacePath;
   final String modelId;
   final DateTime updatedAt;
+  final String projectId;
   final String? remoteConversationId;
   final int messageCount;
   final String? lastPreview;
@@ -33,6 +35,8 @@ class AgySessionSummary {
     String? title,
     String? modelId,
     DateTime? updatedAt,
+    String? projectId,
+    String? workspacePath,
     String? remoteConversationId,
     int? messageCount,
     String? lastPreview,
@@ -43,9 +47,10 @@ class AgySessionSummary {
       hostId: hostId,
       hostName: hostName,
       hostKind: hostKind,
-      workspacePath: workspacePath,
+      workspacePath: workspacePath ?? this.workspacePath,
       modelId: modelId ?? this.modelId,
       updatedAt: updatedAt ?? this.updatedAt,
+      projectId: projectId ?? this.projectId,
       remoteConversationId: remoteConversationId ?? this.remoteConversationId,
       messageCount: messageCount ?? this.messageCount,
       lastPreview: lastPreview ?? this.lastPreview,
@@ -61,6 +66,7 @@ class AgySessionSummary {
         'workspacePath': workspacePath,
         'modelId': modelId,
         'updatedAt': updatedAt.toIso8601String(),
+        'projectId': projectId,
         if (remoteConversationId != null)
           'remoteConversationId': remoteConversationId,
         'messageCount': messageCount,
@@ -78,6 +84,7 @@ class AgySessionSummary {
       modelId: json['modelId'] as String? ?? 'Orchestrator (Neon)',
       updatedAt: DateTime.tryParse(json['updatedAt'] as String? ?? '') ??
           DateTime.now(),
+      projectId: json['projectId'] as String? ?? 'default',
       remoteConversationId: json['remoteConversationId'] as String?,
       messageCount: (json['messageCount'] as num?)?.toInt() ?? 0,
       lastPreview: json['lastPreview'] as String?,

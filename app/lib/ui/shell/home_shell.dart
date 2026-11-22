@@ -5,16 +5,19 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../state/chat_state.dart';
 import '../../state/permissions_state.dart';
 import '../../state/sessions_state.dart';
+import '../../state/side_panel_state.dart';
 import '../chat/chat_screen.dart';
 import '../settings/settings_page.dart';
+import '../side_panel/overview_panel.dart';
+import '../side_panel/side_panel_tabs.dart';
 import '../usage/usage_page.dart';
-import 'quick_panel.dart';
+import 'command_palette.dart';
 import 'sessions_drawer.dart';
 
-/// Adaptive shell optimized for Phones, Tablets, and Samsung DeX desktop windows:
-/// - `< 720dp`: Mobile drawers
-/// - `720–1099dp`: 2-pane (toggleable left sidebar + chat, quick panel as endDrawer)
-/// - `>= 1100dp`: 3-pane desktop / DeX workspace with collapsible sidebars & keyboard shortcuts
+/// 1:1 Antigravity Desktop adaptive shell:
+/// - `< 720dp`: Mobile drawers (Sessions left, Overview right, Side Panel modal/sheet)
+/// - `720–1099dp`: 2-pane (Sidebar + Chat, Overview endDrawer, Side Panel split when open)
+/// - `>= 1100dp` (Samsung DeX / Tablet): Full desktop workspace with Sidebar + Chat + Side Panel + Overview
 class HomeShell extends ConsumerStatefulWidget {
   const HomeShell({super.key});
 
@@ -25,12 +28,13 @@ class HomeShell extends ConsumerStatefulWidget {
 class _HomeShellState extends ConsumerState<HomeShell> {
   final _scaffoldKey = GlobalKey<ScaffoldState>();
   bool _showLeftSidebar = true;
-  bool _showRightPanel = true;
+  bool _showOverviewPanel = true;
 
   @override
   Widget build(BuildContext context) {
     final width = MediaQuery.sizeOf(context).width;
     final perms = ref.watch(permissionsProvider);
+    final sidePanel = ref.watch(sidePanelProvider);
     final isTwoPane = width >= 720;
     final isThreePane = width >= 1100;
     final isDesktopUx = isTwoPane || perms.isDexMode;
@@ -39,6 +43,9 @@ class _HomeShellState extends ConsumerState<HomeShell> {
       const SingleActivator(LogicalKeyboardKey.keyN, control: true): () {
         ref.read(sessionsProvider.notifier).createSession();
       },
+      const SingleActivator(LogicalKeyboardKey.keyK, control: true): () {
+        CommandPaletteDialog.show(context);
+      },
       const SingleActivator(LogicalKeyboardKey.keyB, control: true): () {
         if (isTwoPane) {
           setState(() => _showLeftSidebar = !_showLeftSidebar);
@@ -46,9 +53,14 @@ class _HomeShellState extends ConsumerState<HomeShell> {
           _scaffoldKey.currentState?.openDrawer();
         }
       },
-      const SingleActivator(LogicalKeyboardKey.keyI, control: true): () {
+      const SingleActivator(LogicalKeyboardKey.keyB, control: true, shift: true):
+          () {
+        ref.read(sidePanelProvider.notifier).toggleSidePanel();
+      },
+      const SingleActivator(LogicalKeyboardKey.keyO, control: true, alt: true):
+          () {
         if (isThreePane) {
-          setState(() => _showRightPanel = !_showRightPanel);
+          setState(() => _showOverviewPanel = !_showOverviewPanel);
         } else {
           _scaffoldKey.currentState?.openEndDrawer();
         }
@@ -81,17 +93,22 @@ class _HomeShellState extends ConsumerState<HomeShell> {
               const VerticalDivider(width: 1),
             ],
             Expanded(
+              flex: 5,
               child: ChatScreen(
                 isDesktopMode: isDesktopUx,
                 onOpenSessions: () =>
                     setState(() => _showLeftSidebar = !_showLeftSidebar),
                 onOpenQuickPanel: () =>
-                    setState(() => _showRightPanel = !_showRightPanel),
+                    setState(() => _showOverviewPanel = !_showOverviewPanel),
               ),
             ),
-            if (_showRightPanel) ...[
+            if (sidePanel.showSidePanel) ...[
               const VerticalDivider(width: 1),
-              const SizedBox(width: 316, child: QuickPanel()),
+              const Expanded(flex: 4, child: SidePanelTabs()),
+            ],
+            if (_showOverviewPanel) ...[
+              const VerticalDivider(width: 1),
+              const SizedBox(width: 300, child: OverviewPanel()),
             ],
           ],
         ),
@@ -101,17 +118,18 @@ class _HomeShellState extends ConsumerState<HomeShell> {
         key: _scaffoldKey,
         endDrawer: Drawer(
           width: 320,
-          child: QuickPanel(
+          child: OverviewPanel(
             onClose: () => _scaffoldKey.currentState?.closeEndDrawer(),
           ),
         ),
         body: Row(
           children: [
             if (_showLeftSidebar) ...[
-              const SizedBox(width: 260, child: SessionsDrawer()),
+              const SizedBox(width: 256, child: SessionsDrawer()),
               const VerticalDivider(width: 1),
             ],
             Expanded(
+              flex: 5,
               child: ChatScreen(
                 isDesktopMode: isDesktopUx,
                 onOpenSessions: () =>
@@ -120,6 +138,10 @@ class _HomeShellState extends ConsumerState<HomeShell> {
                     _scaffoldKey.currentState?.openEndDrawer(),
               ),
             ),
+            if (sidePanel.showSidePanel) ...[
+              const VerticalDivider(width: 1),
+              const Expanded(flex: 4, child: SidePanelTabs()),
+            ],
           ],
         ),
       );
@@ -134,15 +156,18 @@ class _HomeShellState extends ConsumerState<HomeShell> {
         ),
         endDrawer: Drawer(
           width: 316,
-          child: QuickPanel(
+          child: OverviewPanel(
             onClose: () => _scaffoldKey.currentState?.closeEndDrawer(),
           ),
         ),
-        body: ChatScreen(
-          isDesktopMode: isDesktopUx,
-          onOpenSessions: () => _scaffoldKey.currentState?.openDrawer(),
-          onOpenQuickPanel: () => _scaffoldKey.currentState?.openEndDrawer(),
-        ),
+        body: sidePanel.showSidePanel
+            ? const SidePanelTabs()
+            : ChatScreen(
+                isDesktopMode: isDesktopUx,
+                onOpenSessions: () => _scaffoldKey.currentState?.openDrawer(),
+                onOpenQuickPanel: () =>
+                    _scaffoldKey.currentState?.openEndDrawer(),
+              ),
       );
     }
 

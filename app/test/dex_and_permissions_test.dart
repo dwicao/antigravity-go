@@ -22,7 +22,9 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 200));
 
-    expect(find.text('Agent Controls'), findsOneWidget);
+    expect(find.text('Overview'), findsOneWidget);
+    expect(find.text('Automations'), findsOneWidget);
+    expect(find.text('Customizations'), findsOneWidget);
     expect(find.text('Enter sends'), findsOneWidget);
   });
 
