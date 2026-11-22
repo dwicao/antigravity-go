@@ -43,7 +43,7 @@ AI Credits balance: 250
     final listScrollable = find.descendant(
       of: find.byType(ListView),
       matching: find.byType(Scrollable),
-    );
+    ).first;
     await tester.scrollUntilVisible(
       find.text('Gemini 4 Hydrogen & 3.8 Flash'),
       200,
