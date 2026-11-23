@@ -8,7 +8,7 @@ import java.io.OutputStreamWriter
 import java.util.concurrent.ExecutorService
 
 /**
- * Handles client-side ACP `fs/read_text_file`, `fs/write_text_file`, and `terminal/*` RPC calls
+ * Handles client-side ACP `fs/read_text_file`, `fs/write_text_file`, and `terminal` RPC calls
  * guarded by [CommandSafetyGuard].
  */
 internal class AcpFsTerminalHandler(

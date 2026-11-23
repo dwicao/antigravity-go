@@ -32,7 +32,6 @@ class _SessionTurnRuntime {
   _SessionTurnRuntime({
     required this.turnId,
     required this.isSsh,
-    this.activeLocalRequest,
   });
 
   StreamSubscription<AgyChatEvent>? sub;

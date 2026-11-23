@@ -170,11 +170,7 @@ class ChatMessage {
           'changedFiles': changedFiles.map((f) => f.toJson()).toList(),
         if (steps.isNotEmpty)
           'steps': steps
-              .map(
-                (s) => s.text != null
-                    ? s.copyWith(text: AgySecretMask.mask(s.text!)).toJson()
-                    : s.toJson(),
-              )
+              .map((s) => s.copyWith(text: AgySecretMask.mask(s.text)).toJson())
               .toList(),
         'checkpointRef': ?checkpointRef,
         if (isCompactionSummary) 'isCompactionSummary': true,

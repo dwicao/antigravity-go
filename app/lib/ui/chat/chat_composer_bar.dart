@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../state/chat_state.dart';
+import '../../state/harness_state.dart';
 import '../../state/hosts_state.dart';
 import '../../state/settings_state.dart';
 import '../../state/update_state.dart';
@@ -84,7 +85,7 @@ class ChatComposerBar extends ConsumerWidget {
   final bool listeningVoice;
   final bool isDesktopMode;
   final bool enterToSend;
-  final ContextBudgetSnapshot ctxSnap;
+  final HarnessContextSnapshot ctxSnap;
   final KeyEventResult Function(FocusNode, KeyEvent) onKeyEvent;
   final ValueChanged<String> onChanged;
   final VoidCallback onPickFile;
