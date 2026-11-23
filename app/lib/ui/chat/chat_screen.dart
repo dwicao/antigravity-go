@@ -982,6 +982,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                 enabledBorder: InputBorder.none,
                                 focusedBorder: InputBorder.none,
                                 filled: false,
+                                hintMaxLines: 1,
                                 contentPadding: const EdgeInsets.symmetric(
                                   horizontal: 2,
                                   vertical: 8,
@@ -1213,40 +1214,67 @@ class _OnboardingBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isCompact = MediaQuery.sizeOf(context).width < 460;
+    final icon = Icon(
+      !runtimeReady && isLocal ? Icons.terminal : Icons.account_circle,
+      color: theme.colorScheme.primary,
+    );
+    final msg = Text(
+      !runtimeReady && isLocal
+          ? 'Install the on-device `agy` harness to run Antigravity agents on Android.'
+          : 'Sign in with your Google Account to run Antigravity AI agents & view quotas.',
+      style: theme.textTheme.bodySmall,
+      maxLines: isCompact ? 3 : null,
+      overflow: isCompact ? TextOverflow.ellipsis : null,
+    );
+    final action = (!runtimeReady && isLocal)
+        ? FilledButton.tonal(
+            onPressed: runtimeBusy ? null : onInstallRuntime,
+            child: Text(runtimeBusy ? 'Installing…' : 'Install agy'),
+          )
+        : (!isAuthenticated)
+            ? FilledButton.tonal(
+                onPressed: onSignIn,
+                child: const Text('Google Sign-In'),
+              )
+            : null;
+
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 4, 12, 4),
-      padding: const EdgeInsets.all(12),
+      padding: EdgeInsets.all(isCompact ? 10 : 12),
       decoration: BoxDecoration(
         color: theme.colorScheme.primaryContainer.withOpacity(0.35),
         borderRadius: BorderRadius.circular(16),
       ),
-      child: Row(
-        children: [
-          Icon(
-            !runtimeReady && isLocal ? Icons.terminal : Icons.account_circle,
-            color: theme.colorScheme.primary,
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              !runtimeReady && isLocal
-                  ? 'Install the on-device `agy` harness to run Antigravity agents on Android.'
-                  : 'Sign in with your Google Account to run Antigravity AI agents & view quotas.',
-              style: theme.textTheme.bodySmall,
-            ),
-          ),
-          if (!runtimeReady && isLocal)
-            FilledButton.tonal(
-              onPressed: runtimeBusy ? null : onInstallRuntime,
-              child: Text(runtimeBusy ? 'Installing…' : 'Install agy'),
+      child: isCompact
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    icon,
+                    const SizedBox(width: 10),
+                    Expanded(child: msg),
+                  ],
+                ),
+                if (action != null) ...[
+                  const SizedBox(height: 6),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: action,
+                  ),
+                ],
+              ],
             )
-          else if (!isAuthenticated)
-            FilledButton.tonal(
-              onPressed: onSignIn,
-              child: const Text('Google Sign-In'),
+          : Row(
+              children: [
+                icon,
+                const SizedBox(width: 10),
+                Expanded(child: msg),
+                if (action != null) action,
+              ],
             ),
-        ],
-      ),
     );
   }
 }
