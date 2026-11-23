@@ -11,6 +11,7 @@ import '../runtime/runtime_bridge.dart';
 import '../runtime/runtime_models.dart';
 import 'auth_state.dart';
 import 'ci_watch_state.dart';
+import 'harness_state.dart';
 import 'hosts_state.dart';
 import 'permissions_state.dart';
 import 'projects_state.dart';
@@ -90,6 +91,7 @@ class ChatMessage {
     this.completedAt,
     this.changedFiles = const [],
     this.steps = const [],
+    this.checkpointRef,
   });
 
   final String id;
@@ -109,6 +111,7 @@ class ChatMessage {
   final DateTime? completedAt;
   final List<FileChangeEntry> changedFiles;
   final List<ChatMilestoneStep> steps;
+  final String? checkpointRef;
 
   ChatMessage copyWith({
     String? text,
@@ -124,6 +127,7 @@ class ChatMessage {
     DateTime? completedAt,
     List<FileChangeEntry>? changedFiles,
     List<ChatMilestoneStep>? steps,
+    String? checkpointRef,
   }) {
     return ChatMessage(
       id: id,
@@ -143,6 +147,7 @@ class ChatMessage {
       completedAt: completedAt ?? this.completedAt,
       changedFiles: changedFiles ?? this.changedFiles,
       steps: steps ?? this.steps,
+      checkpointRef: checkpointRef ?? this.checkpointRef,
     );
   }
 
@@ -163,6 +168,7 @@ class ChatMessage {
         if (changedFiles.isNotEmpty)
           'changedFiles': changedFiles.map((f) => f.toJson()).toList(),
         if (steps.isNotEmpty) 'steps': steps.map((s) => s.toJson()).toList(),
+        'checkpointRef': ?checkpointRef,
       };
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) {
@@ -200,6 +206,7 @@ class ChatMessage {
           .whereType<Map<String, dynamic>>()
           .map(ChatMilestoneStep.fromJson)
           .toList(),
+      checkpointRef: json['checkpointRef'] as String?,
     );
   }
 }
@@ -213,6 +220,7 @@ class ChatThreadState {
     this.activeTurnId,
     this.tokensPerSecond = 0,
     this.stallWarning,
+    this.loopWarning,
     this.activeBackgroundSessionIds = const {},
   });
 
@@ -223,6 +231,7 @@ class ChatThreadState {
   final String? activeTurnId;
   final double tokensPerSecond;
   final String? stallWarning;
+  final LoopDetectionResult? loopWarning;
   final Set<String> activeBackgroundSessionIds;
 
   ChatThreadState copyWith({
@@ -235,6 +244,8 @@ class ChatThreadState {
     double? tokensPerSecond,
     String? stallWarning,
     bool clearStallWarning = false,
+    LoopDetectionResult? loopWarning,
+    bool clearLoopWarning = false,
     Set<String>? activeBackgroundSessionIds,
   }) {
     return ChatThreadState(
@@ -248,6 +259,8 @@ class ChatThreadState {
       tokensPerSecond: tokensPerSecond ?? this.tokensPerSecond,
       stallWarning:
           clearStallWarning ? null : (stallWarning ?? this.stallWarning),
+      loopWarning:
+          clearLoopWarning ? null : (loopWarning ?? this.loopWarning),
       activeBackgroundSessionIds:
           activeBackgroundSessionIds ?? this.activeBackgroundSessionIds,
     );
@@ -263,6 +276,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
   String? _loadedSessionId;
   String? _wakeupAssistantId;
   final AcpCodec _wakeupCodec = AcpCodec();
+  final HarnessLoopDetector _loopDetector = HarnessLoopDetector();
+  final Set<String> _seenLoopCallIds = <String>{};
   Timer? _stallWatchdog;
   bool _receivedTurnContent = false;
   bool _usedFallbackForTurn = false;
@@ -548,8 +563,9 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     final effectivePrompt = '$prompt$attachmentNote';
     final now = DateTime.now();
 
+    final userMsgId = const Uuid().v4();
     final userMsg = ChatMessage(
-      id: const Uuid().v4(),
+      id: userMsgId,
       role: ChatRole.user,
       text: prompt,
       createdAt: now,
@@ -664,6 +680,24 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         );
         return;
       }
+      if (ref.read(harnessProvider).autoCheckpointEnabled) {
+        try {
+          final cp = await RuntimeBridge.instance.createCheckpoint(
+            cwd: effectiveWorkspace.isEmpty ? null : effectiveWorkspace,
+          );
+          if (!ref.mounted) return;
+          final refHash = cp['ref']?.toString() ?? '';
+          if (cp['ok'] == true && refHash.isNotEmpty) {
+            final currentMsgs = _messagesForSession(session.id);
+            final uIdx = currentMsgs.indexWhere((m) => m.id == userMsgId);
+            if (uIdx >= 0) {
+              final updated = [...currentMsgs];
+              updated[uIdx] = updated[uIdx].copyWith(checkpointRef: refHash);
+              _updateSessionMessages(session.id, updated);
+            }
+          }
+        } catch (_) {}
+      }
       stream = RuntimeBridge.instance.runPrompt(request, turnId);
     }
 
@@ -673,7 +707,13 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     _activeLocalRequest = sshHost == null ? request : null;
     _rateSamples.clear();
     _streamBurstStart = null;
-    state = state.copyWith(tokensPerSecond: 0, clearStallWarning: true);
+    _loopDetector.reset();
+    _seenLoopCallIds.clear();
+    state = state.copyWith(
+      tokensPerSecond: 0,
+      clearStallWarning: true,
+      clearLoopWarning: true,
+    );
     _resetWatchdog();
 
     await _activeSub?.cancel();
@@ -806,6 +846,24 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           idx,
           current.copyWith(tools: tools, steps: nextSteps),
         );
+        // Harness Doom-Loop Circuit Breaker check on new or failed tool steps.
+        if (ref.read(harnessProvider).loopBreakerEnabled) {
+          final isFailed = evt.state == ToolCallState.failed ||
+              (evt.errorMessage?.isNotEmpty ?? false);
+          LoopDetectionResult loopHit = LoopDetectionResult.none;
+          if (_seenLoopCallIds.add(evt.callId)) {
+            loopHit = _loopDetector.recordToolCall(
+              name: evt.toolName,
+              input: jsonEncode(evt.parameters),
+              isError: isFailed,
+            );
+          } else if (isFailed) {
+            loopHit = _loopDetector.markLastFailed(toolName: evt.toolName);
+          }
+          if (loopHit.triggered && _loadedSessionId == session.id) {
+            state = state.copyWith(loopWarning: loopHit);
+          }
+        }
         // Checkpoint completed tool steps mid-turn against OS process kills.
         if (evt.state != ToolCallState.running) {
           unawaited(_persistMessages(session.id, _messagesForSession(session.id)));
@@ -1301,10 +1359,91 @@ class ChatNotifier extends Notifier<ChatThreadState> {
 
   Future<void> clearCurrentThread() async {
     final activeId = ref.read(sessionsProvider).activeSessionId;
+    _loopDetector.reset();
+    _seenLoopCallIds.clear();
     state = const ChatThreadState();
     if (activeId != null) {
       await _persistMessages(activeId, const []);
     }
+  }
+
+  void dismissLoopWarning() {
+    state = state.copyWith(clearLoopWarning: true);
+  }
+
+  Future<void> breakLoopAndPivot() async {
+    final hit = state.loopWarning;
+    if (hit == null) return;
+    final pivot = hit.pivotPrompt;
+    _loopDetector.reset();
+    _seenLoopCallIds.clear();
+    state = state.copyWith(clearLoopWarning: true);
+    await _cancelAllBackgroundWork();
+    if (!ref.mounted) return;
+    await sendPrompt(pivot, force: true);
+  }
+
+  /// Deterministic `/rewind` rollback: restores workspace Git snapshot (when a
+  /// checkpoint exists on the target user message) and prunes conversation
+  /// history back to right before that message, returning the prompt text.
+  Future<({bool ok, String message, String? restoredPrompt})> rewindToMessage(
+    String userMessageId,
+  ) async {
+    if (state.isStreaming || state.messages.isEmpty) {
+      return (
+        ok: false,
+        message: 'Stop active streaming before rewinding.',
+        restoredPrompt: null,
+      );
+    }
+    final targetIdx = userMessageId == '__latest__'
+        ? state.messages.lastIndexWhere((m) => m.role == ChatRole.user)
+        : state.messages.indexWhere((m) => m.id == userMessageId);
+    if (targetIdx < 0) {
+      return (
+        ok: false,
+        message: 'No user turn found to rewind to.',
+        restoredPrompt: null,
+      );
+    }
+    final targetMsg = state.messages[targetIdx];
+    var gitNote = 'Conversation pruned';
+    final cpRef = targetMsg.checkpointRef;
+    if (cpRef != null && cpRef.isNotEmpty) {
+      final project = ref.read(projectsProvider).activeProject;
+      final runtime = ref.read(runtimeProvider);
+      final cwd = project.primaryFolder.isNotEmpty
+          ? project.primaryFolder
+          : (runtime.status.workspaceRoot ?? '');
+      final res = await RuntimeBridge.instance.restoreCheckpoint(
+        cwd: cwd.isEmpty ? null : cwd,
+        ref: cpRef,
+      );
+      if (!ref.mounted) {
+        return (ok: false, message: 'Cancelled', restoredPrompt: null);
+      }
+      if (res['ok'] == true) {
+        gitNote = 'Workspace & conversation restored (${cpRef.substring(0, cpRef.length.clamp(0, 7))})';
+      } else {
+        gitNote = 'Conversation rewound (${res['message'] ?? 'no git snapshot'})';
+      }
+    }
+    final prefix = state.messages.sublist(0, targetIdx);
+    _loopDetector.reset();
+    _seenLoopCallIds.clear();
+    state = state.copyWith(
+      messages: prefix,
+      clearLoopWarning: true,
+    );
+    final activeId = ref.read(sessionsProvider).activeSessionId;
+    if (activeId != null) {
+      await _persistMessages(activeId, prefix);
+    }
+    return (
+      ok: true,
+      message: gitNote,
+      restoredPrompt: targetMsg.text,
+    );
   }
 
   String exportMarkdown() {

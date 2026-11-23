@@ -207,6 +207,46 @@ class RuntimePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChann
             }
             "listWorkspace" -> result.success(ctrl.listWorkspace(call.argument<String>("path")))
             "readFile" -> result.success(ctrl.readFile(call.argument<String>("path") ?: ""))
+            "createCheckpoint" -> {
+                val cwd = call.argument<String>("cwd")
+                ioExecutor.submit {
+                    val res = ctrl.createCheckpoint(cwd)
+                    mainHandler.post { result.success(res) }
+                }
+            }
+            "restoreCheckpoint" -> {
+                val cwd = call.argument<String>("cwd")
+                val ref = call.argument<String>("ref") ?: ""
+                ioExecutor.submit {
+                    val res = ctrl.restoreCheckpoint(cwd, ref)
+                    mainHandler.post { result.success(res) }
+                }
+            }
+            "initHarnessFiles" -> {
+                val cwd = call.argument<String>("cwd")
+                val featureJson = call.argument<String>("featureJson") ?: ""
+                val progressTxt = call.argument<String>("progressTxt") ?: ""
+                ioExecutor.submit {
+                    val res = ctrl.initHarnessFiles(cwd, featureJson, progressTxt)
+                    mainHandler.post { result.success(res) }
+                }
+            }
+            "readHarnessFiles" -> {
+                val cwd = call.argument<String>("cwd")
+                ioExecutor.submit {
+                    val res = ctrl.readHarnessFiles(cwd)
+                    mainHandler.post { result.success(res) }
+                }
+            }
+            "writeHarnessFile" -> {
+                val cwd = call.argument<String>("cwd")
+                val name = call.argument<String>("name") ?: ""
+                val content = call.argument<String>("content") ?: ""
+                ioExecutor.submit {
+                    val ok = ctrl.writeHarnessFile(cwd, name, content)
+                    mainHandler.post { result.success(ok) }
+                }
+            }
             else -> result.notImplemented()
         }
     }

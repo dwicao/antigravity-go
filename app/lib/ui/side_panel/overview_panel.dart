@@ -4,12 +4,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../state/background_tasks_state.dart';
 import '../../state/chat_state.dart';
+import '../../state/harness_state.dart';
 import '../../state/phone_state.dart';
 import '../../state/sessions_state.dart';
 import '../../state/settings_state.dart';
 import '../../state/side_panel_state.dart';
 import '../../state/usage_state.dart';
 import '../chat/secret_mask.dart';
+import '../harness/harness_page.dart';
 import '../phone/phone_control_page.dart';
 import '../shell/background_tasks_sheet.dart';
 import '../usage/usage_page.dart';
@@ -29,6 +31,7 @@ class OverviewPanel extends ConsumerWidget {
     final usage = ref.watch(usageProvider);
     final phone = ref.watch(phoneProvider);
     final settings = ref.watch(settingsProvider);
+    final ctxSnap = ref.watch(contextBudgetProvider);
     final theme = Theme.of(context);
 
     final allTools = chat.messages.expand((m) => m.tools).toList();
@@ -151,6 +154,26 @@ class OverviewPanel extends ConsumerWidget {
                               title: 'Browser',
                             ),
                           ),
+                        ),
+                        const Divider(height: 1),
+                        ListTile(
+                          dense: true,
+                          leading: const Icon(Icons.engineering_outlined, size: 18),
+                          title: const Text('Harness Engineering'),
+                          subtitle: Text(
+                            'Context ${ctxSnap.percentage}%, loop guard, /rewind & ledger',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          trailing: const Icon(Icons.chevron_right, size: 18),
+                          onTap: () {
+                            onClose?.call();
+                            Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => const HarnessPage(),
+                              ),
+                            );
+                          },
                         ),
                       ],
                     ),

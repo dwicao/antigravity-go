@@ -62,6 +62,7 @@ class MessageBubble extends StatelessWidget {
     required this.message,
     this.onRegenerate,
     this.onEditResend,
+    this.onRewind,
     this.onOpenDiff,
     this.tokensPerSecond,
   });
@@ -69,6 +70,7 @@ class MessageBubble extends StatelessWidget {
   final ChatMessage message;
   final VoidCallback? onRegenerate;
   final ValueChanged<String>? onEditResend;
+  final VoidCallback? onRewind;
   final VoidCallback? onOpenDiff;
   final double? tokensPerSecond;
 
@@ -176,6 +178,26 @@ class MessageBubble extends StatelessWidget {
                         }
                       },
                       icon: const Icon(Icons.edit_outlined),
+                    ),
+                  ],
+                  if (onRewind != null) ...[
+                    const SizedBox(width: 2),
+                    IconButton(
+                      iconSize: 15,
+                      padding: EdgeInsets.zero,
+                      constraints:
+                          const BoxConstraints(minWidth: 24, minHeight: 24),
+                      visualDensity: VisualDensity.compact,
+                      tooltip: message.checkpointRef != null
+                          ? 'Rewind workspace & thread to here'
+                          : 'Rewind thread to here',
+                      onPressed: onRewind,
+                      icon: Icon(
+                        Icons.history_rounded,
+                        color: message.checkpointRef != null
+                            ? theme.colorScheme.primary
+                            : null,
+                      ),
                     ),
                   ],
                 ],

@@ -18,3 +18,4 @@ export 'src/protocol/stream_json_parser.dart';
 export 'src/protocol/usage_output_parser.dart';
 export 'src/transport/agy_transport.dart';
 export 'src/usage/usage_ledger.dart';
+export 'src/harness/harness_engine.dart';

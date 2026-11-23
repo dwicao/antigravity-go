@@ -53,6 +53,7 @@ class RuntimeController private constructor(private val appContext: Context) {
         emit = { payload -> handleAcpOrProcessEvent(payload) },
         log = { msg -> log(msg) },
         onTasksChanged = { emitBackgroundTasks() },
+        outputOffloadDir = File(tmpDir, "tool-outputs"),
     )
 
     @Volatile
@@ -1380,5 +1381,141 @@ class RuntimeController private constructor(private val appContext: Context) {
         val f = File(path)
         if (!f.exists() || !f.isFile) return ""
         return f.readText()
+    }
+
+    /**
+     * Captures a non-disruptive Git snapshot before an agent turn so the user
+     * can deterministically rewind both workspace files and conversation state.
+     */
+    fun createCheckpoint(cwd: String?): Map<String, Any?> {
+        val dir = if (!cwd.isNullOrBlank()) File(cwd) else workspaceDir
+        val inside = runShell(
+            "git rev-parse --is-inside-work-tree 2>/dev/null || true",
+            dir.absolutePath,
+        ).trim()
+        if (inside != "true") {
+            return mapOf("ok" to false, "reason" to "Not a git repository")
+        }
+        val headSha = runShell(
+            "git rev-parse --verify HEAD 2>/dev/null || true",
+            dir.absolutePath,
+        ).trim()
+        if (headSha.isEmpty()) {
+            return mapOf("ok" to false, "reason" to "Repository has no commits yet")
+        }
+        val stashSha = runShell(
+            "git stash create \"agy-checkpoint\" 2>/dev/null || true",
+            dir.absolutePath,
+        ).trim()
+        val ref = if (stashSha.isNotEmpty()) stashSha else headSha
+        return mapOf(
+            "ok" to true,
+            "ref" to ref,
+            "head" to headSha,
+            "dirty" to stashSha.isNotEmpty(),
+        )
+    }
+
+    /**
+     * Rewinds tracked workspace files to the exact state captured in [ref].
+     */
+    fun restoreCheckpoint(cwd: String?, ref: String): Map<String, Any?> {
+        val cleanRef = ref.trim()
+        if (!cleanRef.matches(Regex("""^[0-9a-fA-F]{7,64}$"""))) {
+            return mapOf("ok" to false, "message" to "Invalid checkpoint ref")
+        }
+        val dir = if (!cwd.isNullOrBlank()) File(cwd) else workspaceDir
+        val verified = runShell(
+            "git rev-parse --verify \"$cleanRef^{commit}\" 2>/dev/null || true",
+            dir.absolutePath,
+        ).trim()
+        if (verified.isEmpty()) {
+            return mapOf("ok" to false, "message" to "Checkpoint commit no longer exists")
+        }
+        val parentStash = runShell(
+            "git rev-parse --verify \"${cleanRef}^2\" 2>/dev/null || true",
+            dir.absolutePath,
+        ).trim()
+        val out = if (parentStash.isNotEmpty()) {
+            runShell(
+                "git reset --hard \"${cleanRef}^1\" 2>&1 && git checkout \"$cleanRef\" -- . 2>&1",
+                dir.absolutePath,
+            )
+        } else {
+            runShell("git reset --hard \"$cleanRef\" 2>&1", dir.absolutePath)
+        }
+        val failed = out.contains("fatal:", ignoreCase = true) ||
+            out.contains("error:", ignoreCase = true)
+        return mapOf(
+            "ok" to !failed,
+            "ref" to cleanRef,
+            "output" to out.trim(),
+        )
+    }
+
+    fun initHarnessFiles(
+        cwd: String?,
+        featureJson: String,
+        progressTxt: String,
+    ): Map<String, Any?> {
+        val dir = if (!cwd.isNullOrBlank()) File(cwd) else workspaceDir
+        val harnessDir = File(dir, ".agy-harness")
+        return try {
+            harnessDir.mkdirs()
+            val featFile = File(harnessDir, "feature_list.json")
+            val progFile = File(harnessDir, "progress.txt")
+            if (!featFile.exists() && featureJson.isNotBlank()) {
+                atomicWriteText(featFile, featureJson)
+            }
+            if (!progFile.exists() && progressTxt.isNotBlank()) {
+                atomicWriteText(progFile, progressTxt)
+            }
+            readHarnessFiles(dir.absolutePath)
+        } catch (t: Throwable) {
+            mapOf("ok" to false, "error" to (t.message ?: t.toString()))
+        }
+    }
+
+    fun readHarnessFiles(cwd: String?): Map<String, Any?> {
+        val dir = if (!cwd.isNullOrBlank()) File(cwd) else workspaceDir
+        val harnessDir = File(dir, ".agy-harness")
+        val featFile = File(harnessDir, "feature_list.json")
+        val progFile = File(harnessDir, "progress.txt")
+        val pubspec = File(dir, "pubspec.yaml")
+        val isFlutter = pubspec.exists() && try {
+            pubspec.readText().contains("flutter:")
+        } catch (_: Throwable) {
+            false
+        }
+        return mapOf(
+            "ok" to true,
+            "workspace" to dir.absolutePath,
+            "initialized" to (featFile.exists() || progFile.exists()),
+            "featureList" to if (featFile.exists()) featFile.readText() else "",
+            "progressLog" to if (progFile.exists()) progFile.readText() else "",
+            "hasPubspec" to pubspec.exists(),
+            "isFlutter" to isFlutter,
+            "hasPackageJson" to File(dir, "package.json").exists(),
+            "hasPyproject" to (File(dir, "pyproject.toml").exists() || File(dir, "pytest.ini").exists()),
+            "hasCargoToml" to File(dir, "Cargo.toml").exists(),
+            "hasGradlew" to (File(dir, "gradlew").exists() || File(dir, "app/gradlew").exists()),
+        )
+    }
+
+    fun writeHarnessFile(
+        cwd: String?,
+        relativeName: String,
+        content: String,
+    ): Boolean {
+        val allowed = setOf("feature_list.json", "progress.txt")
+        if (relativeName !in allowed) return false
+        val dir = if (!cwd.isNullOrBlank()) File(cwd) else workspaceDir
+        return try {
+            val target = File(File(dir, ".agy-harness"), relativeName)
+            atomicWriteText(target, content)
+            true
+        } catch (_: Throwable) {
+            false
+        }
     }
 }

@@ -21,6 +21,7 @@ class AcpSessionManager(
     private val emit: (Map<String, Any?>) -> Unit,
     private val log: (String) -> Unit,
     private val onTasksChanged: () -> Unit = {},
+    private val outputOffloadDir: File? = null,
 ) {
     private class TerminalProc(
         val process: Process,
@@ -797,6 +798,29 @@ class AcpSessionManager(
                 "terminal/create" -> {
                     val command = params?.optString("command", "") ?: ""
                     val argsArr = params?.optJSONArray("args")
+                    val argStrings = mutableListOf<String>()
+                    if (argsArr != null) {
+                        for (i in 0 until argsArr.length()) {
+                            argStrings.add(argsArr.optString(i, ""))
+                        }
+                    }
+                    val safety = CommandSafetyGuard.evaluateCommand(command, argStrings)
+                    if (!safety.allowed) {
+                        log("Harness Safety Guard blocked command: ${safety.reason}")
+                        sendJson(
+                            active.writer,
+                            JSONObject()
+                                .put("jsonrpc", "2.0")
+                                .put("id", id)
+                                .put(
+                                    "error",
+                                    JSONObject()
+                                        .put("code", -32003)
+                                        .put("message", safety.reason)
+                                )
+                        )
+                        return
+                    }
                     val cwdStr = params?.optString("cwd")?.takeIf { it.isNotBlank() }
                     val dir = if (cwdStr != null) File(cwdStr) else active.defaultCwd
                     if (!dir.exists()) dir.mkdirs()
@@ -809,9 +833,7 @@ class AcpSessionManager(
                             command
                         }
                         cmdList.add(resolved)
-                        for (i in 0 until argsArr.length()) {
-                            cmdList.add(argsArr.optString(i, ""))
-                        }
+                        cmdList.addAll(argStrings)
                     } else {
                         val shell = active.env["SHELL"] ?: "/system/bin/sh"
                         cmdList.addAll(listOf(shell, "-c", command))
@@ -871,9 +893,18 @@ class AcpSessionManager(
                 "terminal/output" -> {
                     val termId = params?.optString("terminalId", "") ?: ""
                     val tp = active.terminals[termId]
+                    val rawOut = tp?.output?.toString() ?: ""
+                    val offloaded = CommandSafetyGuard.offloadIfLarge(
+                        outputDir = outputOffloadDir,
+                        callId = termId.ifBlank { "term" },
+                        rawOutput = rawOut,
+                    )
                     val res = JSONObject()
-                        .put("output", tp?.output?.toString() ?: "")
-                        .put("truncated", (tp?.output?.length ?: 0) >= 262_144)
+                        .put("output", offloaded.text)
+                        .put("truncated", (tp?.output?.length ?: 0) >= 262_144 || offloaded.offloaded)
+                    if (offloaded.filePath != null) {
+                        res.put("offloadedPath", offloaded.filePath)
+                    }
                     tp?.exitCode?.let { code ->
                         res.put("exitStatus", JSONObject().put("exitCode", code))
                     }
@@ -1005,6 +1036,23 @@ class AcpSessionManager(
     ) {
         val path = params?.optString("path", "") ?: ""
         val content = params?.optString("content", "") ?: ""
+        val writeDecision = CommandSafetyGuard.evaluateWritePath(path)
+        if (!writeDecision.allowed) {
+            log("Harness Safety Guard blocked file write: ${writeDecision.reason}")
+            sendJson(
+                writer,
+                JSONObject()
+                    .put("jsonrpc", "2.0")
+                    .put("id", id)
+                    .put(
+                        "error",
+                        JSONObject()
+                            .put("code", -32003)
+                            .put("message", writeDecision.reason)
+                    )
+            )
+            return
+        }
         try {
             val file = File(path)
             file.parentFile?.mkdirs()

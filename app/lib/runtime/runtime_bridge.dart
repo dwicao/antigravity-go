@@ -480,4 +480,84 @@ class RuntimeBridge {
       return const {};
     }
   }
+
+  Future<Map<String, Object?>> createCheckpoint({String? cwd}) async {
+    try {
+      final raw = await _method.invokeMethod<Map<Object?, Object?>>(
+        'createCheckpoint',
+        {'cwd': ?cwd},
+      );
+      if (raw == null) return const {'ok': false};
+      return raw.map((k, v) => MapEntry(k.toString(), v));
+    } on MissingPluginException {
+      return const {'ok': false};
+    }
+  }
+
+  Future<Map<String, Object?>> restoreCheckpoint({
+    String? cwd,
+    required String ref,
+  }) async {
+    try {
+      final raw = await _method.invokeMethod<Map<Object?, Object?>>(
+        'restoreCheckpoint',
+        {'cwd': ?cwd, 'ref': ref},
+      );
+      if (raw == null) return const {'ok': false};
+      return raw.map((k, v) => MapEntry(k.toString(), v));
+    } on MissingPluginException {
+      return const {'ok': false, 'message': 'Native runtime unavailable'};
+    }
+  }
+
+  Future<Map<String, Object?>> initHarnessFiles({
+    String? cwd,
+    required String featureJson,
+    required String progressTxt,
+  }) async {
+    try {
+      final raw = await _method.invokeMethod<Map<Object?, Object?>>(
+        'initHarnessFiles',
+        {
+          'cwd': ?cwd,
+          'featureJson': featureJson,
+          'progressTxt': progressTxt,
+        },
+      );
+      if (raw == null) return const {'ok': false};
+      return raw.map((k, v) => MapEntry(k.toString(), v));
+    } on MissingPluginException {
+      return const {'ok': false};
+    }
+  }
+
+  Future<Map<String, Object?>> readHarnessFiles({String? cwd}) async {
+    try {
+      final raw = await _method.invokeMethod<Map<Object?, Object?>>(
+        'readHarnessFiles',
+        {'cwd': ?cwd},
+      );
+      if (raw == null) return const {'ok': false};
+      return raw.map((k, v) => MapEntry(k.toString(), v));
+    } on MissingPluginException {
+      return const {'ok': false};
+    }
+  }
+
+  Future<bool> writeHarnessFile({
+    String? cwd,
+    required String name,
+    required String content,
+  }) async {
+    try {
+      return await _method.invokeMethod<bool>('writeHarnessFile', {
+            'cwd': ?cwd,
+            'name': name,
+            'content': content,
+          }) ??
+          false;
+    } on MissingPluginException {
+      return false;
+    }
+  }
 }

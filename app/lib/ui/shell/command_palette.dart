@@ -7,6 +7,7 @@ import '../../state/side_panel_state.dart';
 import '../automations/automations_page.dart';
 import '../cli/cli_manager_page.dart';
 import '../customizations/customizations_page.dart';
+import '../harness/harness_page.dart';
 import '../phone/phone_control_page.dart';
 import '../remote/ssh_hosts_page.dart';
 import '../settings/settings_page.dart';
@@ -56,6 +57,17 @@ class _CommandPaletteDialogState extends ConsumerState<CommandPaletteDialog> {
           Navigator.of(context).pop();
           Navigator.of(context).push(
             MaterialPageRoute<void>(builder: (_) => const UsagePage()),
+          );
+        },
+      ),
+      (
+        'Harness Engineering Dashboard',
+        'Context budget, loop breaker, /rewind checkpoints & feature ledger',
+        Icons.engineering_outlined,
+        () {
+          Navigator.of(context).pop();
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(builder: (_) => const HarnessPage()),
           );
         },
       ),

@@ -84,6 +84,12 @@ class AgyCliCatalog {
     AgySlashCommand(
       command: '/context',
       description: 'Show context window token breakdown & usage',
+      handledLocally: true,
+    ),
+    AgySlashCommand(
+      command: '/harness',
+      description: 'Open Harness Engineering (loop guard, checkpoints & ledger)',
+      handledLocally: true,
     ),
     AgySlashCommand(
       command: '/btw',

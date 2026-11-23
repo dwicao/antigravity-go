@@ -11,6 +11,7 @@ import '../../state/auth_state.dart';
 import '../../state/background_tasks_state.dart';
 import '../../state/chat_state.dart';
 import '../../state/draft_store.dart';
+import '../../state/harness_state.dart';
 import '../../state/hosts_state.dart';
 import '../../state/permissions_state.dart';
 import '../../state/projects_state.dart';
@@ -21,6 +22,7 @@ import '../../state/side_panel_state.dart';
 import '../../state/update_state.dart';
 import '../auth/google_login_sheet.dart';
 import '../cli/cli_manager_page.dart';
+import '../harness/harness_page.dart';
 import '../settings/settings_page.dart';
 import '../shell/background_tasks_sheet.dart';
 import '../shell/command_palette.dart';
@@ -149,6 +151,20 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       return;
     }
 
+    if (firstWord == '/context' || firstWord == '/harness') {
+      _clearInputMenus();
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => const HarnessPage()),
+      );
+      return;
+    }
+
+    if (firstWord == '/rewind' || firstWord == '/undo') {
+      _clearInputMenus();
+      await _handleRewind('__latest__');
+      return;
+    }
+
     if (firstWord == '/diff') {
       _clearInputMenus();
       ref.read(sidePanelProvider.notifier).openTab(
@@ -266,6 +282,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     });
   }
 
+  Future<void> _handleRewind(String userMessageId) async {
+    final res =
+        await ref.read(chatProvider.notifier).rewindToMessage(userMessageId);
+    if (!mounted) return;
+    if (res.ok && res.restoredPrompt != null && res.restoredPrompt!.isNotEmpty) {
+      _inputController.text = res.restoredPrompt!;
+      _inputController.selection = TextSelection.collapsed(
+        offset: _inputController.text.length,
+      );
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(res.message)),
+    );
+  }
+
   Future<void> _steerSubmit() async {
     final text = _inputController.text.trim();
     if (text.isEmpty) {
@@ -348,6 +379,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final isBusyOrBg = chat.isStreaming || hasRunningBg;
     final auth = ref.watch(authProvider);
     final hosts = ref.watch(hostsProvider);
+    final ctxSnap = ref.watch(contextBudgetProvider);
     final project = ref.watch(projectsProvider).activeProject;
     final runtime = ref.watch(runtimeProvider);
     final settings = ref.watch(settingsProvider);
@@ -499,6 +531,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                         MaterialPageRoute<void>(
                             builder: (_) => const UsagePage()),
                       );
+                    case 'harness':
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                            builder: (_) => const HarnessPage()),
+                      );
                     case 'account':
                       GoogleLoginSheet.show(context);
                     case 'cli':
@@ -531,6 +568,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       dense: true,
                       leading: Icon(Icons.speed_rounded),
                       title: Text('Usage Limits'),
+                    ),
+                  ),
+                  const PopupMenuItem(
+                    value: 'harness',
+                    child: ListTile(
+                      dense: true,
+                      leading: Icon(Icons.engineering_outlined),
+                      title: Text('Harness Engineering'),
                     ),
                   ),
                   PopupMenuItem(
@@ -646,6 +691,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                             .read(chatProvider.notifier)
                                             .editAndResend(m.id, newText)
                                         : null,
+                                onRewind:
+                                    !chat.isStreaming && m.role == ChatRole.user
+                                        ? () => _handleRewind(m.id)
+                                        : null,
                                 onOpenDiff: () =>
                                     ref.read(sidePanelProvider.notifier).openTab(
                                           const SidePanelTab(
@@ -692,6 +741,61 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     child: Text(
                       chat.stallWarning!,
                       style: theme.textTheme.bodySmall,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        if (chat.loopWarning != null)
+          wrapCentered(
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.errorContainer.withOpacity(0.75),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.loop_rounded,
+                        size: 18,
+                        color: theme.colorScheme.onErrorContainer,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Doom-loop guard: ${chat.loopWarning!.reason}',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onErrorContainer,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        iconSize: 16,
+                        visualDensity: VisualDensity.compact,
+                        tooltip: 'Dismiss warning',
+                        onPressed: () => ref
+                            .read(chatProvider.notifier)
+                            .dismissLoopWarning(),
+                        icon: const Icon(Icons.close),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: FilledButton.tonalIcon(
+                      onPressed: () => ref
+                          .read(chatProvider.notifier)
+                          .breakLoopAndPivot(),
+                      icon: const Icon(Icons.bolt_rounded, size: 16),
+                      label: const Text('Break Loop & Pivot'),
                     ),
                   ),
                 ],
@@ -1157,6 +1261,53 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                           onSelected: (v) => ref
                               .read(settingsProvider.notifier)
                               .setExecutionMode(v),
+                        ),
+                        const SizedBox(width: 6),
+                        InkWell(
+                          borderRadius: BorderRadius.circular(20),
+                          onTap: () => Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => const HarnessPage(),
+                            ),
+                          ),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 5,
+                            ),
+                            decoration: BoxDecoration(
+                              color: ctxSnap.shouldCompact
+                                  ? theme.colorScheme.errorContainer
+                                  : ctxSnap.needsWarning
+                                      ? Colors.amber.withOpacity(0.18)
+                                      : theme.colorScheme.surfaceContainerHighest,
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.engineering_outlined,
+                                  size: 13,
+                                  color: ctxSnap.shouldCompact
+                                      ? theme.colorScheme.error
+                                      : ctxSnap.needsWarning
+                                          ? Colors.amber.shade800
+                                          : theme.colorScheme.onSurfaceVariant,
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  '${ctxSnap.percentage}% ctx',
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                    fontWeight: FontWeight.w600,
+                                    color: ctxSnap.shouldCompact
+                                        ? theme.colorScheme.error
+                                        : null,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
                         ),
                         if (widget.isDesktopMode) ...[
                           const SizedBox(width: 8),
