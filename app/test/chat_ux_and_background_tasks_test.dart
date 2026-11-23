@@ -8,6 +8,7 @@ import 'package:antigravity_go/ui/chat/chat_screen.dart';
 import 'package:antigravity_go/ui/chat/message_bubble.dart';
 import 'package:antigravity_go/ui/shell/background_tasks_sheet.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -396,5 +397,76 @@ void main() {
     expect(changes.first.path, 'good.dart');
     expect(changes.first.diff, contains('-oldLine'));
     expect(changes.first.diff, contains('+newLine'));
+  });
+
+  testWidgets(
+      'Assistant MessageBubble shows compact bottom copy button after completion and copies text to clipboard',
+      (tester) async {
+    String? copiedText;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'Clipboard.setData') {
+        copiedText = (call.arguments as Map<dynamic, dynamic>)['text'] as String?;
+      }
+      return null;
+    });
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, null);
+    });
+
+    final streamingMsg = ChatMessage(
+      id: 'm-stream',
+      role: ChatRole.assistant,
+      text: 'Partial output',
+      createdAt: DateTime(2026, 11, 24, 4, 50),
+      isStreaming: true,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: MessageBubble(message: streamingMsg),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.byKey(const ValueKey('bottom-copy-button')), findsNothing);
+
+    final doneMsg = ChatMessage(
+      id: 'm-complete',
+      role: ChatRole.assistant,
+      text: 'Final answer ready.',
+      createdAt: DateTime(2026, 11, 24, 4, 50),
+      completedAt: DateTime(2026, 11, 24, 4, 51),
+      isStreaming: false,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: MessageBubble(message: doneMsg),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final copyBtn = find.byKey(const ValueKey('bottom-copy-button'));
+    expect(copyBtn, findsOneWidget);
+    expect(find.text('Copy'), findsOneWidget);
+
+    await tester.tap(copyBtn);
+    await tester.pump();
+
+    expect(copiedText, 'Final answer ready.');
+    expect(find.text('Copied'), findsOneWidget);
+    expect(find.text('Response copied'), findsOneWidget);
+
+    await tester.pump(const Duration(milliseconds: 1600));
+    expect(find.text('Copy'), findsOneWidget);
   });
 }

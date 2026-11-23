@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -252,12 +254,7 @@ class MessageBubble extends StatelessWidget {
                   iconSize: 16,
                   visualDensity: VisualDensity.compact,
                   tooltip: 'Copy',
-                  onPressed: () {
-                    Clipboard.setData(ClipboardData(text: message.text));
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Response copied')),
-                    );
-                  },
+                  onPressed: () => _copyResponseText(context, message.text),
                   icon: const Icon(Icons.copy_all_outlined),
                 ),
               if (onRegenerate != null && !message.isStreaming)
@@ -326,11 +323,103 @@ class MessageBubble extends StatelessWidget {
               files: message.changedFiles,
               onOpenDiff: onOpenDiff,
             ),
+          if (!message.isStreaming && message.text.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            _BottomCopyButton(text: message.text),
+          ],
           if (!message.isStreaming) ...[
             const SizedBox(height: 8),
             MessageMetricsFooter(message: message),
           ],
         ],
+      ),
+    );
+  }
+}
+
+void _copyResponseText(BuildContext context, String text) {
+  HapticFeedback.lightImpact();
+  Clipboard.setData(ClipboardData(text: text));
+  ScaffoldMessenger.of(context)
+    ..hideCurrentSnackBar()
+    ..showSnackBar(
+      const SnackBar(content: Text('Response copied')),
+    );
+}
+
+class _BottomCopyButton extends StatefulWidget {
+  const _BottomCopyButton({required this.text});
+
+  final String text;
+
+  @override
+  State<_BottomCopyButton> createState() => _BottomCopyButtonState();
+}
+
+class _BottomCopyButtonState extends State<_BottomCopyButton> {
+  bool _copied = false;
+  Timer? _resetTimer;
+
+  @override
+  void dispose() {
+    _resetTimer?.cancel();
+    super.dispose();
+  }
+
+  void _handleTap() {
+    _copyResponseText(context, widget.text);
+    _resetTimer?.cancel();
+    setState(() => _copied = true);
+    _resetTimer = Timer(const Duration(milliseconds: 1500), () {
+      if (mounted) {
+        setState(() => _copied = false);
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final semantic = AgySemanticColors.of(context);
+    final color = _copied ? theme.colorScheme.primary : semantic.textSecondary;
+
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Tooltip(
+        message: 'Copy response',
+        child: InkWell(
+          key: const ValueKey('bottom-copy-button'),
+          borderRadius: BorderRadius.circular(8),
+          onTap: _handleTap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: theme.colorScheme.outlineVariant.withOpacity(0.45),
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  _copied ? Icons.check_rounded : Icons.copy_rounded,
+                  size: 13,
+                  color: color,
+                ),
+                const SizedBox(width: 5),
+                Text(
+                  _copied ? 'Copied' : 'Copy',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    fontSize: 11.5,
+                    color: color,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
