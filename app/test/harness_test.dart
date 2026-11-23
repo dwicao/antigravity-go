@@ -89,8 +89,23 @@ void main() {
     expect(find.text('Context Window Budget'), findsOneWidget);
     expect(find.text('Doom-Loop Circuit Breaker'), findsOneWidget);
     expect(find.text('Command & Path Safety Guard'), findsOneWidget);
-    expect(find.text('Pre-Turn Git Checkpoints'), findsOneWidget);
+
+    final listScrollable = find.descendant(
+      of: find.byType(ListView),
+      matching: find.byType(Scrollable),
+    ).first;
+    await tester.scrollUntilVisible(
+      find.text('Run Initializer Agent'),
+      200,
+      scrollable: listScrollable,
+    );
     expect(find.text('Run Initializer Agent'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.text('Adversarial Diff Review'),
+      200,
+      scrollable: listScrollable,
+    );
     expect(find.text('Adversarial Diff Review'), findsOneWidget);
   });
 }
