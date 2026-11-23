@@ -1688,13 +1688,6 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     return byPath.values.toList();
   }
 
-  Future<void> _cancelAllBackgroundWork() async {
-    if (state.isStreaming || _activeStreamingSessionId != null) {
-      await stopStreaming();
-    }
-    await ref.read(runtimeProvider.notifier).forceStopAllBackgroundTasks();
-  }
-
   Future<void> forceStopTask({
     required String kindName,
     String? nativeTaskId,

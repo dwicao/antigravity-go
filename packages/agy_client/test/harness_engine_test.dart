@@ -158,7 +158,7 @@ void main() {
     });
 
     test('distinguishes long identical-prefix tool calls and handles in-place callId failures', () {
-      final detector = HarnessLoopDetector(identicalThreshold: 3);
+      final detector = HarnessLoopDetector(repeatThreshold: 3);
       final prefix = 'x' * 200;
       expect(
         detector
@@ -193,7 +193,7 @@ void main() {
       );
       final hit = failDetector.markLastFailed(callId: 'f2');
       expect(hit.triggered, isTrue);
-      expect(hit.kind, LoopKind.repeatedFailure);
+      expect(hit.kind, HarnessLoopKind.repeatedFailure);
     });
 
     test('supports gpt-oss model budget and preserves compaction anchor turn', () {

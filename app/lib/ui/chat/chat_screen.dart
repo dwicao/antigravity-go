@@ -1138,10 +1138,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   ),
                   TextButton(
                     onPressed: () async {
+                      final messenger = ScaffoldMessenger.of(context);
                       final res =
                           await ref.read(chatProvider.notifier).compactThread();
-                      if (!res.ok && mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
+                      if (!res.ok) {
+                        messenger.showSnackBar(
                           SnackBar(content: Text(res.message)),
                         );
                       }

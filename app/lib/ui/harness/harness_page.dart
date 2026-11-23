@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../state/chat_state.dart';
 import '../../state/harness_state.dart';
+import '../../theme/app_theme.dart';
 
 /// Modern Agent Harness Dashboard:
 /// - Context saturation gauge & proactive `/compact` trigger

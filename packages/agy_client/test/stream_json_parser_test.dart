@@ -70,10 +70,10 @@ void main() {
       expect(tc.state, ToolCallState.failed);
       expect(tc.errorMessage, 'Aborted');
 
-      final quotas = UsageOutputParser.parse(
-        'I0315 10:20:30.123456 12345 main.cc:1] log noise\nGemini 3 Pro (High)\t90.0% left\tResets in 4h',
+      final report = UsageOutputParser.parseUsageText(
+        'I0315 10:20:30.123456 12345 main.cc:1] log noise 50% remaining\nGemini 4 Argon\t90.0% left\tResets in 4h',
       );
-      expect(quotas, hasLength(1));
+      expect(report.overallFiveHourRemainingPct, 90.0);
 
       final attached = FileChangeEntry.attachUnifiedDiffs(
         [const FileChangeEntry(path: 'dir/with b/file name.dart', added: 1)],

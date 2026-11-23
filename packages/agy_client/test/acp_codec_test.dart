@@ -90,7 +90,7 @@ void main() {
       expect(permEvt.commandOrPath, 'rm -rf tmp');
       expect(permEvt.diffPreview, contains('+b'));
 
-      final cancelled = codec.encodePermissionCancelled(7);
+      final cancelled = codec.encodePermissionCancelled(requestId: 7);
       expect(cancelled, contains('"outcome":"cancelled"'));
 
       final refusal = codec.parseNotificationOrRequest(
