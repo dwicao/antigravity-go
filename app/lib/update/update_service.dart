@@ -162,7 +162,7 @@ class UpdateService {
       'installFromUrl',
       {
         'url': apkUrl,
-        if (expectedSha256 != null) 'expectedSha256': expectedSha256,
+        'expectedSha256': ?expectedSha256,
       },
     );
     return {
