@@ -325,7 +325,7 @@ class FileChangeEntry {
 
     void flush() {
       if (currentPath != null && buf.isNotEmpty) {
-        perFile[currentPath!] = buf.toString().trimRight();
+        perFile[currentPath] = buf.toString().trimRight();
       }
       buf.clear();
     }
