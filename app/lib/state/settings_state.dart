@@ -95,6 +95,7 @@ class SettingsNotifier extends Notifier<AppSettings> {
 
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
+    if (!ref.mounted) return;
     final themeName = prefs.getString('agy_theme_mode');
     final accentName = prefs.getString('agy_accent');
     final presetName = prefs.getString('agy_permission_preset');
@@ -122,6 +123,7 @@ class SettingsNotifier extends Notifier<AppSettings> {
       await prefs.setString('agy_exec_mode', savedExecMode);
     }
 
+    if (!ref.mounted) return;
     state = state.copyWith(
       themeMode: ThemeMode.values.firstWhere(
         (m) => m.name == themeName,

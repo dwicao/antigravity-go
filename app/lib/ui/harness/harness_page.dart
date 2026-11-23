@@ -12,7 +12,9 @@ import '../../state/harness_state.dart';
 /// - Anthropic-style Initializer / Incremental Coder / Adversarial Verifier workflows
 /// - Interactive `.agy-harness/feature_list.json` & `.agy-harness/progress.txt` ledger
 class HarnessPage extends ConsumerStatefulWidget {
-  const HarnessPage({super.key});
+  const HarnessPage({super.key, this.autoRefreshOnOpen = true});
+
+  final bool autoRefreshOnOpen;
 
   @override
   ConsumerState<HarnessPage> createState() => _HarnessPageState();
@@ -24,11 +26,13 @@ class _HarnessPageState extends ConsumerState<HarnessPage> {
   @override
   void initState() {
     super.initState();
-    Future.microtask(() {
-      if (mounted) {
-        ref.read(harnessProvider.notifier).refreshWorkspace();
-      }
-    });
+    if (widget.autoRefreshOnOpen) {
+      Future.microtask(() {
+        if (mounted) {
+          ref.read(harnessProvider.notifier).refreshWorkspace();
+        }
+      });
+    }
   }
 
   @override

@@ -446,12 +446,13 @@ void main() {
   test('AppUpdateState.compareSemver detects newer GitHub releases accurately', () {
     const up = AppUpdateState(
       latest: AppReleaseInfo(
-        tagName: 'v1.0.10',
-        versionName: '1.0.10',
-        htmlUrl: 'https://github.com/dwicao/antigravity-go/releases/tag/v1.0.10',
+        tagName: 'v99.0.0',
+        versionName: '99.0.0',
+        htmlUrl: 'https://github.com/dwicao/antigravity-go/releases/tag/v99.0.0',
       ),
     );
     expect(up.hasNewerVersion, isTrue);
+    expect(AppUpdateState.compareSemver('1.0.11', '1.0.10'), greaterThan(0));
     expect(AppUpdateState.compareSemver('1.0.9', '1.0.9'), 0);
     expect(AppUpdateState.compareSemver('1.0.8', '1.0.9'), lessThan(0));
   });

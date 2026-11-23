@@ -64,6 +64,7 @@ class ProjectsNotifier extends Notifier<ProjectsState> {
 
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
+    if (!ref.mounted) return;
     final raw = prefs.getString(_projectsKey);
     final activeId = prefs.getString(_activeProjectKey) ?? 'default';
     final loaded = <AgyProject>[];
@@ -95,6 +96,7 @@ class ProjectsNotifier extends Notifier<ProjectsState> {
       await _persist(loaded);
     }
 
+    if (!ref.mounted) return;
     state = ProjectsState(projects: loaded, activeProjectId: activeId);
   }
 

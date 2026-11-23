@@ -79,7 +79,7 @@ void main() {
       UncontrolledProviderScope(
         container: container,
         child: const MaterialApp(
-          home: HarnessPage(),
+          home: HarnessPage(autoRefreshOnOpen: false),
         ),
       ),
     );

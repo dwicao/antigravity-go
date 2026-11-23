@@ -184,11 +184,17 @@ class HarnessNotifier extends Notifier<HarnessState> {
   Future<void> refreshWorkspace() async {
     final cwd = _activeWorkspace();
     state = state.copyWith(loading: true, workspacePath: cwd);
-    final raw = await RuntimeBridge.instance.readHarnessFiles(
-      cwd: cwd.isEmpty ? null : cwd,
-    );
-    if (!ref.mounted) return;
-    _applyWorkspacePayload(raw, fallbackWorkspace: cwd);
+    try {
+      final raw = await RuntimeBridge.instance.readHarnessFiles(
+        cwd: cwd.isEmpty ? null : cwd,
+      );
+      if (!ref.mounted) return;
+      _applyWorkspacePayload(raw, fallbackWorkspace: cwd);
+    } catch (_) {
+      if (ref.mounted) {
+        state = state.copyWith(loading: false);
+      }
+    }
   }
 
   Future<void> initializeWorkspace(String goal) async {

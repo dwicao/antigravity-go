@@ -66,6 +66,7 @@ class RuntimeNotifier extends Notifier<RuntimeUiState> {
     final status = await RuntimeBridge.instance.getStatus();
     final logs = await RuntimeBridge.instance.getLogs();
     final tasks = await RuntimeBridge.instance.getBackgroundTasks();
+    if (!ref.mounted) return;
     state = state.copyWith(
       status: status,
       logs: logs,
