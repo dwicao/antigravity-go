@@ -724,25 +724,64 @@ class RuntimeController private constructor(private val appContext: Context) {
         }
     }
 
+    private fun isGlogBootstrapNoise(line: String): Boolean {
+        val t = line.trim()
+        return t.startsWith("ERROR: logging before google.Init:") ||
+            Regex("^[IWEF]\\d{4}\\s+\\d{2}:\\d{2}:\\d{2}\\.\\d+.*server_zerog\\.go").containsMatchIn(t)
+    }
+
+    private fun stripGlogNoise(text: String): String =
+        text.lineSequence()
+            .filterNot { isGlogBootstrapNoise(it) }
+            .joinToString("\n")
+            .trim()
+
+    private fun runStdoutPreferringCapture(args: List<String>, timeoutSeconds: Int): String {
+        if (!binaryFile.exists()) return ""
+        val pb = ProcessBuilder(listOf(binaryFile.absolutePath) + args)
+        pb.directory(workspaceDir)
+        pb.environment().putAll(buildEnv())
+        pb.redirectErrorStream(false)
+        val proc = pb.start()
+        val outFuture = executor.submit<String> { proc.inputStream.bufferedReader().use { it.readText() } }
+        val errFuture = executor.submit<String> { proc.errorStream.bufferedReader().use { it.readText() } }
+        if (!proc.waitFor(timeoutSeconds.toLong(), TimeUnit.SECONDS)) proc.destroyForcibly()
+        val stdout = runCatching { stripGlogNoise(outFuture.get(2, TimeUnit.SECONDS)) }.getOrDefault("")
+        if (stdout.isNotBlank()) return stdout
+        return runCatching { stripGlogNoise(errFuture.get(2, TimeUnit.SECONDS)) }.getOrDefault("")
+    }
+
     fun probeUsage(): String {
         if (!binaryFile.exists()) return ""
         val sb = StringBuilder()
-        val modelsOut = runCatching { runCapture(listOf("models"), null, emptyMap(), 12) }.getOrDefault("")
+        val modelsOut = runCatching { runStdoutPreferringCapture(listOf("models"), 12) }.getOrDefault("")
         if (modelsOut.isNotBlank()) sb.append(modelsOut).append("\n")
 
-        val printUsage = runCatching {
-            runCapture(listOf("-p", "/usage", "--output-format", "text"), null, emptyMap(), 18)
+        var printUsage = runCatching {
+            runStdoutPreferringCapture(listOf("-p", "/usage", "--output-format", "json"), 18)
         }.getOrDefault("")
-        val printCredits = runCatching {
-            runCapture(listOf("-p", "/credits", "--output-format", "text"), null, emptyMap(), 15)
+        if (!printUsage.contains("remaining_fraction") && !printUsage.contains("%")) {
+            printUsage = runCatching {
+                runStdoutPreferringCapture(listOf("-p", "/usage", "--output-format", "text"), 18)
+            }.getOrDefault("")
+        }
+        var printCredits = runCatching {
+            runStdoutPreferringCapture(listOf("-p", "/credits", "--output-format", "json"), 15)
         }.getOrDefault("")
-        sb.append(printUsage).append("\n").append(printCredits).append("\n")
+        if (!printCredits.contains("remaining_credits") && !printCredits.lowercase().contains("credit")) {
+            printCredits = runCatching {
+                runStdoutPreferringCapture(listOf("-p", "/credits", "--output-format", "text"), 15)
+            }.getOrDefault("")
+        }
+        if (printUsage.isNotBlank()) sb.append(printUsage).append("\n")
+        if (printCredits.isNotBlank()) sb.append(printCredits).append("\n")
 
         val combinedSoFar = sb.toString().lowercase()
-        val hasQuotaNumbers = combinedSoFar.contains("%") &&
-            (combinedSoFar.contains("5-hour") || combinedSoFar.contains("5 hour") || combinedSoFar.contains("weekly") || combinedSoFar.contains("gemini"))
+        val hasQuotaNumbers = combinedSoFar.contains("remaining_fraction") ||
+            (combinedSoFar.contains("%") &&
+                (combinedSoFar.contains("5-hour") || combinedSoFar.contains("5 hour") || combinedSoFar.contains("weekly") || combinedSoFar.contains("gemini")))
         if (!hasQuotaNumbers) {
-            val interactiveOut = runInteractiveProbe("/usage\n/credits\n/exit\n", 14)
+            val interactiveOut = stripGlogNoise(runInteractiveProbe("/usage\n/credits\n/exit\n", 14))
             if (interactiveOut.isNotBlank()) sb.append(interactiveOut).append("\n")
         }
         return sb.toString().trim()
@@ -1135,11 +1174,13 @@ class RuntimeController private constructor(private val appContext: Context) {
                     BufferedReader(InputStreamReader(proc.errorStream)).use { errReader ->
                         var errLine: String?
                         while (errReader.readLine().also { errLine = it } != null) {
+                            val rawErr = errLine ?: ""
+                            if (isGlogBootstrapNoise(rawErr)) continue
                             handleAcpOrProcessEvent(
                                 mapOf(
                                     "kind" to "turn_stderr",
                                     "turnId" to turnId,
-                                    "stderrLine" to redactor.line(errLine ?: ""),
+                                    "stderrLine" to redactor.line(rawErr),
                                 )
                             )
                         }

@@ -91,7 +91,36 @@ Gemini 4 Argon\tGemini 4 Argon Weekly Limit\t100%\t${futureWeek.toIso8601String(
     await tester.pumpAndSettle();
 
     expect(find.text('96%'), findsOneWidget);
+    expect(find.textContaining('left · 4% used'), findsWidgets);
     expect(find.textContaining('Reset in 5d 1'), findsWidgets);
     expect(find.textContaining('Reset in 4h '), findsWidgets);
+  });
+
+  testWidgets('UsagePage cleans glog noise and separates left vs used % cleanly', (tester) async {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final future5h = DateTime.now().toUtc().add(const Duration(hours: 4, minutes: 55));
+    final futureWeek = DateTime.now().toUtc().add(const Duration(days: 6, hours: 23));
+    container.read(usageProvider.notifier).applyRawProbeOutput('''
+ERROR: logging before google.Init: I1124 03:36:05.798729       1 server_zerog.go:46] Initialized Android local timezone to Asia/Jakarta
+Gemini Models\tWeekly Limit Remaining\t100%\t${futureWeek.toIso8601String()}
+Gemini Models\tFive Hour Limit Remaining\t100%\t${future5h.toIso8601String()}
+Remaining credits\t0
+''');
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(
+          home: UsagePage(autoRefreshOnOpen: false),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('0% used'), findsWidgets);
+    expect(container.read(usageProvider).rawProbeOutput,
+        isNot(contains('ERROR: logging before google.Init')));
   });
 }

@@ -95,7 +95,7 @@ class UsageNotifier extends Notifier<UsageQuotaSnapshot> {
 
       final trimmed = combined.trim();
       if (trimmed.isNotEmpty) {
-        _lastRawOutput = UsageOutputParser.stripAnsi(trimmed);
+        _lastRawOutput = UsageOutputParser.cleanProbeOutput(trimmed);
         _lastLiveProbe = UsageOutputParser.parseUsageText(trimmed);
         if (UsageOutputParser.outputIndicatesAuthenticated(trimmed)) {
           final email = UsageOutputParser.extractEmail(trimmed);
@@ -113,7 +113,7 @@ class UsageNotifier extends Notifier<UsageQuotaSnapshot> {
   }
 
   void applyRawProbeOutput(String output) {
-    _lastRawOutput = UsageOutputParser.stripAnsi(output);
+    _lastRawOutput = UsageOutputParser.cleanProbeOutput(output);
     _lastLiveProbe = UsageOutputParser.parseUsageText(output);
     _lastProbeError = null;
     _emit();

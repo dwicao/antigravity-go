@@ -96,5 +96,39 @@ Gemini 4 Argon\tGemini 4 Argon Weekly Limit\t100%\t2026-11-30T00:42:20Z
       expect(argon.weeklyRemainingPct, 100);
       expect(argon.weeklyResetText, '7d');
     });
+
+    test('parses JSON /usage & /credits output, avoids agy models bleed, and strips glog noise', () {
+      const mixedProbe = '''
+ERROR: logging before google.Init: I1124 03:36:05.798729       1 server_zerog.go:46] Initialized Android local timezone to Asia/Jakarta
+Fetching available models...
+gemini-4-neon-high\tGemini 4 Neon (High)
+gpt-oss-120b-medium\tGPT-OSS 120B (Medium)
+ERROR: logging before google.Init: I1124 03:36:07.747640       1 server_zerog.go:46] Initialized Android local timezone to Asia/Jakarta
+{"conversation_id":"","status":"SUCCESS","response":"Gemini Models\\tWeekly Limit Remaining\\t99%\\t2026-11-30T20:36:41Z\\nGemini Models\\tFive Hour Limit Remaining\\t98%\\t2026-11-24T01:36:41Z\\n","command":{"name":"usage","data":{"groups":[{"name":"Gemini Models","buckets":[{"window":"weekly","remaining_fraction":0.996,"reset_time":"2026-11-30T20:36:41Z"},{"window":"5h","remaining_fraction":0.9794989228248596,"reset_time":"2026-11-24T01:36:41Z"}]},{"name":"Claude and GPT models","buckets":[{"window":"weekly","remaining_fraction":1,"reset_time":"2026-11-30T20:39:47Z"},{"window":"5h","remaining_fraction":1,"reset_time":"2026-11-24T01:39:47Z"}]}]}}}
+{"conversation_id":"","status":"SUCCESS","response":"Remaining credits\\t0\\nUpgrade\\thttps://antigravity.google/g1-upgrade\\n","command":{"name":"credits","data":{"remaining_credits":0}}}
+''';
+      final cleaned = UsageOutputParser.cleanProbeOutput(mixedProbe);
+      expect(cleaned, isNot(contains('ERROR: logging before google.Init')));
+      expect(cleaned, contains('Gemini Models'));
+      expect(cleaned, contains('Remaining credits'));
+
+      final now = DateTime.utc(2026, 11, 23, 20, 40, 0);
+      final parsed = UsageOutputParser.parseUsageText(mixedProbe, now: now);
+      expect(parsed.overallFiveHourRemainingPct, closeTo(97.9499, 0.01));
+      expect(parsed.overallWeeklyRemainingPct, closeTo(99.6, 0.01));
+      expect(parsed.aiCreditsRemaining, 0);
+
+      final argon = parsed.entries.firstWhere((e) => e.id == 'gemini-4-argon');
+      expect(argon.fiveHourRemainingPct, closeTo(97.9499, 0.01));
+      expect(argon.weeklyRemainingPct, closeTo(99.6, 0.01));
+
+      final claude = parsed.entries.firstWhere((e) => e.id == 'claude-gpt');
+      expect(claude.fiveHourRemainingPct, 100);
+      expect(claude.weeklyRemainingPct, 100);
+
+      expect(formatQuotaPct(99.96), '99.9%');
+      expect(formatQuotaPct(100.0), '100%');
+      expect(formatQuotaPct(0.0), '0%');
+    });
   });
 }

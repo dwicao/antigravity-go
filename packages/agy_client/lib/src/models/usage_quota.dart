@@ -1,5 +1,16 @@
 import 'agy_model.dart';
 
+/// Formats a 0–100 quota percentage cleanly without rounding near-100% values up to 100%.
+String formatQuotaPct(double pct) {
+  final clamped = pct.clamp(0.0, 100.0);
+  if (clamped >= 99.95 && clamped < 100.0) return '99.9%';
+  if (clamped > 0.0 && clamped < 0.05) return '0.1%';
+  if ((clamped - clamped.roundToDouble()).abs() < 0.05) {
+    return '${clamped.round()}%';
+  }
+  return '${clamped.toStringAsFixed(1)}%';
+}
+
 /// Formats a future reset timestamp as a concise countdown like `5d 13h` or `4h 48m`.
 String formatResetCountdown(DateTime resetAt, {DateTime? now}) {
   final current = (now ?? DateTime.now()).toUtc();

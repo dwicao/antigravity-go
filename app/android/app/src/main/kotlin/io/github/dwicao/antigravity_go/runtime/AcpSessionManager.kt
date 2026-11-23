@@ -269,6 +269,9 @@ class AcpSessionManager(
                         var line: String?
                         while (err.readLine().also { line = it } != null) {
                             val l = line ?: continue
+                            if (l.trimStart().startsWith("ERROR: logging before google.Init:")) {
+                                continue
+                            }
                             log("[acp-err] $l")
                             val targetTid = active.currentTurnId
                             if (targetTid != null) {

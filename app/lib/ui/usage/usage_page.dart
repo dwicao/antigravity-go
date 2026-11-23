@@ -358,6 +358,7 @@ class _WindowHeroTile extends StatelessWidget {
     final theme = Theme.of(context);
     final semantic = AgySemanticColors.of(context);
     final pct = remainingPct;
+    final usedPct = pct != null ? (100.0 - pct).clamp(0.0, 100.0) : null;
     final barColor = _quotaBarColor(context, pct, defaultColor);
     final progress = pct != null ? (pct / 100.0).clamp(0.0, 1.0) : null;
 
@@ -386,18 +387,24 @@ class _WindowHeroTile extends StatelessWidget {
             textBaseline: TextBaseline.alphabetic,
             children: [
               Text(
-                pct != null ? '${pct.toStringAsFixed(0)}%' : '—',
+                pct != null ? formatQuotaPct(pct) : '—',
                 style: theme.textTheme.headlineSmall?.copyWith(
                   fontWeight: FontWeight.w800,
                   color: barColor,
                 ),
               ),
               const SizedBox(width: 6),
-              Text(
-                pct != null ? 'left' : '${_formatTokens(tokensUsed)} logged',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: semantic.textSecondary,
-                  fontWeight: FontWeight.w600,
+              Expanded(
+                child: Text(
+                  pct != null
+                      ? 'left · ${formatQuotaPct(usedPct!)} used'
+                      : '${_formatTokens(tokensUsed)} logged',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: semantic.textSecondary,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
             ],
@@ -558,6 +565,7 @@ class _QuotaWindowRow extends StatelessWidget {
     final theme = Theme.of(context);
     final semantic = AgySemanticColors.of(context);
     final barColor = _quotaBarColor(context, pct, theme.colorScheme.primary);
+    final usedPct = (100.0 - pct).clamp(0.0, 100.0);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -572,7 +580,7 @@ class _QuotaWindowRow extends StatelessWidget {
             ),
             const SizedBox(width: 8),
             Text(
-              '${pct.toStringAsFixed(0)}% left',
+              '${formatQuotaPct(pct)} left · ${formatQuotaPct(usedPct)} used',
               style: theme.textTheme.labelLarge?.copyWith(
                 fontWeight: FontWeight.w800,
                 color: barColor,

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import '../models/agy_model.dart';
 import '../models/usage_quota.dart';
 
@@ -28,6 +30,54 @@ class UsageOutputParser {
     r'(?:resets?|refresh(?:es)?)\s*(?::|in|at)?\s*([^\n,|;\)]+)',
     caseSensitive: false,
   );
+
+  static final RegExp _glogInitNoisePattern = RegExp(
+    r'^(?:ERROR:\s*logging before google\.Init:\s*)?[IWEF]\d{4}\s+\d{2}:\d{2}:\d{2}',
+  );
+
+  /// Returns true when [line] is Go glog/klog stderr bootstrap noise (e.g. timezone init).
+  static bool isGlogNoiseLine(String line) {
+    final trimmed = line.trim();
+    if (trimmed.isEmpty) return false;
+    return _glogInitNoisePattern.hasMatch(trimmed);
+  }
+
+  /// Strips ANSI sequences, glog noise lines, and unpacks JSON command envelopes for display.
+  static String cleanProbeOutput(String raw) {
+    final stripped = stripAnsi(raw);
+    final outLines = <String>[];
+    for (final rawLine in stripped.split('\n')) {
+      final line = rawLine.trimRight();
+      final trimmed = line.trim();
+      if (trimmed.isEmpty) {
+        if (outLines.isNotEmpty && outLines.last.isNotEmpty) {
+          outLines.add('');
+        }
+        continue;
+      }
+      if (isGlogNoiseLine(trimmed)) continue;
+      if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+        try {
+          final decoded = jsonDecode(trimmed);
+          if (decoded is Map<String, dynamic>) {
+            final resp = decoded['response']?.toString();
+            if (resp != null && resp.trim().isNotEmpty) {
+              for (final rLine in resp.split('\n')) {
+                final rt = rLine.trimRight();
+                if (!isGlogNoiseLine(rt)) outLines.add(rt);
+              }
+              continue;
+            }
+          }
+        } catch (_) {}
+      }
+      outLines.add(line);
+    }
+    while (outLines.isNotEmpty && outLines.last.isEmpty) {
+      outLines.removeLast();
+    }
+    return outLines.join('\n');
+  }
 
   /// Strips ANSI escape codes and control sequences from CLI output.
   static String stripAnsi(String input) {
@@ -121,13 +171,36 @@ class UsageOutputParser {
   static ParsedUsageReport parseUsageText(String raw, {DateTime? now}) {
     final currentNow = (now ?? DateTime.now()).toUtc();
     final clean = stripAnsi(raw);
-    final lines = clean
+    final rawLines = clean
         .split('\n')
         .map((l) => l.trim())
-        .where((l) => l.isNotEmpty)
+        .where((l) => l.isNotEmpty && !isGlogNoiseLine(l))
         .toList();
 
-    final discoveredModels = parseModelsOutput(clean);
+    final nonJsonLines = <String>[];
+    final jsonCommands = <Map<String, dynamic>>[];
+    final modelLookupText = StringBuffer();
+
+    for (final line in rawLines) {
+      if (line.startsWith('{') && line.endsWith('}')) {
+        try {
+          final decoded = jsonDecode(line);
+          if (decoded is Map<String, dynamic> &&
+              decoded['command'] is Map<String, dynamic>) {
+            jsonCommands.add(decoded);
+            final resp = decoded['response']?.toString();
+            if (resp != null && resp.isNotEmpty) {
+              modelLookupText.writeln(resp);
+            }
+            continue;
+          }
+        } catch (_) {}
+      }
+      nonJsonLines.add(line);
+      modelLookupText.writeln(line);
+    }
+
+    final discoveredModels = parseModelsOutput(modelLookupText.toString());
 
     final entriesById = <String, ModelQuotaEntry>{
       'gemini-4-argon': const ModelQuotaEntry(
@@ -160,17 +233,93 @@ class UsageOutputParser {
     DateTime? overallWeeklyResetAt;
     double? creditsRemaining;
 
-    for (var i = 0; i < lines.length; i++) {
-      final line = lines[i];
-      final lower = line.toLowerCase();
-      // Ignore Go glog prefix lines like `ERROR: logging before google.Init: ...` or `I1123 15:29:56...`
-      if (lower.startsWith('error: logging before') ||
-          RegExp(r'^[iwef]\d{4}\s+\d{2}:\d{2}:\d{2}').hasMatch(lower)) {
+    // Prefer structured `agy -p /usage --output-format json` & `/credits` payloads when present.
+    for (final envelope in jsonCommands) {
+      final cmd = envelope['command'] as Map<String, dynamic>?;
+      if (cmd == null) continue;
+      final cmdName = cmd['name']?.toString().toLowerCase() ?? '';
+      final data = cmd['data'];
+      if (data is! Map<String, dynamic>) continue;
+
+      if (cmdName == 'credits') {
+        final rem = (data['remaining_credits'] as num?)?.toDouble();
+        if (rem != null) creditsRemaining = rem;
         continue;
       }
 
-      final nextLine = i + 1 < lines.length ? lines[i + 1] : '';
-      final combined = '$line $nextLine';
+      if (cmdName == 'usage') {
+        final groups = data['groups'];
+        if (groups is! List) continue;
+        for (final g in groups.whereType<Map<String, dynamic>>()) {
+          final groupName = g['name']?.toString() ?? '';
+          final groupDesc = g['description']?.toString() ?? '';
+          var targetIds = _matchQuotaEntryIds(groupName.toLowerCase());
+          if (targetIds.isEmpty && groupDesc.isNotEmpty) {
+            targetIds = _matchQuotaEntryIds(groupDesc.toLowerCase());
+          }
+          if (targetIds.isEmpty) continue;
+
+          final buckets = g['buckets'];
+          if (buckets is! List) continue;
+          for (final b in buckets.whereType<Map<String, dynamic>>()) {
+            final frac = (b['remaining_fraction'] as num?)?.toDouble();
+            if (frac == null) continue;
+            final pct = (frac * 100.0).clamp(0.0, 100.0);
+            final window = b['window']?.toString().toLowerCase() ?? '';
+            final bName = b['name']?.toString().toLowerCase() ?? '';
+            final resetRaw = b['reset_time']?.toString();
+            final resetAt = resetRaw != null
+                ? DateTime.tryParse(resetRaw)?.toUtc()
+                : null;
+            final resetText = resetAt != null
+                ? formatResetCountdown(resetAt, now: currentNow)
+                : null;
+
+            final isWeekly =
+                window == 'weekly' || window == '7d' || _hasWeeklyKeyword(bName);
+            final isFiveH = window == '5h' || _hasFiveHourKeyword(bName);
+
+            for (final targetId in targetIds) {
+              final current = entriesById[targetId]!;
+              entriesById[targetId] = current.copyWith(
+                fiveHourRemainingPct:
+                    isFiveH ? pct : current.fiveHourRemainingPct,
+                weeklyRemainingPct:
+                    isWeekly ? pct : current.weeklyRemainingPct,
+                fiveHourResetText: isFiveH
+                    ? (resetText ?? current.fiveHourResetText)
+                    : current.fiveHourResetText,
+                weeklyResetText: isWeekly
+                    ? (resetText ?? current.weeklyResetText)
+                    : current.weeklyResetText,
+                fiveHourResetAt: isFiveH
+                    ? (resetAt ?? current.fiveHourResetAt)
+                    : current.fiveHourResetAt,
+                weeklyResetAt: isWeekly
+                    ? (resetAt ?? current.weeklyResetAt)
+                    : current.weeklyResetAt,
+                statusNote: targetIds.length > 1
+                    ? 'Shared Gemini Models quota pool'
+                    : current.statusNote,
+              );
+            }
+          }
+        }
+      }
+    }
+
+    for (var i = 0; i < nonJsonLines.length; i++) {
+      final line = nonJsonLines[i];
+      final lower = line.toLowerCase();
+
+      // Skip plain model catalog lines from `agy models` so they don't bleed into the next quota line.
+      if (_isModelCatalogLine(lower)) continue;
+
+      final nextLine = i + 1 < nonJsonLines.length ? nonJsonLines[i + 1] : '';
+      final allowNextLine = nextLine.isNotEmpty &&
+          _matchQuotaEntryIds(nextLine.toLowerCase()).isEmpty &&
+          !_isModelCatalogLine(nextLine.toLowerCase());
+      final combined = allowNextLine ? '$line $nextLine' : line;
 
       final creditMatch = RegExp(
         r'(?:ai\s*credits?|credits?\s*(?:remaining|balance)?|balance)\D*(\d+(?:\.\d+)?)',
@@ -191,7 +340,7 @@ class UsageOutputParser {
           final linePcts = _extractAllRemainingPcts(line);
           final pcts = linePcts.isNotEmpty
               ? linePcts
-              : _extractAllRemainingPcts(combined);
+              : (allowNextLine ? _extractAllRemainingPcts(combined) : const <double>[]);
           if (pcts.isNotEmpty && overall5h == null) overall5h = pcts.first;
           if (lineResetText != null && overall5hReset == null) {
             overall5hReset = lineResetText;
@@ -205,7 +354,7 @@ class UsageOutputParser {
           final linePcts = _extractAllRemainingPcts(line);
           final pcts = linePcts.isNotEmpty
               ? linePcts
-              : _extractAllRemainingPcts(combined);
+              : (allowNextLine ? _extractAllRemainingPcts(combined) : const <double>[]);
           if (pcts.isNotEmpty && overallWeekly == null) {
             overallWeekly = pcts.first;
           }
@@ -224,9 +373,13 @@ class UsageOutputParser {
           linePcts.isNotEmpty ? linePcts : _extractAllRemainingPcts(combined);
       final hasLinePcts = linePcts.isNotEmpty;
       final isWeeklyLine = _hasWeeklyKeyword(lower) ||
-          (!hasLinePcts && _hasWeeklyKeyword(nextLine.toLowerCase()));
+          (!hasLinePcts &&
+              allowNextLine &&
+              _hasWeeklyKeyword(nextLine.toLowerCase()));
       final isFiveHourLine = _hasFiveHourKeyword(lower) ||
-          (!hasLinePcts && _hasFiveHourKeyword(nextLine.toLowerCase()));
+          (!hasLinePcts &&
+              allowNextLine &&
+              _hasFiveHourKeyword(nextLine.toLowerCase()));
 
       double? fiveHPct;
       double? weeklyPct;
@@ -332,13 +485,33 @@ class UsageOutputParser {
     );
   }
 
+  static bool _isModelCatalogLine(String lower) {
+    if (lower.contains('%') ||
+        lower.contains('remaining') ||
+        lower.contains('limit') ||
+        lower.contains('resets') ||
+        lower.contains('weekly') ||
+        lower.contains('5-hour') ||
+        lower.contains('5 hour') ||
+        lower.contains('five hour')) {
+      return false;
+    }
+    final firstToken = lower.split(RegExp(r'\s+')).first;
+    return firstToken.startsWith('gemini-') ||
+        firstToken.startsWith('claude-') ||
+        firstToken.startsWith('gpt-') ||
+        firstToken.contains('orchestrator');
+  }
+
   static List<String> _matchQuotaEntryIds(String lower) {
-    if (lower.contains('argon')) return const ['gemini-4-argon'];
+    if (lower.contains('argon') && !lower.contains('gemini models')) {
+      return const ['gemini-4-argon'];
+    }
     if (lower.contains('claude') || lower.contains('gpt')) {
       return const ['claude-gpt'];
     }
     if (lower.contains('gemini models')) {
-      return const ['gemini-pro', 'gemini-flash'];
+      return const ['gemini-4-argon', 'gemini-pro', 'gemini-flash'];
     }
     if (lower.contains('neon') ||
         lower.contains('carbon') ||

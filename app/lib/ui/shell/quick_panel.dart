@@ -83,9 +83,9 @@ class QuickPanel extends ConsumerWidget {
                               usage.overallWeeklyRemainingPct != null
                           ? [
                               if (usage.overallFiveHourRemainingPct != null)
-                                '5h: ${usage.overallFiveHourRemainingPct!.toStringAsFixed(0)}% left${usage.overallFiveHourResetAt != null ? " (Reset in ${formatResetCountdown(usage.overallFiveHourResetAt!)})" : (usage.overallFiveHourResetText != null ? " (Reset in ${usage.overallFiveHourResetText})" : "")}',
+                                '5h: ${formatQuotaPct(usage.overallFiveHourRemainingPct!)} left (${formatQuotaPct(100.0 - usage.overallFiveHourRemainingPct!)} used${usage.overallFiveHourResetAt != null ? ", Reset in ${formatResetCountdown(usage.overallFiveHourResetAt!)}" : (usage.overallFiveHourResetText != null ? ", Reset in ${usage.overallFiveHourResetText}" : "")})',
                               if (usage.overallWeeklyRemainingPct != null)
-                                'Weekly: ${usage.overallWeeklyRemainingPct!.toStringAsFixed(0)}% left${usage.overallWeeklyResetAt != null ? " (Reset in ${formatResetCountdown(usage.overallWeeklyResetAt!)})" : (usage.overallWeeklyResetText != null ? " (Reset in ${usage.overallWeeklyResetText})" : "")}',
+                                'Weekly: ${formatQuotaPct(usage.overallWeeklyRemainingPct!)} left (${formatQuotaPct(100.0 - usage.overallWeeklyRemainingPct!)} used${usage.overallWeeklyResetAt != null ? ", Reset in ${formatResetCountdown(usage.overallWeeklyResetAt!)}" : (usage.overallWeeklyResetText != null ? ", Reset in ${usage.overallWeeklyResetText}" : "")})',
                             ].join('\n')
                           : '5h: ${usage.fiveHourLedgerTokens.totalTokens} tok · Weekly: ${usage.weeklyLedgerTokens.totalTokens} tok',
                       style: theme.textTheme.bodySmall,
