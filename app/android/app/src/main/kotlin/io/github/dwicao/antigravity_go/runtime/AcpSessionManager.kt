@@ -164,8 +164,10 @@ class AcpSessionManager(
             }
             if (reused != null && reused.process.isAlive) {
                 try {
+                    val nextPromptId = reused.nextId.getAndIncrement()
                     reused.promptSummary = summarizeCommand(prompt, maxLen = 64)
                     reused.currentTurnId = turnId
+                    reused.promptReqId = nextPromptId
                     reused.promptSent = true
                     sessions[turnId] = reused
                     onTasksChanged()
@@ -215,8 +217,6 @@ class AcpSessionManager(
                                 )
                         )
                     }
-                    val nextPromptId = reused.nextId.getAndIncrement()
-                    reused.promptReqId = nextPromptId
                     sendJson(
                         reused.writer,
                         JSONObject()
@@ -612,7 +612,12 @@ class AcpSessionManager(
                             )
                         )
 
-                        if (msgId is Number && msgId.toInt() == active.promptReqId) {
+                        val numericMsgId = when (msgId) {
+                            is Number -> msgId.toInt()
+                            is String -> msgId.toIntOrNull()
+                            else -> null
+                        }
+                        if (numericMsgId != null && numericMsgId == active.promptReqId) {
                             sessions.remove(activeTid)
                             active.currentTurnId = null
                             active.promptReqId = -1

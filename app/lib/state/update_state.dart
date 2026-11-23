@@ -17,7 +17,7 @@ String formatUpdateBytes(int bytes) {
 }
 
 class AppUpdateState {
-  static const String currentVersion = '1.0.12';
+  static const String currentVersion = '1.0.13';
 
   const AppUpdateState({
     this.checking = false,

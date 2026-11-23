@@ -497,4 +497,79 @@ void main() {
     await tester.pumpAndSettle();
     expect(openedDiff, isTrue);
   });
+
+  test('CiWatchNotifier tracks latched runId via gh run view and expires on repeated empty polls', () async {
+    var pollStep = 0;
+    final notifier = CiWatchNotifier()
+      ..shellRunnerOverride = ((cmd, cwd) async {
+        pollStep++;
+        if (pollStep == 1 && cmd.contains('gh run list')) {
+          return '[{"databaseId": 777, "workflowName": "CI", "status": "in_progress", "conclusion": "", "url": "https://github.com/o/r/runs/777", "headBranch": "main"}]';
+        }
+        if (cmd.contains('gh run view 777')) {
+          return '{"databaseId": 777, "workflowName": "CI", "status": "completed", "conclusion": "success", "url": "https://github.com/o/r/runs/777", "headBranch": "main"}';
+        }
+        return '[]';
+      });
+
+    final container = ProviderContainer(
+      overrides: [ciWatchProvider.overrideWith(() => notifier)],
+    );
+    addTearDown(container.dispose);
+
+    final ci = container.read(ciWatchProvider.notifier);
+    await ci.watchLatestRun(cwd: '/tmp/repo', sessionId: 's1');
+    expect(container.read(ciWatchProvider), hasLength(1));
+    expect(container.read(ciWatchProvider).first.runId, '777');
+
+    await ci.pollOnce(container.read(ciWatchProvider).first.id);
+    expect(container.read(ciWatchProvider), isEmpty);
+
+    // Repeated empty responses (e.g. non-git directory) expire cleanly instead of looping forever.
+    final emptyNotifier = CiWatchNotifier()
+      ..shellRunnerOverride = ((cmd, cwd) async => '[]');
+    final container2 = ProviderContainer(
+      overrides: [ciWatchProvider.overrideWith(() => emptyNotifier)],
+    );
+    addTearDown(container2.dispose);
+    final ci2 = container2.read(ciWatchProvider.notifier);
+    await ci2.watchLatestRun(cwd: '/tmp/not-a-repo', sessionId: 's2');
+    expect(container2.read(ciWatchProvider), hasLength(1));
+    final watchId = container2.read(ciWatchProvider).first.id;
+    for (var i = 0; i < 4; i++) {
+      await ci2.pollOnce(watchId);
+    }
+    expect(container2.read(ciWatchProvider), isEmpty);
+  });
+
+  test('ChatNotifier.extractGitPushCwd resolves push directory and ignores failed or dry-run commands', () {
+    const failedPush = ChatToolStep(
+      id: 't1',
+      toolName: 'run_command',
+      state: ToolCallState.failed,
+      parameters: {'CommandLine': 'cd /sdcard/Projects/repo && git push'},
+      error: 'rejected',
+    );
+    const dryRunPush = ChatToolStep(
+      id: 't2',
+      toolName: 'run_command',
+      state: ToolCallState.completed,
+      parameters: {'CommandLine': 'git push --dry-run'},
+    );
+    const cdPush = ChatToolStep(
+      id: 't3',
+      toolName: 'run_command',
+      state: ToolCallState.completed,
+      parameters: {'CommandLine': 'cd /sdcard/Projects/antigravity-go && git push origin main'},
+    );
+
+    expect(
+      ChatNotifier.extractGitPushCwd([failedPush, dryRunPush], fallbackCwd: '/tmp/fallback'),
+      isNull,
+    );
+    expect(
+      ChatNotifier.extractGitPushCwd([cdPush], fallbackCwd: '/tmp/fallback'),
+      '/sdcard/Projects/antigravity-go',
+    );
+  });
 }

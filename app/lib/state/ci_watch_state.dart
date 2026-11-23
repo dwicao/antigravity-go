@@ -66,7 +66,13 @@ final ciWatchProvider =
 /// runs as cancellable background tasks, and feeds failure logs straight back
 /// to the agent so CI failures are detected & fixed without user prompting.
 class CiWatchNotifier extends Notifier<List<CiWatchItem>> {
+  static const int _maxInitialMisses = 4;
+  static const int _maxTrackedMisses = 10;
+  static const Duration _maxWatchDuration = Duration(minutes: 45);
+
   final Map<String, Timer> _timers = {};
+  final Map<String, int> _missCounts = {};
+  final Set<String> _inFlightPolls = {};
   CiShellRunner? shellRunnerOverride;
   CiCompletionCallback? onCompletedCallback;
 
@@ -77,6 +83,8 @@ class CiWatchNotifier extends Notifier<List<CiWatchItem>> {
         t.cancel();
       }
       _timers.clear();
+      _missCounts.clear();
+      _inFlightPolls.clear();
     });
     return const [];
   }
@@ -98,6 +106,39 @@ class CiWatchNotifier extends Notifier<List<CiWatchItem>> {
       );
     }
     return RuntimeBridge.instance.runShellCommand(command: command, cwd: cwd);
+  }
+
+  static Object? _decodeJsonPayload(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return null;
+    final arrStart = trimmed.indexOf('[');
+    final objStart = trimmed.indexOf('{');
+    int start = -1;
+    String closeChar = '';
+    if (arrStart >= 0 && (objStart < 0 || arrStart < objStart)) {
+      start = arrStart;
+      closeChar = ']';
+    } else if (objStart >= 0) {
+      start = objStart;
+      closeChar = '}';
+    }
+    if (start < 0) return null;
+    final end = trimmed.lastIndexOf(closeChar);
+    if (end <= start) return null;
+    try {
+      return jsonDecode(trimmed.substring(start, end + 1));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _recordMissOrExpire(String watchId, {required bool hasRunId}) {
+    final misses = (_missCounts[watchId] ?? 0) + 1;
+    _missCounts[watchId] = misses;
+    final limit = hasRunId ? _maxTrackedMisses : _maxInitialMisses;
+    if (misses >= limit) {
+      cancelWatch(watchId);
+    }
   }
 
   Future<void> watchLatestRun({
@@ -131,30 +172,60 @@ class CiWatchNotifier extends Notifier<List<CiWatchItem>> {
     final idx = state.indexWhere((w) => w.id == watchId);
     if (idx < 0) {
       _timers.remove(watchId)?.cancel();
+      _missCounts.remove(watchId);
       return;
     }
     final watch = state[idx];
+    if (DateTime.now().difference(watch.startedAt) > _maxWatchDuration) {
+      cancelWatch(watchId);
+      return;
+    }
+    if (!_inFlightPolls.add(watchId)) return;
 
     try {
-      final raw = await _exec(
-        'gh run list -L 1 --json databaseId,workflowName,status,conclusion,url,headBranch 2>/dev/null || echo "[]"',
-        watch.cwd,
-      );
+      final hasRunId = watch.runId != null && watch.runId!.isNotEmpty;
+      final cmd = hasRunId
+          ? 'gh run view ${watch.runId} --json databaseId,workflowName,status,conclusion,url,headBranch 2>/dev/null || echo "{}"'
+          : 'gh run list -L 5 --json databaseId,workflowName,status,conclusion,url,headBranch 2>/dev/null || echo "[]"';
+      final raw = await _exec(cmd, watch.cwd);
       if (!ref.mounted) return;
-      final trimmed = raw.trim();
-      if (!trimmed.startsWith('[')) return;
-      final list = jsonDecode(trimmed) as List<dynamic>;
-      if (list.isEmpty) return;
-      final latest = list.first as Map<String, dynamic>;
-      final runId = latest['databaseId']?.toString() ?? '';
+
+      final decoded = _decodeJsonPayload(raw);
+      Map<String, dynamic>? latest;
+      if (decoded is Map<String, dynamic> && decoded.isNotEmpty) {
+        latest = decoded;
+      } else if (decoded is List<dynamic> && decoded.isNotEmpty) {
+        final candidates = decoded.whereType<Map<String, dynamic>>().toList();
+        if (candidates.isNotEmpty) {
+          if (watch.branch != null && watch.branch!.isNotEmpty) {
+            latest = candidates
+                    .where((r) => r['headBranch']?.toString() == watch.branch)
+                    .firstOrNull ??
+                candidates.first;
+          } else {
+            latest = candidates.first;
+          }
+        }
+      }
+
+      if (latest == null) {
+        _recordMissOrExpire(watchId, hasRunId: hasRunId);
+        return;
+      }
+      _missCounts[watchId] = 0;
+
+      final runId = latest['databaseId']?.toString() ?? watch.runId ?? '';
       final workflow =
           latest['workflowName']?.toString() ?? watch.workflowName;
       final status = latest['status']?.toString() ?? 'in_progress';
       final conclusion = latest['conclusion']?.toString() ?? '';
-      final url = latest['url']?.toString();
+      final url = latest['url']?.toString() ?? watch.htmlUrl;
       final headBranch = latest['headBranch']?.toString() ?? watch.branch;
 
-      if (status != 'completed') {
+      final isCompleted = status.trim().toLowerCase() == 'completed' ||
+          conclusion.trim().isNotEmpty;
+
+      if (!isCompleted) {
         final curIdx = state.indexWhere((w) => w.id == watchId);
         if (curIdx >= 0) {
           final next = [...state];
@@ -170,11 +241,14 @@ class CiWatchNotifier extends Notifier<List<CiWatchItem>> {
         return;
       }
 
-      // Run finished! Stop watching and surface result / auto-fix trigger.
+      // Run finished! Stop watching immediately and surface result / auto-fix trigger.
       _timers.remove(watchId)?.cancel();
+      _missCounts.remove(watchId);
       state = state.where((w) => w.id != watchId).toList();
 
-      final passed = conclusion == 'success';
+      final normalizedConclusion =
+          conclusion.trim().isEmpty ? 'completed' : conclusion.trim();
+      final passed = normalizedConclusion.toLowerCase() == 'success';
       String? failedLog;
       if (!passed && runId.isNotEmpty) {
         failedLog = (await _exec(
@@ -188,7 +262,7 @@ class CiWatchNotifier extends Notifier<List<CiWatchItem>> {
       final linkText = url != null && url.isNotEmpty ? ' ($url)' : '';
       final summary = passed
           ? 'CI passed: **$workflow** run `$runId`$linkText.'
-          : 'CI failed ($conclusion): **$workflow** run `$runId`$linkText.\n```\n${failedLog ?? "Check GitHub Actions logs."}\n```';
+          : 'CI failed ($normalizedConclusion): **$workflow** run `$runId`$linkText.\n```\n${failedLog ?? "Check GitHub Actions logs."}\n```';
       final autoFixPrompt = passed
           ? null
           : '[Auto CI Watch] GitHub Actions CI run `$runId` ($workflow) failed on `${headBranch ?? "main"}`. Diagnose and fix the failure cleanly:\n\n```\n${failedLog ?? "gh run view $runId --log-failed"}\n```';
@@ -198,7 +272,7 @@ class CiWatchNotifier extends Notifier<List<CiWatchItem>> {
           watch: watch.copyWith(
             runId: runId,
             workflowName: workflow,
-            status: conclusion,
+            status: normalizedConclusion,
             branch: headBranch,
             htmlUrl: url,
           ),
@@ -208,12 +282,19 @@ class CiWatchNotifier extends Notifier<List<CiWatchItem>> {
         );
       }
     } catch (_) {
-      // Transient CLI / offline error; keep watching until cancelled.
+      _recordMissOrExpire(
+        watchId,
+        hasRunId: watch.runId != null && watch.runId!.isNotEmpty,
+      );
+    } finally {
+      _inFlightPolls.remove(watchId);
     }
   }
 
   void cancelWatch(String watchId) {
     _timers.remove(watchId)?.cancel();
+    _missCounts.remove(watchId);
+    _inFlightPolls.remove(watchId);
     state = state.where((w) => w.id != watchId).toList();
   }
 
@@ -222,6 +303,8 @@ class CiWatchNotifier extends Notifier<List<CiWatchItem>> {
       t.cancel();
     }
     _timers.clear();
+    _missCounts.clear();
+    _inFlightPolls.clear();
     state = const [];
   }
 }

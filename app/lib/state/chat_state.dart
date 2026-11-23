@@ -285,6 +285,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
   StreamSubscription<RuntimeEvent>? _wakeupSub;
   String? _loadedSessionId;
   String? _wakeupAssistantId;
+  Timer? _wakeupFinalizeTimer;
+  final Set<String> _completedAssistantIds = <String>{};
   final AcpCodec _wakeupCodec = AcpCodec();
   final HarnessLoopDetector _loopDetector = HarnessLoopDetector();
   final Set<String> _seenLoopCallIds = <String>{};
@@ -373,6 +375,9 @@ class ChatNotifier extends Notifier<ChatThreadState> {
   ChatThreadState build() {
     ref.onDispose(() {
       _stallWatchdog?.cancel();
+      _wakeupFinalizeTimer?.cancel();
+      _wakeupFinalizeTimer = null;
+      _wakeupAssistantId = null;
       _activeSub?.cancel();
       _wakeupSub?.cancel();
     });
@@ -395,10 +400,64 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     return const ChatThreadState();
   }
 
+  void _finalizeWakeupMessage(String sessionId, String assistantId) {
+    _wakeupFinalizeTimer?.cancel();
+    _wakeupFinalizeTimer = null;
+    if (!ref.mounted) return;
+    if (_wakeupAssistantId == assistantId) {
+      _wakeupAssistantId = null;
+    }
+    final msgs = _messagesForSession(sessionId);
+    final idx = msgs.indexWhere((m) => m.id == assistantId);
+    if (idx >= 0 && msgs[idx].isStreaming) {
+      final cur = msgs[idx];
+      final finalizedTools = _finalizeTools(cur.tools);
+      final stats = _computeTurnStats(
+        assistantId: assistantId,
+        text: cur.text,
+        thoughts: cur.thoughts,
+        usage: cur.usage,
+      );
+      _replaceMessageInSession(
+        sessionId,
+        idx,
+        cur.copyWith(
+          isStreaming: false,
+          tools: finalizedTools,
+          durationSeconds: cur.durationSeconds ?? stats.durationSec,
+          tokensPerSecond: cur.tokensPerSecond ?? stats.tokPerSec,
+          modelId: _turnModelId[assistantId] ?? cur.modelId,
+          reasoningEffort: _turnEffort[assistantId] ?? cur.reasoningEffort,
+          completedAt: cur.completedAt ?? DateTime.now(),
+          changedFiles: cur.changedFiles.isNotEmpty
+              ? cur.changedFiles
+              : extractChangedFilesFromTools(finalizedTools),
+        ),
+      );
+    }
+    _turnStartedAt.remove(assistantId);
+    _firstOutputAt.remove(assistantId);
+    _turnModelId.remove(assistantId);
+    _turnEffort.remove(assistantId);
+    if (_activeStreamingSessionId != _loadedSessionId &&
+        _loadedSessionId == sessionId) {
+      state = state.copyWith(tokensPerSecond: 0);
+    }
+    unawaited(_persistMessages(sessionId, _messagesForSession(sessionId)));
+  }
+
   void _handleAcpWakeup(RuntimeEvent evt) {
     if (!ref.mounted || evt.stdoutLine == null) return;
     final parsed = _wakeupCodec.parseNotificationOrRequest(evt.stdoutLine!);
     if (parsed == null) return;
+    if (parsed is! AgyTextDeltaEvent &&
+        parsed is! AgyThoughtDeltaEvent &&
+        parsed is! AgyToolCallEvent &&
+        parsed is! AgyPermissionRequestEvent &&
+        parsed is! AgyTurnResultEvent &&
+        parsed is! AgyErrorEvent) {
+      return;
+    }
 
     final sessionsState = ref.read(sessionsProvider);
     AgySessionSummary? target;
@@ -412,6 +471,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     }
     target ??= sessionsState.activeSession;
     if (target == null) return;
+    // Never create a duplicate wakeup bubble if this session already has an active foreground turn.
+    if (_activeStreamingSessionId == target.id) return;
 
     final msgs = _messagesForSession(target.id);
     var assistantId = _wakeupAssistantId;
@@ -419,6 +480,11 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         ? -1
         : msgs.indexWhere((m) => m.id == assistantId && m.isStreaming);
     if (idx < 0) {
+      if (parsed is AgyTurnResultEvent || parsed is AgyErrorEvent) {
+        return;
+      }
+      if (parsed is AgyTextDeltaEvent && parsed.delta.trim().isEmpty) return;
+      if (parsed is AgyThoughtDeltaEvent && parsed.delta.trim().isEmpty) return;
       assistantId = const Uuid().v4();
       _wakeupAssistantId = assistantId;
       _turnStartedAt[assistantId] = DateTime.now();
@@ -435,8 +501,15 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     }
     _handleEvent(target, assistantId!, parsed);
     if (parsed is AgyTurnResultEvent || parsed is AgyErrorEvent) {
-      _wakeupAssistantId = null;
-      unawaited(_persistMessages(target.id, _messagesForSession(target.id)));
+      _finalizeWakeupMessage(target.id, assistantId);
+    } else {
+      final targetId = target.id;
+      final aid = assistantId;
+      _wakeupFinalizeTimer?.cancel();
+      _wakeupFinalizeTimer = Timer(
+        const Duration(seconds: 2),
+        () => _finalizeWakeupMessage(targetId, aid),
+      );
     }
   }
 
@@ -975,6 +1048,9 @@ class ChatNotifier extends Notifier<ChatThreadState> {
               usage: evt.usage,
               sessionId: session.id,
             );
+        if (_activeStreamingSessionId == session.id) {
+          unawaited(_completeStreaming(session, assistantId));
+        }
       case AgyErrorEvent():
         if (evt.requiresAuth) {
           ref.read(authProvider.notifier).refresh();
@@ -1032,6 +1108,9 @@ class ChatNotifier extends Notifier<ChatThreadState> {
             requiresAuth: !current.isCompactionSummary && evt.requiresAuth,
           ),
         );
+        if (_activeStreamingSessionId == session.id) {
+          unawaited(_completeStreaming(session, assistantId));
+        }
     }
   }
 
@@ -1079,54 +1158,127 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     _completeStreaming(session, assistantId);
   }
 
+  static String? extractGitPushCwd(
+    List<ChatToolStep> tools, {
+    required String fallbackCwd,
+  }) {
+    for (final t in tools.reversed) {
+      if (t.state == ToolCallState.failed ||
+          (t.error != null && t.error!.isNotEmpty)) {
+        continue;
+      }
+      final cmd = (t.parameters['CommandLine'] ??
+              t.parameters['command'] ??
+              '')
+          .toString();
+      final lower = cmd.toLowerCase();
+      if (!lower.contains('git push') ||
+          lower.contains('--dry-run') ||
+          lower.contains('--help')) {
+        continue;
+      }
+      final paramCwd = (t.parameters['Cwd'] ??
+              t.parameters['cwd'] ??
+              t.parameters['workdir'] ??
+              '')
+          .toString()
+          .trim();
+      if (paramCwd.isNotEmpty) return paramCwd;
+
+      final cdMatch = RegExp(
+        r'''(?:^|[;&|]\s*)cd\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))''',
+      ).firstMatch(cmd);
+      if (cdMatch != null) {
+        final dir = (cdMatch.group(1) ??
+                cdMatch.group(2) ??
+                cdMatch.group(3) ??
+                '')
+            .trim();
+        if (dir.isNotEmpty) return dir;
+      }
+
+      final gitCMatch = RegExp(
+        r'''git\s+-C\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))''',
+      ).firstMatch(cmd);
+      if (gitCMatch != null) {
+        final dir = (gitCMatch.group(1) ??
+                gitCMatch.group(2) ??
+                gitCMatch.group(3) ??
+                '')
+            .trim();
+        if (dir.isNotEmpty) return dir;
+      }
+
+      if (fallbackCwd.isNotEmpty) return fallbackCwd;
+    }
+    return null;
+  }
+
   Future<void> _completeStreaming(
     AgySessionSummary session,
     String assistantId,
   ) async {
+    if (!_completedAssistantIds.add(assistantId)) return;
+    _wakeupFinalizeTimer?.cancel();
+    _wakeupFinalizeTimer = null;
+    _wakeupAssistantId = null;
     _stallWatchdog?.cancel();
     _stallWatchdog = null;
+    final subToCancel = _activeSub;
+    _activeSub = null;
+    if (subToCancel != null) {
+      unawaited(subToCancel.cancel());
+    }
+    final hadLocalRequest = _activeLocalRequest != null;
     _activeLocalRequest = null;
     if (_activeStreamingSessionId == session.id) {
       _activeStreamingSessionId = null;
     }
     final msgs = _messagesForSession(session.id);
-    final idx = msgs.indexWhere((m) => m.id == assistantId);
-    if (idx >= 0) {
-      final cur = msgs[idx];
+    var updatedMsgs = msgs;
+    var changed = false;
+    final now = DateTime.now();
+    for (var i = 0; i < msgs.length; i++) {
+      final cur = msgs[i];
+      if (cur.id != assistantId && !cur.isStreaming) continue;
       final finalizedTools = _finalizeTools(cur.tools);
-      final resolvedText =
-          cur.isCompactionSummary && cur.text.trim().isEmpty
-              ? _compactionFallbackText(assistantId)
-              : cur.text;
+      final resolvedText = cur.id == assistantId &&
+              cur.isCompactionSummary &&
+              cur.text.trim().isEmpty
+          ? _compactionFallbackText(assistantId)
+          : cur.text;
       if (cur.isStreaming ||
           cur.durationSeconds == null ||
           cur.completedAt == null ||
           resolvedText != cur.text ||
           !identical(finalizedTools, cur.tools)) {
+        if (!changed) {
+          updatedMsgs = [...msgs];
+          changed = true;
+        }
         final stats = _computeTurnStats(
-          assistantId: assistantId,
+          assistantId: cur.id,
           text: resolvedText,
           thoughts: cur.thoughts,
           usage: cur.usage,
         );
-        _replaceMessageInSession(
-          session.id,
-          idx,
-          cur.copyWith(
-            text: resolvedText,
-            isStreaming: false,
-            tools: finalizedTools,
-            durationSeconds: cur.durationSeconds ?? stats.durationSec,
-            tokensPerSecond: cur.tokensPerSecond ?? stats.tokPerSec,
-            modelId: _turnModelId[assistantId] ?? cur.modelId,
-            reasoningEffort: _turnEffort[assistantId] ?? cur.reasoningEffort,
-            completedAt: cur.completedAt ?? DateTime.now(),
-            changedFiles: cur.changedFiles.isNotEmpty
-                ? cur.changedFiles
-                : extractChangedFilesFromTools(finalizedTools),
-          ),
+        updatedMsgs[i] = cur.copyWith(
+          text: resolvedText,
+          isStreaming: false,
+          tools: finalizedTools,
+          durationSeconds: cur.durationSeconds ?? stats.durationSec,
+          tokensPerSecond: cur.tokensPerSecond ?? stats.tokPerSec,
+          modelId: _turnModelId[cur.id] ?? cur.modelId,
+          reasoningEffort: _turnEffort[cur.id] ?? cur.reasoningEffort,
+          completedAt: cur.completedAt ?? now,
+          changedFiles: cur.changedFiles.isNotEmpty
+              ? cur.changedFiles
+              : extractChangedFilesFromTools(finalizedTools),
         );
       }
+    }
+    if (changed) {
+      _updateSessionMessages(session.id, updatedMsgs);
     }
     final pendingCompact = _pendingCompactions.remove(assistantId);
     if (pendingCompact?.tempRemoteId != null &&
@@ -1152,32 +1304,24 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     );
     await _persistMessages(session.id, persisted);
 
-    // If this turn ran a `git push` command on a local repo, automatically watch CI.
-    if (_activeLocalRequest != null ||
-        persisted.any((m) => m.id == assistantId)) {
+    // If this turn ran a `git push` command, automatically watch CI in that repo.
+    if (hadLocalRequest || persisted.any((m) => m.id == assistantId)) {
       final completedMsg =
           persisted.where((m) => m.id == assistantId).firstOrNull;
-      final ranGitPush = completedMsg?.tools.any((t) {
-            final cmd = (t.parameters['CommandLine'] ??
-                    t.parameters['command'] ??
-                    '')
-                .toString()
-                .toLowerCase();
-            return cmd.contains('git push');
-          }) ??
-          false;
-      if (ranGitPush && ref.mounted) {
-        final cwd = session.workspacePath.isNotEmpty
-            ? session.workspacePath
-            : ref.read(projectsProvider).activeProject.primaryFolder;
-        if (cwd.isNotEmpty) {
-          unawaited(
-            ref.read(ciWatchProvider.notifier).watchLatestRun(
-                  cwd: cwd,
-                  sessionId: session.id,
-                ),
-          );
-        }
+      final fallbackCwd = session.workspacePath.isNotEmpty
+          ? session.workspacePath
+          : ref.read(projectsProvider).activeProject.primaryFolder;
+      final pushCwd = extractGitPushCwd(
+        completedMsg?.tools ?? const [],
+        fallbackCwd: fallbackCwd,
+      );
+      if (pushCwd != null && pushCwd.isNotEmpty && ref.mounted) {
+        unawaited(
+          ref.read(ciWatchProvider.notifier).watchLatestRun(
+                cwd: pushCwd,
+                sessionId: session.id,
+              ),
+        );
       }
     }
 
@@ -1200,6 +1344,9 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         await RuntimeBridge.instance.cancelTurn(turnId);
       } catch (_) {}
     }
+    _wakeupFinalizeTimer?.cancel();
+    _wakeupFinalizeTimer = null;
+    _wakeupAssistantId = null;
     _stallWatchdog?.cancel();
     _stallWatchdog = null;
     _activeLocalRequest = null;
