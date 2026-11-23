@@ -6,6 +6,8 @@ import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
+import java.util.Base64
+import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.TimeUnit
@@ -45,6 +47,9 @@ class AcpSessionManager(
         @Volatile var currentTurnId: String? = null,
         @Volatile var promptReqId: Int = -1,
         @Volatile var promptSent: Boolean = false,
+        @Volatile var pendingPromptText: String? = null,
+        @Volatile var pendingPromptAttachments: List<String> = emptyList(),
+        val pendingConfigReqIds: MutableSet<Int> = Collections.synchronizedSet(mutableSetOf()),
         val cancelled: AtomicBoolean = AtomicBoolean(false),
         val exitEmittedTurnIds: ConcurrentHashMap<String, Boolean> = ConcurrentHashMap(),
         val terminals: ConcurrentHashMap<String, TerminalProc> = ConcurrentHashMap(),
@@ -193,6 +198,8 @@ class AcpSessionManager(
         modeCli: String?,
         skipPermissions: Boolean,
         agent: String? = null,
+        attachments: List<String> = emptyList(),
+        clientVersion: String = "1.0.15",
         onAuthenticated: () -> Unit,
     ) {
         executor.submit {
@@ -201,12 +208,14 @@ class AcpSessionManager(
             val reused = takeLiveWorker(existingSessionId, agent)
             if (reused != null && reused.process.isAlive) {
                 try {
-                    val nextPromptId = reused.nextId.getAndIncrement()
                     reused.promptSummary = summarizeCommand(prompt, maxLen = 64)
                     reused.cancelled.set(false)
                     reused.currentTurnId = turnId
-                    reused.promptReqId = nextPromptId
-                    reused.promptSent = true
+                    reused.pendingConfigReqIds.clear()
+                    reused.promptReqId = -1
+                    reused.promptSent = false
+                    reused.pendingPromptText = prompt
+                    reused.pendingPromptAttachments = attachments
                     sessions[turnId] = reused
                     onTasksChanged()
                     emit(
@@ -219,80 +228,29 @@ class AcpSessionManager(
                                 .toString(),
                         )
                     )
-                    if (!modelId.isNullOrBlank()) {
-                        sendJson(
-                            reused.writer,
-                            JSONObject()
-                                .put("jsonrpc", "2.0")
-                                .put("id", reused.nextId.getAndIncrement())
-                                .put("method", "session/set_config_option")
-                                .put(
-                                    "params",
-                                    JSONObject()
-                                        .put("sessionId", existingSessionId)
-                                        .put("configId", "model")
-                                        .put("value", modelId)
-                                )
-                        )
-                    }
-                    if (!effort.isNullOrBlank() &&
-                        !(modelId?.lowercase()?.contains("orchestrator") == true)
-                    ) {
-                        sendJson(
-                            reused.writer,
-                            JSONObject()
-                                .put("jsonrpc", "2.0")
-                                .put("id", reused.nextId.getAndIncrement())
-                                .put("method", "session/set_config_option")
-                                .put(
-                                    "params",
-                                    JSONObject()
-                                        .put("sessionId", existingSessionId)
-                                        .put("configId", "effort")
-                                        .put("value", effort)
-                                )
-                        )
-                    }
-                    val safeModeCli = when (modeCli?.lowercase()?.trim()) {
-                        null, "", "auto" -> if (skipPermissions) null else "default"
-                        else -> modeCli
-                    }
-                    if (!safeModeCli.isNullOrBlank()) {
-                        sendJson(
-                            reused.writer,
-                            JSONObject()
-                                .put("jsonrpc", "2.0")
-                                .put("id", reused.nextId.getAndIncrement())
-                                .put("method", "session/set_config_option")
-                                .put(
-                                    "params",
-                                    JSONObject()
-                                        .put("sessionId", existingSessionId)
-                                        .put("configId", "mode")
-                                        .put("value", safeModeCli)
-                                )
-                        )
-                    }
-                    sendJson(
-                        reused.writer,
-                        JSONObject()
-                            .put("jsonrpc", "2.0")
-                            .put("id", nextPromptId)
-                            .put("method", "session/prompt")
-                            .put(
-                                "params",
-                                JSONObject()
-                                    .put("sessionId", existingSessionId)
-                                    .put(
-                                        "prompt",
-                                        JSONArray().put(
-                                            JSONObject()
-                                                .put("type", "text")
-                                                .put("text", prompt)
-                                        )
-                                    )
-                            )
+                    queueConfigOptions(
+                        active = reused,
+                        writer = reused.writer,
+                        sessionId = existingSessionId!!,
+                        modelId = modelId,
+                        effort = effort,
+                        modeCli = modeCli,
+                        skipPermissions = skipPermissions,
                     )
+                    if (reused.pendingConfigReqIds.isEmpty()) {
+                        val nextPromptId = reused.nextId.getAndIncrement()
+                        reused.promptReqId = nextPromptId
+                        reused.promptSent = true
+                        reused.pendingPromptText = null
+                        reused.pendingPromptAttachments = emptyList()
+                        sendPromptRpc(
+                            writer = reused.writer,
+                            reqId = nextPromptId,
+                            sessionId = existingSessionId,
+                            prompt = prompt,
+                            attachments = attachments,
+                        )
+                    }
                     return@submit
                 } catch (t: Throwable) {
                     log("Reused ACP worker failed, falling back to fresh spawn: ${t.message}")
@@ -377,7 +335,7 @@ class AcpSessionManager(
                                     "clientInfo",
                                     JSONObject()
                                         .put("name", "antigravity-go")
-                                        .put("version", "1.0.1")
+                                        .put("version", clientVersion)
                                 )
                                 .put(
                                     "clientCapabilities",
@@ -396,11 +354,8 @@ class AcpSessionManager(
 
                 var acpSessionId: String? = null
                 var newSessionReqId = -1
-                var promptReqId = -1
-                var promptSent = false
                 var triedLoadFallback = false
                 var triedNewFallback = false
-                val pendingConfigReqIds = mutableSetOf<Int>()
 
                 BufferedReader(InputStreamReader(proc.inputStream)).use { reader ->
                     var line: String?
@@ -529,92 +484,31 @@ class AcpSessionManager(
 
                             if (acpSessionId != null) {
                                 active.sessionId = acpSessionId
-                                pendingConfigReqIds.clear()
-                                if (!modelId.isNullOrBlank()) {
-                                    val cfgId = active.nextId.getAndIncrement()
-                                    pendingConfigReqIds.add(cfgId)
-                                    sendJson(
-                                        writer,
-                                        JSONObject()
-                                            .put("jsonrpc", "2.0")
-                                            .put("id", cfgId)
-                                            .put("method", "session/set_config_option")
-                                            .put(
-                                                "params",
-                                                JSONObject()
-                                                    .put("sessionId", acpSessionId)
-                                                    .put("configId", "model")
-                                                    .put("value", modelId)
-                                            )
-                                    )
-                                }
-                                if (!effort.isNullOrBlank() &&
-                                    !(modelId?.lowercase()?.contains("orchestrator") == true)
-                                ) {
-                                    val cfgId = active.nextId.getAndIncrement()
-                                    pendingConfigReqIds.add(cfgId)
-                                    sendJson(
-                                        writer,
-                                        JSONObject()
-                                            .put("jsonrpc", "2.0")
-                                            .put("id", cfgId)
-                                            .put("method", "session/set_config_option")
-                                            .put(
-                                                "params",
-                                                JSONObject()
-                                                    .put("sessionId", acpSessionId)
-                                                    .put("configId", "effort")
-                                                    .put("value", effort)
-                                            )
-                                    )
-                                }
-                                val safeModeCli = when (modeCli?.lowercase()?.trim()) {
-                                    null, "", "auto" -> if (skipPermissions) null else "default"
-                                    else -> modeCli
-                                }
-                                if (!safeModeCli.isNullOrBlank()) {
-                                    val cfgId = active.nextId.getAndIncrement()
-                                    pendingConfigReqIds.add(cfgId)
-                                    sendJson(
-                                        writer,
-                                        JSONObject()
-                                            .put("jsonrpc", "2.0")
-                                            .put("id", cfgId)
-                                            .put("method", "session/set_config_option")
-                                            .put(
-                                                "params",
-                                                JSONObject()
-                                                    .put("sessionId", acpSessionId)
-                                                    .put("configId", "mode")
-                                                    .put("value", safeModeCli)
-                                            )
-                                    )
-                                }
+                                active.pendingConfigReqIds.clear()
+                                active.pendingPromptText = prompt
+                                active.pendingPromptAttachments = attachments
+                                queueConfigOptions(
+                                    active = active,
+                                    writer = writer,
+                                    sessionId = acpSessionId,
+                                    modelId = modelId,
+                                    effort = effort,
+                                    modeCli = modeCli,
+                                    skipPermissions = skipPermissions,
+                                )
 
-                                if (pendingConfigReqIds.isEmpty()) {
-                                    promptReqId = active.nextId.getAndIncrement()
-                                    active.promptReqId = promptReqId
-                                    promptSent = true
+                                if (active.pendingConfigReqIds.isEmpty()) {
+                                    val nextPid = active.nextId.getAndIncrement()
+                                    active.promptReqId = nextPid
                                     active.promptSent = true
-                                    sendJson(
-                                        writer,
-                                        JSONObject()
-                                            .put("jsonrpc", "2.0")
-                                            .put("id", promptReqId)
-                                            .put("method", "session/prompt")
-                                            .put(
-                                                "params",
-                                                JSONObject()
-                                                    .put("sessionId", acpSessionId)
-                                                    .put(
-                                                        "prompt",
-                                                        JSONArray().put(
-                                                            JSONObject()
-                                                                .put("type", "text")
-                                                                .put("text", prompt)
-                                                        )
-                                                    )
-                                            )
+                                    active.pendingPromptText = null
+                                    active.pendingPromptAttachments = emptyList()
+                                    sendPromptRpc(
+                                        writer = writer,
+                                        reqId = nextPid,
+                                        sessionId = acpSessionId,
+                                        prompt = prompt,
+                                        attachments = attachments,
                                     )
                                 }
                             } else {
@@ -624,31 +518,27 @@ class AcpSessionManager(
                         }
 
                         // Wait until all session/set_config_option responses arrive before sending session/prompt.
-                        if (msgId is Number && pendingConfigReqIds.remove(msgId.toInt())) {
-                            if (pendingConfigReqIds.isEmpty() && !promptSent && acpSessionId != null) {
-                                promptReqId = active.nextId.getAndIncrement()
-                                active.promptReqId = promptReqId
-                                promptSent = true
+                        val configMsgId = when (msgId) {
+                            is Number -> msgId.toInt()
+                            is String -> msgId.toIntOrNull()
+                            else -> null
+                        }
+                        if (configMsgId != null && active.pendingConfigReqIds.remove(configMsgId)) {
+                            val activeSid = active.sessionId
+                            if (active.pendingConfigReqIds.isEmpty() && !active.promptSent && activeSid != null) {
+                                val nextPid = active.nextId.getAndIncrement()
+                                active.promptReqId = nextPid
                                 active.promptSent = true
-                                sendJson(
-                                    writer,
-                                    JSONObject()
-                                        .put("jsonrpc", "2.0")
-                                        .put("id", promptReqId)
-                                        .put("method", "session/prompt")
-                                        .put(
-                                            "params",
-                                            JSONObject()
-                                                .put("sessionId", acpSessionId)
-                                                .put(
-                                                    "prompt",
-                                                    JSONArray().put(
-                                                        JSONObject()
-                                                            .put("type", "text")
-                                                            .put("text", prompt)
-                                                    )
-                                                )
-                                        )
+                                val pText = active.pendingPromptText ?: prompt
+                                val pAtt = active.pendingPromptAttachments
+                                active.pendingPromptText = null
+                                active.pendingPromptAttachments = emptyList()
+                                sendPromptRpc(
+                                    writer = writer,
+                                    reqId = nextPid,
+                                    sessionId = activeSid,
+                                    prompt = pText,
+                                    attachments = pAtt,
                                 )
                             }
                             continue
@@ -1187,6 +1077,124 @@ class AcpSessionManager(
                     )
             )
         }
+    }
+
+    private fun queueConfigOptions(
+        active: ActiveAcp,
+        writer: OutputStreamWriter,
+        sessionId: String,
+        modelId: String?,
+        effort: String?,
+        modeCli: String?,
+        skipPermissions: Boolean,
+    ) {
+        if (!modelId.isNullOrBlank()) {
+            val cfgId = active.nextId.getAndIncrement()
+            active.pendingConfigReqIds.add(cfgId)
+            sendJson(
+                writer,
+                JSONObject()
+                    .put("jsonrpc", "2.0")
+                    .put("id", cfgId)
+                    .put("method", "session/set_config_option")
+                    .put(
+                        "params",
+                        JSONObject()
+                            .put("sessionId", sessionId)
+                            .put("configId", "model")
+                            .put("value", modelId)
+                    )
+            )
+        }
+        if (!effort.isNullOrBlank() && !(modelId?.lowercase()?.contains("orchestrator") == true)) {
+            val cfgId = active.nextId.getAndIncrement()
+            active.pendingConfigReqIds.add(cfgId)
+            sendJson(
+                writer,
+                JSONObject()
+                    .put("jsonrpc", "2.0")
+                    .put("id", cfgId)
+                    .put("method", "session/set_config_option")
+                    .put(
+                        "params",
+                        JSONObject()
+                            .put("sessionId", sessionId)
+                            .put("configId", "effort")
+                            .put("value", effort)
+                    )
+            )
+        }
+        val safeModeCli = when (modeCli?.lowercase()?.trim()) {
+            null, "", "auto" -> if (skipPermissions) null else "default"
+            else -> modeCli
+        }
+        if (!safeModeCli.isNullOrBlank()) {
+            val cfgId = active.nextId.getAndIncrement()
+            active.pendingConfigReqIds.add(cfgId)
+            sendJson(
+                writer,
+                JSONObject()
+                    .put("jsonrpc", "2.0")
+                    .put("id", cfgId)
+                    .put("method", "session/set_config_option")
+                    .put(
+                        "params",
+                        JSONObject()
+                            .put("sessionId", sessionId)
+                            .put("configId", "mode")
+                            .put("value", safeModeCli)
+                    )
+            )
+        }
+    }
+
+    private fun sendPromptRpc(
+        writer: OutputStreamWriter,
+        reqId: Int,
+        sessionId: String,
+        prompt: String,
+        attachments: List<String>,
+    ) {
+        val blocks = JSONArray().put(
+            JSONObject()
+                .put("type", "text")
+                .put("text", prompt)
+        )
+        for (rawPath in attachments) {
+            val file = File(rawPath)
+            if (!file.isFile) continue
+            val ext = file.extension.lowercase()
+            val mime = when (ext) {
+                "png" -> "image/png"
+                "jpg", "jpeg" -> "image/jpeg"
+                "webp" -> "image/webp"
+                "gif" -> "image/gif"
+                else -> null
+            } ?: continue
+            if (file.length() <= 0L || file.length() > 4L * 1024L * 1024L) continue
+            runCatching {
+                val b64 = Base64.getEncoder().encodeToString(file.readBytes())
+                blocks.put(
+                    JSONObject()
+                        .put("type", "image")
+                        .put("mimeType", mime)
+                        .put("data", b64)
+                )
+            }
+        }
+        sendJson(
+            writer,
+            JSONObject()
+                .put("jsonrpc", "2.0")
+                .put("id", reqId)
+                .put("method", "session/prompt")
+                .put(
+                    "params",
+                    JSONObject()
+                        .put("sessionId", sessionId)
+                        .put("prompt", blocks)
+                )
+        )
     }
 
     private fun sendJson(writer: OutputStreamWriter, obj: JSONObject) {

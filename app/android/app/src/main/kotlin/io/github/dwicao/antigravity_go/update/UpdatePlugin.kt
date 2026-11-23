@@ -180,12 +180,14 @@ class UpdatePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChanne
                             )
                         )
 
-                        if (!expectedSha256.isNullOrBlank()) {
-                            val actualSha = sha256Of(apkFile)
-                            if (actualSha != expectedSha256) {
-                                apkFile.delete()
-                                throw IllegalStateException("APK SHA-256 mismatch")
-                            }
+                        if (expectedSha256.isNullOrBlank() || !expectedSha256.matches(Regex("^[0-9a-f]{64}$"))) {
+                            apkFile.delete()
+                            throw IllegalStateException("Missing or invalid expected APK SHA-256 checksum")
+                        }
+                        val actualSha = sha256Of(apkFile)
+                        if (actualSha != expectedSha256) {
+                            apkFile.delete()
+                            throw IllegalStateException("APK SHA-256 mismatch")
                         }
 
                         emitEvent(

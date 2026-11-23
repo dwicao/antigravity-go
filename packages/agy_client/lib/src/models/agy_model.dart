@@ -93,6 +93,7 @@ class AgyModelCatalog {
       quotaGroup: QuotaGroup.orchestrator,
       description: 'Plans with Gemini 4 Neon and executes with Gemini 4 Hydrogen',
       supportsEffort: false,
+      contextWindow: '1M',
       isDefault: true,
       requiresPaidPlan: true,
     ),
@@ -103,6 +104,7 @@ class AgyModelCatalog {
       quotaGroup: QuotaGroup.geminiPro,
       description: 'Frontier reasoning model for architecture & multi-step coding',
       supportsExtraEffort: true,
+      contextWindow: '1M',
       requiresPaidPlan: true,
     ),
     AgyModelInfo(
@@ -111,6 +113,7 @@ class AgyModelCatalog {
       provider: 'Google DeepMind',
       quotaGroup: QuotaGroup.geminiPro,
       description: 'Deep reasoning model for Ultra & Enterprise plans',
+      contextWindow: '1M',
       requiresPaidPlan: true,
     ),
     AgyModelInfo(
@@ -119,6 +122,7 @@ class AgyModelCatalog {
       provider: 'Google DeepMind',
       quotaGroup: QuotaGroup.geminiArgon,
       description: 'High-precision Gemini 4 Argon reasoning model',
+      contextWindow: '1M',
       requiresPaidPlan: true,
     ),
     AgyModelInfo(
@@ -128,6 +132,7 @@ class AgyModelCatalog {
       quotaGroup: QuotaGroup.geminiFlash,
       description: 'Fast everyday coding, refactoring, and execution model',
       supportsExtraEffort: true,
+      contextWindow: '1M',
       requiresPaidPlan: true,
     ),
     AgyModelInfo(
@@ -178,12 +183,23 @@ class AgyModelCatalog {
         return m;
       }
     }
+    final inferredContext = (normalized.contains('gemini') ||
+            normalized.contains('orchestrator') ||
+            normalized.contains('neon') ||
+            normalized.contains('carbon') ||
+            normalized.contains('argon') ||
+            normalized.contains('hydrogen'))
+        ? '1M'
+        : normalized.contains('claude')
+            ? '200K'
+            : '160K';
     return AgyModelInfo(
       id: modelId,
       displayName: modelId,
       provider: inferProvider(modelId),
       quotaGroup: inferQuotaGroup(modelId),
       description: 'Discovered model from active Antigravity account',
+      contextWindow: inferredContext,
     );
   }
 

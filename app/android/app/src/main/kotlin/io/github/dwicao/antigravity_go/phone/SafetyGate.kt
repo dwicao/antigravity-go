@@ -42,9 +42,16 @@ object SafetyGate {
         packageName: String?,
         action: String,
         targetLabel: String? = null,
+        isPasswordField: Boolean = false,
     ): Decision {
         if (!strictMode) {
             return Decision(allowed = true, reason = "Allowed (strict mode relaxed by user)")
+        }
+        if (isPasswordField) {
+            return Decision(
+                allowed = false,
+                reason = "Blocked by SafetyGate: password/PIN input field protected",
+            )
         }
         val pkg = packageName?.lowercase().orEmpty()
         for (token in protectedPackageTokens) {

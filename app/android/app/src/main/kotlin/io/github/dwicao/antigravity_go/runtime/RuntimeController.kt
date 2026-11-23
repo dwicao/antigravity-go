@@ -49,7 +49,12 @@ class RuntimeController private constructor(private val appContext: Context) {
     private val activeTurns = ConcurrentHashMap<String, Process>()
     private val cancelledTurns = ConcurrentHashMap.newKeySet<String>()
     private val nonAcpTurnMeta = ConcurrentHashMap<String, Pair<String, Long>>()
+    private val terminalSessions = ConcurrentHashMap<String, Process>()
+    private val terminalWriters = ConcurrentHashMap<String, OutputStreamWriter>()
     private val toolchainLock = Any()
+
+    @Volatile
+    private var busyboxHealthy: Boolean = false
     private val acpManager = AcpSessionManager(
         executor = executor,
         emit = { payload -> handleAcpOrProcessEvent(payload) },
@@ -423,6 +428,9 @@ class RuntimeController private constructor(private val appContext: Context) {
         }
         activeTurns.clear()
         nonAcpTurnMeta.clear()
+        for ((sid, _) in terminalSessions.entries.toList()) {
+            closeTerminalSession(sid)
+        }
         appContext.stopService(Intent(appContext, AgyService::class.java))
         phase = if (binaryFile.exists()) RuntimePhase.stopped else RuntimePhase.uninstalled
         statusMessage = "Stopped"
@@ -465,10 +473,52 @@ class RuntimeController private constructor(private val appContext: Context) {
         }
     }
 
+    private fun isBusyboxHealthy(busyboxBin: File): Boolean {
+        if (!busyboxBin.isFile) return false
+        return try {
+            val probe = ProcessBuilder(busyboxBin.absolutePath, "true")
+                .directory(tmpDir)
+                .redirectErrorStream(true)
+                .start()
+            val done = probe.waitFor(3, TimeUnit.SECONDS)
+            if (!done) {
+                probe.destroyForcibly()
+                return false
+            }
+            if (probe.exitValue() != 0) return false
+
+            val lsProbe = ProcessBuilder(busyboxBin.absolutePath, "ls", tmpDir.absolutePath)
+                .directory(tmpDir)
+                .redirectErrorStream(true)
+                .start()
+            val lsDone = lsProbe.waitFor(3, TimeUnit.SECONDS)
+            if (!lsDone) {
+                lsProbe.destroyForcibly()
+                return false
+            }
+            lsProbe.exitValue() == 0
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun clearBusyboxSymlinks() {
+        val toCheck = busyboxApplets + "busybox"
+        for (name in toCheck) {
+            if (name == "agy" || name == "bash") continue
+            val linkFile = File(binDir, name)
+            val target = runCatching { Os.readlink(linkFile.absolutePath) }.getOrNull()
+            if (target != null && (target.contains("libbusybox.so") || target.endsWith("/busybox"))) {
+                runCatching { linkFile.delete() }
+            }
+        }
+    }
+
     /**
      * Links bundled native static `libbash.so` & `libbusybox.so` into `runtime/bin/`
      * (refreshing symlink targets whenever an APK upgrade relocates `nativeLibraryDir`)
      * so `agy` tools always find `bash`, `sh`, `ls`, `find`, `grep`, `sed`, `awk`, etc.
+     * Verifies BusyBox executes cleanly under Android seccomp before shadowing `/system/bin`.
      */
     fun ensureShellToolchain() {
         synchronized(toolchainLock) {
@@ -489,12 +539,16 @@ class RuntimeController private constructor(private val appContext: Context) {
                     }
                 }
 
-                if (bundledBusybox != null) {
+                if (bundledBusybox != null && isBusyboxHealthy(bundledBusybox)) {
+                    busyboxHealthy = true
                     ensureSymlink(File(binDir, "busybox"), bundledBusybox.absolutePath)
                     for (applet in busyboxApplets) {
                         if (applet == "agy" || applet == "bash") continue
                         ensureSymlink(File(binDir, applet), bundledBusybox.absolutePath)
                     }
+                } else {
+                    busyboxHealthy = false
+                    clearBusyboxSymlinks()
                 }
 
                 // DSH-go style storage shortcuts inside HOME & default workspace.
@@ -970,16 +1024,102 @@ class RuntimeController private constructor(private val appContext: Context) {
         return code to out
     }
 
+    fun startTerminalSession(sessionId: String, cwd: String?) {
+        closeTerminalSession(sessionId)
+        executor.submit {
+            try {
+                val env = buildEnv(
+                    mapOf(
+                        "TERM" to "xterm-256color",
+                        "PS1" to "\\w \\$ ",
+                    )
+                )
+                val shell = if (bashFile.canExecute()) bashFile.absolutePath else "/system/bin/sh"
+                val pb = ProcessBuilder(shell, "-i")
+                val dir = if (!cwd.isNullOrBlank()) File(cwd) else workspaceDir
+                if (!dir.exists()) dir.mkdirs()
+                pb.directory(dir)
+                pb.environment().putAll(env)
+                pb.redirectErrorStream(true)
+                val proc = pb.start()
+                terminalSessions[sessionId] = proc
+                terminalWriters[sessionId] = OutputStreamWriter(proc.outputStream, Charsets.UTF_8)
+
+                val reader = BufferedReader(InputStreamReader(proc.inputStream, Charsets.UTF_8))
+                val buf = CharArray(2048)
+                var n: Int
+                while (reader.read(buf).also { n = it } >= 0) {
+                    if (n > 0) {
+                        emit(
+                            mapOf(
+                                "kind" to "terminal_output",
+                                "sessionId" to sessionId,
+                                "stdoutLine" to String(buf, 0, n),
+                            )
+                        )
+                    }
+                }
+                val code = runCatching { proc.waitFor() }.getOrDefault(0)
+                emit(
+                    mapOf(
+                        "kind" to "terminal_exit",
+                        "sessionId" to sessionId,
+                        "exitCode" to code,
+                    )
+                )
+            } catch (t: Throwable) {
+                emit(
+                    mapOf(
+                        "kind" to "terminal_output",
+                        "sessionId" to sessionId,
+                        "stdoutLine" to "\r\n[terminal error: ${t.message}]\r\n",
+                    )
+                )
+                emit(
+                    mapOf(
+                        "kind" to "terminal_exit",
+                        "sessionId" to sessionId,
+                        "exitCode" to 1,
+                    )
+                )
+            } finally {
+                terminalSessions.remove(sessionId)
+                terminalWriters.remove(sessionId)?.let { runCatching { it.close() } }
+            }
+        }
+    }
+
+    fun writeTerminalInput(sessionId: String, input: String): Boolean {
+        val writer = terminalWriters[sessionId] ?: return false
+        return try {
+            synchronized(writer) {
+                writer.write(input)
+                writer.flush()
+            }
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    fun closeTerminalSession(sessionId: String) {
+        terminalWriters.remove(sessionId)?.let { runCatching { it.close() } }
+        terminalSessions.remove(sessionId)?.let { runCatching { it.destroyForcibly() } }
+    }
+
     fun diagnoseRuntime(): Map<String, Any?> {
         val env = buildEnv()
         val bashWorks = try {
-            runShell("which bash ls find grep sed awk | head -n 6", null).trim()
+            runShell(
+                "for t in bash ls find grep sed awk; do p=\$(command -v \"\$t\" 2>/dev/null || true); echo \"\$t: \${p:-MISSING}\"; done",
+                null,
+            ).trim()
         } catch (t: Throwable) {
             "error: ${t.message}"
         }
         val storageProbe = if (hasStorageAccess()) {
             try {
-                runShell("ls -la /sdcard/Download 2>&1 | head -n 10", null).trim()
+                runShell("ls -la /sdcard/Download 2>&1 | /system/bin/head -n 10", null).trim()
             } catch (t: Throwable) {
                 "error: ${t.message}"
             }
@@ -993,6 +1133,7 @@ class RuntimeController private constructor(private val appContext: Context) {
             "bashPath" to bashFile.absolutePath,
             "bashExecutable" to bashFile.canExecute(),
             "busyboxExecutable" to File(binDir, "busybox").canExecute(),
+            "busyboxHealthy" to busyboxHealthy,
             "allFilesAccess" to hasStorageAccess(),
             "batteryOptimizationExempt" to batteryExempt,
             "safeState" to safeState.wire,
@@ -1032,6 +1173,15 @@ class RuntimeController private constructor(private val appContext: Context) {
         CommandSafetyGuard.enabled = enabled
     }
 
+    private fun appVersionName(): String {
+        return try {
+            val info = appContext.packageManager.getPackageInfo(appContext.packageName, 0)
+            info.versionName ?: "1.0.15"
+        } catch (_: Throwable) {
+            "1.0.15"
+        }
+    }
+
     fun startTurn(
         turnId: String,
         prompt: String,
@@ -1050,6 +1200,7 @@ class RuntimeController private constructor(private val appContext: Context) {
         disableSlashCommands: Boolean = false,
         continueLast: Boolean = false,
         remoteAgent: String? = null,
+        attachments: List<String> = emptyList(),
     ) {
         if (!binaryFile.exists()) {
             emit(mapOf("kind" to "turn_exit", "turnId" to turnId, "exitCode" to 127))
@@ -1132,6 +1283,8 @@ class RuntimeController private constructor(private val appContext: Context) {
                 modeCli = safeCliMode,
                 skipPermissions = skipPermissions,
                 agent = agent?.takeIf { it.isNotBlank() },
+                attachments = attachments,
+                clientVersion = appVersionName(),
                 onAuthenticated = {
                     if (!authMarkerFile.exists()) {
                         writeAuthMarker(true)
@@ -1443,12 +1596,39 @@ class RuntimeController private constructor(private val appContext: Context) {
         val f = File(path)
         if (!f.exists() || !f.isFile) return ""
         val maxBytes = 2 * 1024 * 1024L
+        val sample = ByteArray(512)
+        val sampleLen = f.inputStream().use { it.read(sample) }
+        if (sampleLen > 0) {
+            for (i in 0 until sampleLen) {
+                if (sample[i] == 0.toByte()) {
+                    return "[Binary file (${f.length()} bytes) — preview not available as text]"
+                }
+            }
+        }
         if (f.length() <= maxBytes) return f.readText()
         return f.inputStream().bufferedReader().use { reader ->
             val buf = CharArray(512 * 1024)
             val n = reader.read(buf)
             val head = if (n > 0) String(buf, 0, n) else ""
             "$head\n\n...[truncated file > 2MB: ${f.length()} bytes]..."
+        }
+    }
+
+    fun createDirectory(path: String): Boolean {
+        return try {
+            File(path).mkdirs()
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    fun deleteWorkspaceEntry(path: String): Boolean {
+        return try {
+            val f = File(path)
+            if (!f.exists()) return false
+            if (f.isDirectory) f.deleteRecursively() else f.delete()
+        } catch (_: Throwable) {
+            false
         }
     }
 

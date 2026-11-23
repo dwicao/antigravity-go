@@ -17,9 +17,34 @@ class AutomationsPage extends ConsumerWidget {
     final theme = Theme.of(context);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Automations')),
+      appBar: AppBar(
+        title: const Text('Automations'),
+        actions: [
+          if (items.any((a) => a.enabled))
+            IconButton(
+              tooltip: 'Check due schedules now',
+              onPressed: () async {
+                final ran = await ref
+                    .read(automationsProvider.notifier)
+                    .runDueAutomations();
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        ran > 0
+                            ? 'Triggered $ran scheduled automation(s).'
+                            : 'No automations are currently due.',
+                      ),
+                    ),
+                  );
+                }
+              },
+              icon: const Icon(Icons.schedule_send_outlined),
+            ),
+        ],
+      ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _createAutomation(context, ref),
+        onPressed: () => _openAutomationDialog(context, ref),
         icon: const Icon(Icons.add),
         label: const Text('New Automation'),
       ),
@@ -44,7 +69,7 @@ class AutomationsPage extends ConsumerWidget {
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      'Schedule repeatable prompts or run one-click workflows on your projects.',
+                      'Schedule repeatable prompts (e.g. Every 30m, Hourly, Daily · 09:00) or run one-click workflows on your projects.',
                       textAlign: TextAlign.center,
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
@@ -59,6 +84,9 @@ class AutomationsPage extends ConsumerWidget {
               itemCount: items.length,
               itemBuilder: (context, i) {
                 final a = items[i];
+                final lastRunText = a.lastRunAt != null
+                    ? ' · Last: ${a.lastStatus ?? "Ran"} (${a.lastRunAt!.toLocal().hour.toString().padLeft(2, '0')}:${a.lastRunAt!.toLocal().minute.toString().padLeft(2, '0')})'
+                    : '';
                 return Card(
                   child: Padding(
                     padding: const EdgeInsets.all(14),
@@ -88,7 +116,7 @@ class AutomationsPage extends ConsumerWidget {
                           ],
                         ),
                         Text(
-                          a.scheduleLabel,
+                          '${a.scheduleLabel}$lastRunText',
                           style: theme.textTheme.labelSmall?.copyWith(
                             color: theme.colorScheme.primary,
                           ),
@@ -124,6 +152,15 @@ class AutomationsPage extends ConsumerWidget {
                             ),
                             const Spacer(),
                             IconButton(
+                              tooltip: 'Edit',
+                              onPressed: () => _openAutomationDialog(
+                                context,
+                                ref,
+                                existing: a,
+                              ),
+                              icon: const Icon(Icons.edit_outlined),
+                            ),
+                            IconButton(
                               tooltip: 'Delete',
                               onPressed: () => ref
                                   .read(automationsProvider.notifier)
@@ -141,20 +178,28 @@ class AutomationsPage extends ConsumerWidget {
     );
   }
 
-  Future<void> _createAutomation(BuildContext context, WidgetRef ref) async {
-    final nameCtrl = TextEditingController();
-    final promptCtrl = TextEditingController();
-    final schedCtrl = TextEditingController(text: 'Daily · 09:00');
-    var tier = AutomationModelTier.flash;
+  Future<void> _openAutomationDialog(
+    BuildContext context,
+    WidgetRef ref, {
+    AgyAutomation? existing,
+  }) async {
+    final nameCtrl = TextEditingController(text: existing?.name ?? '');
+    final promptCtrl = TextEditingController(text: existing?.prompt ?? '');
+    final schedCtrl = TextEditingController(
+      text: existing?.scheduleLabel ?? 'Daily · 09:00',
+    );
+    var tier = existing?.modelTier ?? AutomationModelTier.flash;
+    const presets = ['Every 15m', 'Every 1h', 'Hourly', 'Daily · 09:00'];
 
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setLocal) => AlertDialog(
-          title: const Text('New Automation'),
+          title: Text(existing == null ? 'New Automation' : 'Edit Automation'),
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 TextField(
                   controller: nameCtrl,
@@ -164,12 +209,26 @@ class AutomationsPage extends ConsumerWidget {
                 TextField(
                   controller: schedCtrl,
                   decoration: const InputDecoration(
-                    labelText: 'Schedule / Cron',
+                    labelText: 'Schedule (Every 15m, Hourly, Daily · 09:00)',
                   ),
+                ),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 4,
+                  children: presets
+                      .map(
+                        (p) => ActionChip(
+                          visualDensity: VisualDensity.compact,
+                          label: Text(p),
+                          onPressed: () => schedCtrl.text = p,
+                        ),
+                      )
+                      .toList(),
                 ),
                 const SizedBox(height: 8),
                 DropdownButtonFormField<AutomationModelTier>(
-                  value: tier,
+                  initialValue: tier,
                   decoration: const InputDecoration(labelText: 'Model Tier'),
                   items: AutomationModelTier.values
                       .map(
@@ -202,7 +261,7 @@ class AutomationsPage extends ConsumerWidget {
             ),
             FilledButton(
               onPressed: () => Navigator.of(ctx).pop(true),
-              child: const Text('Create'),
+              child: Text(existing == null ? 'Create' : 'Save'),
             ),
           ],
         ),
@@ -210,16 +269,29 @@ class AutomationsPage extends ConsumerWidget {
     );
 
     if (ok == true && promptCtrl.text.trim().isNotEmpty) {
-      final projectId = ref.read(projectsProvider).activeProjectId;
-      await ref.read(automationsProvider.notifier).add(
-            name: nameCtrl.text.trim().isEmpty
-                ? 'Automation'
-                : nameCtrl.text.trim(),
-            prompt: promptCtrl.text.trim(),
-            scheduleLabel: schedCtrl.text.trim(),
-            modelTier: tier,
-            projectId: projectId,
-          );
+      if (existing != null) {
+        await ref.read(automationsProvider.notifier).update(
+              existing.copyWith(
+                name: nameCtrl.text.trim().isEmpty
+                    ? existing.name
+                    : nameCtrl.text.trim(),
+                prompt: promptCtrl.text.trim(),
+                scheduleLabel: schedCtrl.text.trim(),
+                modelTier: tier,
+              ),
+            );
+      } else {
+        final projectId = ref.read(projectsProvider).activeProjectId;
+        await ref.read(automationsProvider.notifier).add(
+              name: nameCtrl.text.trim().isEmpty
+                  ? 'Automation'
+                  : nameCtrl.text.trim(),
+              prompt: promptCtrl.text.trim(),
+              scheduleLabel: schedCtrl.text.trim(),
+              modelTier: tier,
+              projectId: projectId,
+            );
+      }
     }
 
     nameCtrl.dispose();

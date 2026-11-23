@@ -114,6 +114,18 @@ class HostsNotifier extends Notifier<HostsState> {
     return normalized;
   }
 
+  Future<void> saveHostFingerprint(String hostId, String fingerprint) async {
+    final list = state.sshHosts
+        .map(
+          (h) => h.id == hostId
+              ? h.copyWith(hostKeyFingerprint: fingerprint)
+              : h,
+        )
+        .toList();
+    state = state.copyWith(sshHosts: list);
+    await _saveList(list);
+  }
+
   Future<void> removeHost(String id) async {
     final next = state.sshHosts.where((h) => h.id != id).toList();
     final nextActive = state.activeHostId == id ? 'local' : state.activeHostId;

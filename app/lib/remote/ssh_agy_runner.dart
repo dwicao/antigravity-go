@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:agy_client/agy_client.dart';
 import 'package:dartssh2/dartssh2.dart';
@@ -11,12 +12,17 @@ class SshAgyRunner {
   SshAgyRunner._();
   static final SshAgyRunner instance = SshAgyRunner._();
 
-  SSHSession? _activeSession;
+  final Map<String, SSHSession> _activeSessions = {};
+
+  static String formatFingerprint(Uint8List bytes) {
+    return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(':');
+  }
 
   Future<SSHClient> connect(
     SshHostConfig host, {
     String? password,
     String? privateKeyPem,
+    FutureOr<void> Function(String fingerprint)? onTrustFirstKey,
   }) async {
     final socket = await SSHSocket.connect(
       host.hostname,
@@ -30,6 +36,17 @@ class SshAgyRunner {
           ? SSHKeyPair.fromPem(privateKeyPem)
           : null,
       onPasswordRequest: password != null ? () => password : null,
+      onVerifyHostKey: (type, fingerprint) async {
+        final hex = '$type:${formatFingerprint(fingerprint)}';
+        final pinned = host.hostKeyFingerprint?.trim();
+        if (pinned != null && pinned.isNotEmpty) {
+          return pinned == hex || pinned == formatFingerprint(fingerprint);
+        }
+        if (onTrustFirstKey != null) {
+          await onTrustFirstKey(hex);
+        }
+        return true;
+      },
     );
   }
 
@@ -37,11 +54,13 @@ class SshAgyRunner {
     SshHostConfig host, {
     String? password,
     String? privateKeyPem,
+    FutureOr<void> Function(String fingerprint)? onTrustFirstKey,
   }) async {
     final client = await connect(
       host,
       password: password,
       privateKeyPem: privateKeyPem,
+      onTrustFirstKey: onTrustFirstKey,
     );
     try {
       final agy = _shellQuote(host.agyBinary);
@@ -55,14 +74,18 @@ class SshAgyRunner {
   Stream<AgyChatEvent> runPrompt({
     required SshHostConfig host,
     required AgyPromptRequest request,
+    String? turnId,
     String? password,
     String? privateKeyPem,
+    FutureOr<void> Function(String fingerprint)? onTrustFirstKey,
   }) async* {
     final client = await connect(
       host,
       password: password,
       privateKeyPem: privateKeyPem,
+      onTrustFirstKey: onTrustFirstKey,
     );
+    final sessionKey = turnId ?? 'default';
 
     try {
       final cwd = request.workspacePath.isEmpty
@@ -121,7 +144,7 @@ class SshAgyRunner {
           ? 'cd ${_shellQuote(cwd)} && $envPrefix${args.join(' ')}'
           : '$envPrefix${args.join(' ')}';
       final session = await client.execute(cmd);
-      _activeSession = session;
+      _activeSessions[sessionKey] = session;
 
       final stdoutLines = session.stdout
           .cast<List<int>>()
@@ -158,25 +181,106 @@ class SshAgyRunner {
         );
       }
     } finally {
-      _activeSession = null;
+      _activeSessions.remove(sessionKey);
       client.close();
     }
   }
 
-  Future<void> cancelActive() async {
-    _activeSession?.close();
-    _activeSession = null;
+  Future<void> cancelActive({String? turnId}) async {
+    if (turnId != null) {
+      _activeSessions.remove(turnId)?.close();
+      return;
+    }
+    for (final s in _activeSessions.values.toList()) {
+      s.close();
+    }
+    _activeSessions.clear();
+  }
+
+  Future<Map<String, Object?>> createCheckpoint({
+    required SshHostConfig host,
+    required String cwd,
+    String? password,
+    String? privateKeyPem,
+    FutureOr<void> Function(String fingerprint)? onTrustFirstKey,
+  }) async {
+    final dir = cwd.trim().isEmpty ? host.defaultWorkspace : cwd.trim();
+    const script =
+        'if [ "\$(git rev-parse --is-inside-work-tree 2>/dev/null)" != "true" ]; then echo "NOT_GIT"; exit 0; fi; '
+        'H=\$(git rev-parse --verify HEAD 2>/dev/null || true); '
+        'if [ -z "\$H" ]; then echo "NO_HEAD"; exit 0; fi; '
+        'IDX=\$(mktemp /tmp/agy-cp-XXXXXX); '
+        'GIT_INDEX_FILE="\$IDX" git read-tree "\$H" && '
+        'GIT_INDEX_FILE="\$IDX" git add -A && '
+        'T=\$(GIT_INDEX_FILE="\$IDX" git write-tree) && '
+        'HT=\$(git rev-parse "\${H}^{tree}"); '
+        'rm -f "\$IDX"; '
+        'if [ "\$T" = "\$HT" ]; then echo "REF:\$H"; else C=\$(git commit-tree "\$T" -p "\$H" -m "agy-checkpoint"); echo "REF:\${C:-\$H}"; fi';
+    final out = await runRemoteCommand(
+      host: host,
+      command: script,
+      cwd: dir,
+      password: password,
+      privateKeyPem: privateKeyPem,
+      onTrustFirstKey: onTrustFirstKey,
+    );
+    final refLine = out
+        .split('\n')
+        .map((l) => l.trim())
+        .where((l) => l.startsWith('REF:'))
+        .firstOrNull;
+    if (refLine == null) {
+      return const {'ok': false, 'reason': 'Not a git repository'};
+    }
+    final sha = refLine.substring(4).trim();
+    return {'ok': sha.isNotEmpty, 'ref': sha};
+  }
+
+  Future<Map<String, Object?>> restoreCheckpoint({
+    required SshHostConfig host,
+    required String cwd,
+    required String ref,
+    String? password,
+    String? privateKeyPem,
+    FutureOr<void> Function(String fingerprint)? onTrustFirstKey,
+  }) async {
+    final cleanRef = ref.trim();
+    if (!RegExp(r'^[0-9a-fA-F]{7,64}$').hasMatch(cleanRef)) {
+      return const {'ok': false, 'message': 'Invalid checkpoint ref'};
+    }
+    final dir = cwd.trim().isEmpty ? host.defaultWorkspace : cwd.trim();
+    final script =
+        'SUBJ=\$(git log -1 --format=%s "$cleanRef" 2>/dev/null || true); '
+        'if [ "\$SUBJ" = "agy-checkpoint" ]; then '
+        'BASE=\$(git rev-parse --verify "$cleanRef^1" 2>/dev/null || echo "$cleanRef"); '
+        'git reset --hard "\$BASE" && git read-tree --reset -u "$cleanRef" && git reset --mixed "\$BASE" && echo "OK"; '
+        'else git reset --hard "$cleanRef" && git clean -fd && echo "OK"; fi';
+    final out = await runRemoteCommand(
+      host: host,
+      command: script,
+      cwd: dir,
+      password: password,
+      privateKeyPem: privateKeyPem,
+      onTrustFirstKey: onTrustFirstKey,
+    );
+    return {
+      'ok': out.contains('OK'),
+      'ref': cleanRef,
+      'message': out.trim(),
+    };
   }
 
   Future<String> probeUsage({
     required SshHostConfig host,
     String? password,
     String? privateKeyPem,
+    FutureOr<void> Function(String fingerprint)? onTrustFirstKey,
   }) async {
     final client = await connect(
       host,
       password: password,
       privateKeyPem: privateKeyPem,
+      onTrustFirstKey: onTrustFirstKey,
     );
     try {
       final agy = _shellQuote(host.agyBinary);
@@ -195,11 +299,13 @@ class SshAgyRunner {
     String? cwd,
     String? password,
     String? privateKeyPem,
+    FutureOr<void> Function(String fingerprint)? onTrustFirstKey,
   }) async {
     final client = await connect(
       host,
       password: password,
       privateKeyPem: privateKeyPem,
+      onTrustFirstKey: onTrustFirstKey,
     );
     try {
       final dir = (cwd != null && cwd.isNotEmpty) ? cwd : host.defaultWorkspace;

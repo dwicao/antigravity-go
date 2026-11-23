@@ -1,6 +1,7 @@
 import 'package:agy_client/agy_client.dart';
 import 'package:antigravity_go/state/chat_state.dart';
 import 'package:antigravity_go/state/harness_state.dart';
+import 'package:antigravity_go/state/settings_state.dart';
 import 'package:antigravity_go/ui/chat/message_bubble.dart';
 import 'package:antigravity_go/ui/harness/harness_page.dart';
 import 'package:flutter/material.dart';
@@ -8,21 +9,41 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+class _FixedChatNotifier extends ChatNotifier {
+  _FixedChatNotifier(this._initial);
+
+  final ChatThreadState _initial;
+
+  @override
+  ChatThreadState build() => _initial;
+}
+
+class _FixedSettingsNotifier extends SettingsNotifier {
+  _FixedSettingsNotifier(this._initial);
+
+  final AppSettings _initial;
+
+  @override
+  AppSettings build() => _initial;
+}
+
 void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
   });
 
-  test('ChatMessage persists checkpointRef through JSON serialization', () {
+  test('ChatMessage persists checkpointRef and contextTokens through JSON serialization', () {
     final original = ChatMessage(
       id: 'u1',
       role: ChatRole.user,
       text: 'Refactor auth flow',
       createdAt: DateTime.utc(2026, 11, 23, 12, 0),
       checkpointRef: 'abc1234def5678',
+      contextTokens: 42500,
     );
     final decoded = ChatMessage.fromJson(original.toJson());
     expect(decoded.checkpointRef, 'abc1234def5678');
+    expect(decoded.contextTokens, 42500);
     expect(decoded.text, 'Refactor auth flow');
     expect(decoded.isCompactionSummary, isFalse);
 
@@ -57,7 +78,8 @@ void main() {
     // Wait for initial microtask loads (sessions / runtime / settings).
     await Future<void>.delayed(const Duration(milliseconds: 20));
     final notifier = container.read(chatProvider.notifier);
-    final hugeText = List<String>.filled(1000000, 'u').join();
+    // 4M chars (~1.05M estimated tokens) saturates the 1M Gemini context window.
+    final hugeText = List<String>.filled(4000000, 'u').join();
 
     await notifier.appendSystemFeedback(hugeText);
     await notifier.appendSystemFeedback('Second message before compaction');
@@ -73,6 +95,100 @@ void main() {
     expect(afterCompact.compactedMessages, 2);
     expect(afterCompact.percentage, lessThan(5));
     expect(afterCompact.shouldCompact, isFalse);
+  });
+
+  test('contextBudgetProvider keeps 1-prompt multi-tool turn with 970K cumulative inputTokens accurate on 1M model', () {
+    final tools = List<ChatToolStep>.generate(
+      15,
+      (i) => ChatToolStep(
+        id: 't-$i',
+        toolName: 'read_file',
+        state: ToolCallState.completed,
+        parameters: {'path': 'file_$i.dart'},
+        output: 'content $i',
+      ),
+    );
+    final container = ProviderContainer(
+      overrides: [
+        settingsProvider.overrideWith(
+          () => _FixedSettingsNotifier(
+            const AppSettings(selectedModelId: 'gemini-4-hydrogen'),
+          ),
+        ),
+        chatProvider.overrideWith(
+          () => _FixedChatNotifier(
+            ChatThreadState(
+              messages: [
+                ChatMessage(
+                  id: 'u1',
+                  role: ChatRole.user,
+                  text: 'Inspect repo and summarize architecture',
+                  createdAt: DateTime.utc(2026, 11, 23, 12, 0),
+                ),
+                ChatMessage(
+                  id: 'a1',
+                  role: ChatRole.assistant,
+                  text: 'Here is the architecture summary.',
+                  createdAt: DateTime.utc(2026, 11, 23, 12, 1),
+                  modelId: 'gemini-4-hydrogen',
+                  tools: tools,
+                  usage: const TokenUsage(
+                    inputTokens: 970000,
+                    outputTokens: 3500,
+                    totalTokens: 973500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    final snap = container.read(contextBudgetProvider);
+    expect(snap.budgetTokens, 1000000);
+    expect(snap.percentage, lessThan(10));
+    expect(snap.shouldCompact, isFalse);
+  });
+
+  test('contextBudgetProvider prefers real step contextTokens when reported', () {
+    final container = ProviderContainer(
+      overrides: [
+        settingsProvider.overrideWith(
+          () => _FixedSettingsNotifier(
+            const AppSettings(selectedModelId: 'gemini-4-neon'),
+          ),
+        ),
+        chatProvider.overrideWith(
+          () => _FixedChatNotifier(
+            ChatThreadState(
+              messages: [
+                ChatMessage(
+                  id: 'a1',
+                  role: ChatRole.assistant,
+                  text: 'Done.',
+                  createdAt: DateTime.utc(2026, 11, 23, 12, 1),
+                  modelId: 'gemini-4-neon',
+                  contextTokens: 120000,
+                  usage: const TokenUsage(
+                    inputTokens: 950000,
+                    outputTokens: 2000,
+                    contextTokens: 120000,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    final snap = container.read(contextBudgetProvider);
+    expect(snap.budgetTokens, 1000000);
+    expect(snap.usedTokens, 120000);
+    expect(snap.percentage, 12);
   });
 
   testWidgets('MessageBubble renders Rewind button on user messages with checkpoint', (tester) async {

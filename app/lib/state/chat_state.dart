@@ -9,6 +9,7 @@ import 'package:uuid/uuid.dart';
 import '../remote/ssh_agy_runner.dart';
 import '../runtime/runtime_bridge.dart';
 import '../runtime/runtime_models.dart';
+import '../ui/chat/secret_mask.dart';
 import 'auth_state.dart';
 import 'ci_watch_state.dart';
 import 'harness_state.dart';
@@ -48,8 +49,8 @@ class ChatToolStep {
         'toolName': toolName,
         'state': state.name,
         'parameters': parameters,
-        if (output != null) 'output': output,
-        if (error != null) 'error': error,
+        if (output != null) 'output': AgySecretMask.mask(output!),
+        if (error != null) 'error': AgySecretMask.mask(error!),
         if (durationSeconds != null) 'durationSeconds': durationSeconds,
         if (startedAt != null) 'startedAt': startedAt!.toIso8601String(),
       };
@@ -93,6 +94,7 @@ class ChatMessage {
     this.steps = const [],
     this.checkpointRef,
     this.isCompactionSummary = false,
+    this.contextTokens,
   });
 
   final String id;
@@ -114,6 +116,7 @@ class ChatMessage {
   final List<ChatMilestoneStep> steps;
   final String? checkpointRef;
   final bool isCompactionSummary;
+  final int? contextTokens;
 
   ChatMessage copyWith({
     String? text,
@@ -131,6 +134,7 @@ class ChatMessage {
     List<ChatMilestoneStep>? steps,
     String? checkpointRef,
     bool? isCompactionSummary,
+    int? contextTokens,
   }) {
     return ChatMessage(
       id: id,
@@ -152,6 +156,7 @@ class ChatMessage {
       steps: steps ?? this.steps,
       checkpointRef: checkpointRef ?? this.checkpointRef,
       isCompactionSummary: isCompactionSummary ?? this.isCompactionSummary,
+      contextTokens: contextTokens ?? this.contextTokens,
     );
   }
 
@@ -174,6 +179,7 @@ class ChatMessage {
         if (steps.isNotEmpty) 'steps': steps.map((s) => s.toJson()).toList(),
         'checkpointRef': ?checkpointRef,
         if (isCompactionSummary) 'isCompactionSummary': true,
+        'contextTokens': ?contextTokens,
       };
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) {
@@ -213,6 +219,7 @@ class ChatMessage {
           .toList(),
       checkpointRef: json['checkpointRef'] as String?,
       isCompactionSummary: json['isCompactionSummary'] == true,
+      contextTokens: (json['contextTokens'] as num?)?.toInt(),
     );
   }
 }
@@ -749,9 +756,22 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     if (!ref.mounted) return;
 
     final settings = ref.read(settingsProvider);
-    final attachmentNote = attachments.isEmpty
+    final hosts = ref.read(hostsProvider);
+    final sshHost = hosts.activeSshHost;
+    final isImagePath = (String p) {
+      final lower = p.toLowerCase();
+      return lower.endsWith('.png') ||
+          lower.endsWith('.jpg') ||
+          lower.endsWith('.jpeg') ||
+          lower.endsWith('.webp') ||
+          lower.endsWith('.gif');
+    };
+    final textAttachments = sshHost != null
+        ? attachments
+        : attachments.where((p) => !isImagePath(p)).toList();
+    final attachmentNote = textAttachments.isEmpty
         ? ''
-        : '\n\n[Attached files: ${attachments.join(', ')}]';
+        : '\n\n[Attached files: ${textAttachments.join(', ')}]';
     final effectivePrompt = '$prompt$attachmentNote';
     final now = DateTime.now();
 
@@ -820,7 +840,6 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         );
     if (!ref.mounted || _sessionTurnTokens[session.id] != streamToken) return;
 
-    final hosts = ref.read(hostsProvider);
     final runtime = ref.read(runtimeProvider);
     final project = ref.read(projectsProvider).activeProject;
     final perms = ref.read(permissionsProvider);
@@ -835,7 +854,6 @@ class ChatNotifier extends Notifier<ChatThreadState> {
             ? project.primaryFolder
             : (runtime.status.workspaceRoot ?? ''));
 
-    final sshHost = hosts.activeSshHost;
     final requestedMode = AgyExecutionMode.fromCli(settings.executionMode);
     final effectiveMode = sshHost != null
         ? requestedMode
@@ -877,6 +895,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
             (session.remoteConversationId == null ||
                 session.remoteConversationId!.isEmpty),
         remoteAgent: settings.remoteAgent.isEmpty ? null : settings.remoteAgent,
+        attachments: attachments,
       );
 
       if (sshHost != null) {
@@ -885,11 +904,41 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         if (!ref.mounted || _sessionTurnTokens[session.id] != streamToken) {
           return;
         }
+        Future<void> saveFp(String fp) => ref
+            .read(hostsProvider.notifier)
+            .saveHostFingerprint(sshHost.id, fp);
+        if (ref.read(harnessProvider).autoCheckpointEnabled) {
+          try {
+            final cp = await SshAgyRunner.instance.createCheckpoint(
+              host: sshHost,
+              cwd: effectiveWorkspace,
+              password: pwd,
+              privateKeyPem: key,
+              onTrustFirstKey: saveFp,
+            );
+            if (!ref.mounted || _sessionTurnTokens[session.id] != streamToken) {
+              return;
+            }
+            final refHash = cp['ref']?.toString() ?? '';
+            if (cp['ok'] == true && refHash.isNotEmpty) {
+              final currentMsgs = _messagesForSession(session.id);
+              final uIdx = currentMsgs.indexWhere((m) => m.id == userMsgId);
+              if (uIdx >= 0) {
+                final updated = [...currentMsgs];
+                updated[uIdx] = updated[uIdx].copyWith(checkpointRef: refHash);
+                _updateSessionMessages(session.id, updated);
+                unawaited(_persistMessages(session.id, updated));
+              }
+            }
+          } catch (_) {}
+        }
         stream = SshAgyRunner.instance.runPrompt(
           host: sshHost,
           request: request,
+          turnId: turnId,
           password: pwd,
           privateKeyPem: key,
+          onTrustFirstKey: saveFp,
         );
       } else {
         if (!runtime.status.isReady) {
@@ -922,7 +971,11 @@ class ChatNotifier extends Notifier<ChatThreadState> {
             }
           } catch (_) {}
         }
-        stream = RuntimeBridge.instance.runPrompt(request, turnId);
+        stream = RuntimeBridge.instance.runPrompt(
+          request,
+          turnId,
+          attachments: attachments,
+        );
       }
     } catch (err) {
       if (!ref.mounted || _sessionTurnTokens[session.id] != streamToken) return;
@@ -978,6 +1031,15 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         }
         _completeStreaming(currentSession, assistantId);
       },
+    );
+  }
+
+  static TokenUsage? _mergeStepUsage(TokenUsage? prev, TokenUsage? stepUsage) {
+    if (stepUsage == null) return prev;
+    if (prev == null) return stepUsage;
+    return prev.copyWith(
+      contextTokens:
+          stepUsage.contextTokens > 0 ? stepUsage.contextTokens : prev.contextTokens,
     );
   }
 
@@ -1043,12 +1105,17 @@ class ChatNotifier extends Notifier<ChatThreadState> {
             );
           }
         }
+        final nextUsage = _mergeStepUsage(current.usage, evt.stepUsage);
         _replaceMessageInSession(
           session.id,
           idx,
           current.copyWith(
             thoughts: '${current.thoughts}${evt.delta}',
             steps: nextSteps,
+            usage: nextUsage,
+            contextTokens: (evt.stepUsage?.contextTokens ?? 0) > 0
+                ? evt.stepUsage!.contextTokens
+                : current.contextTokens,
           ),
         );
       case AgyTextDeltaEvent():
@@ -1058,10 +1125,17 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           final rate = _recordRateSample(evt.delta);
           state = state.copyWith(tokensPerSecond: rate);
         }
+        final nextUsage = _mergeStepUsage(current.usage, evt.stepUsage);
         _replaceMessageInSession(
           session.id,
           idx,
-          current.copyWith(text: '${current.text}${evt.delta}'),
+          current.copyWith(
+            text: '${current.text}${evt.delta}',
+            usage: nextUsage,
+            contextTokens: (evt.stepUsage?.contextTokens ?? 0) > 0
+                ? evt.stepUsage!.contextTokens
+                : current.contextTokens,
+          ),
         );
       case AgyToolCallEvent():
         _receivedTurnContent = true;
@@ -1168,11 +1242,18 @@ class ChatNotifier extends Notifier<ChatThreadState> {
                 finalText.trim().isEmpty
             ? _compactionFallbackText(assistantId)
             : finalText;
+        final resolvedUsage = evt.usage.contextTokens > 0
+            ? evt.usage
+            : ((current.usage?.contextTokens ?? 0) > 0
+                ? evt.usage.copyWith(
+                    contextTokens: current.usage!.contextTokens,
+                  )
+                : evt.usage);
         final stats = _computeTurnStats(
           assistantId: assistantId,
           text: resolvedText,
           thoughts: current.thoughts,
-          usage: evt.usage,
+          usage: resolvedUsage,
           reportedDurationSeconds: evt.durationSeconds,
         );
         _replaceMessageInSession(
@@ -1180,7 +1261,10 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           idx,
           current.copyWith(
             text: resolvedText,
-            usage: evt.usage,
+            usage: resolvedUsage,
+            contextTokens: resolvedUsage.contextTokens > 0
+                ? resolvedUsage.contextTokens
+                : current.contextTokens,
             tools: _finalizeTools(current.tools, failed: hasErrorResult),
             durationSeconds: stats.durationSec,
             tokensPerSecond: stats.tokPerSec,
@@ -1574,7 +1658,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     _activeLocalRequest = null;
     _activeStreamingSessionId = null;
     try {
-      await SshAgyRunner.instance.cancelActive();
+      await SshAgyRunner.instance.cancelActive(turnId: turnId);
     } catch (_) {}
     final updated = state.messages
         .map((m) => m.isStreaming
@@ -1600,11 +1684,17 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         await _persistMessages(streamingSid, cleanedBg);
       }
     }
+    final nextBgIds = {...state.activeBackgroundSessionIds};
+    if (clearedSid != null) {
+      nextBgIds.remove(clearedSid);
+    } else {
+      nextBgIds.clear();
+    }
     state = state.copyWith(
       messages: updated,
       isStreaming: false,
       tokensPerSecond: 0,
-      activeBackgroundSessionIds: const {},
+      activeBackgroundSessionIds: nextBgIds,
       clearPermission: true,
       clearStallWarning: true,
       clearLoopWarning: true,
@@ -2265,10 +2355,27 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           : (project.primaryFolder.isNotEmpty
               ? project.primaryFolder
               : (runtime.status.workspaceRoot ?? ''));
-      final res = await RuntimeBridge.instance.restoreCheckpoint(
-        cwd: cwd.isEmpty ? null : cwd,
-        ref: cpRef,
-      );
+      final sshHost = ref.read(hostsProvider).activeSshHost;
+      final Map<String, Object?> res;
+      if (sshHost != null) {
+        final (pwd, key) =
+            await ref.read(hostsProvider.notifier).readCredentials(sshHost.id);
+        res = await SshAgyRunner.instance.restoreCheckpoint(
+          host: sshHost,
+          cwd: cwd,
+          ref: cpRef,
+          password: pwd,
+          privateKeyPem: key,
+          onTrustFirstKey: (fp) => ref
+              .read(hostsProvider.notifier)
+              .saveHostFingerprint(sshHost.id, fp),
+        );
+      } else {
+        res = await RuntimeBridge.instance.restoreCheckpoint(
+          cwd: cwd.isEmpty ? null : cwd,
+          ref: cpRef,
+        );
+      }
       if (!ref.mounted) {
         return (ok: false, message: 'Cancelled', restoredPrompt: null);
       }

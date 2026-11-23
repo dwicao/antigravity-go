@@ -181,7 +181,7 @@ class _RuntimeSetupPageState extends ConsumerState<RuntimeSetupPage> {
                       child: SelectableText(
                         'agy ready: ${_diag!['agyExists']}\n'
                         'bash ready: ${_diag!['bashExecutable']} (${_diag!['bashPath']})\n'
-                        'busybox ready: ${_diag!['busyboxExecutable']}\n'
+                        'busybox bundled: ${_diag!['busyboxExecutable']} | healthy: ${_diag!['busyboxHealthy']}\n'
                         'All Files Access: ${_diag!['allFilesAccess']}\n'
                         'Battery Exempt: ${_diag!['batteryOptimizationExempt']}\n'
                         'Safe State: ${_diag!['safeState']} | Network Blocked: ${_diag!['networkBlocked']}\n'

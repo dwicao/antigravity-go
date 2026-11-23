@@ -151,7 +151,24 @@ class RuntimePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChann
                     disableSlashCommands = call.argument<Boolean>("disableSlashCommands") ?: false,
                     continueLast = call.argument<Boolean>("continueLast") ?: false,
                     remoteAgent = call.argument<String>("remoteAgent"),
+                    attachments = call.argument<List<String>>("attachments") ?: emptyList(),
                 )
+                result.success(null)
+            }
+            "startTerminalSession" -> {
+                val sid = call.argument<String>("sessionId") ?: ""
+                val cwd = call.argument<String>("cwd")
+                ctrl.startTerminalSession(sid, cwd)
+                result.success(null)
+            }
+            "writeTerminalInput" -> {
+                val sid = call.argument<String>("sessionId") ?: ""
+                val input = call.argument<String>("input") ?: ""
+                result.success(ctrl.writeTerminalInput(sid, input))
+            }
+            "closeTerminalSession" -> {
+                val sid = call.argument<String>("sessionId") ?: ""
+                ctrl.closeTerminalSession(sid)
                 result.success(null)
             }
             "respondPermission" -> {
@@ -208,6 +225,14 @@ class RuntimePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChann
             "readFile" -> {
                 val path = call.argument<String>("path") ?: ""
                 runAsync(result) { ctrl.readFile(path) }
+            }
+            "createDirectory" -> {
+                val path = call.argument<String>("path") ?: ""
+                runAsync(result) { ctrl.createDirectory(path) }
+            }
+            "deleteWorkspaceEntry" -> {
+                val path = call.argument<String>("path") ?: ""
+                runAsync(result) { ctrl.deleteWorkspaceEntry(path) }
             }
             "createCheckpoint" -> {
                 val cwd = call.argument<String>("cwd")

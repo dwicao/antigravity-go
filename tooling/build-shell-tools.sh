@@ -18,6 +18,14 @@ BASH_URLS=(
   "https://ftp.gnu.org/gnu/bash/bash-${BASH_VERSION}.tar.gz"
 )
 
+BUSYBOX_VERSION="1.36.1"
+BUSYBOX_TARBALL="$CACHE_DIR/busybox-${BUSYBOX_VERSION}.tar.bz2"
+BUSYBOX_URLS=(
+  "https://busybox.net/downloads/busybox-${BUSYBOX_VERSION}.tar.bz2"
+  "https://sources.buildroot.net/busybox/busybox-${BUSYBOX_VERSION}.tar.bz2"
+  "https://distfiles.macports.org/busybox/busybox-${BUSYBOX_VERSION}.tar.bz2"
+)
+
 if [[ ! -s "$BASH_TARBALL" ]]; then
   for url in "${BASH_URLS[@]}"; do
     echo "[shell-tools] Downloading bash ${BASH_VERSION} from $url..."
@@ -32,6 +40,20 @@ if [[ ! -s "$BASH_TARBALL" ]]; then
 fi
 [[ -s "$BASH_TARBALL" ]] || { echo "Failed to download bash-${BASH_VERSION}.tar.gz" >&2; exit 1; }
 
+if [[ ! -s "$BUSYBOX_TARBALL" ]]; then
+  for url in "${BUSYBOX_URLS[@]}"; do
+    echo "[shell-tools] Downloading busybox ${BUSYBOX_VERSION} from $url..."
+    if curl -fsSL --retry 3 --connect-timeout 20 "$url" -o "$BUSYBOX_TARBALL.tmp"; then
+      if bzip2 -t "$BUSYBOX_TARBALL.tmp" 2>/dev/null; then
+        mv "$BUSYBOX_TARBALL.tmp" "$BUSYBOX_TARBALL"
+        break
+      fi
+    fi
+    rm -f "$BUSYBOX_TARBALL.tmp"
+  done
+fi
+[[ -s "$BUSYBOX_TARBALL" ]] || { echo "Failed to download busybox-${BUSYBOX_VERSION}.tar.bz2" >&2; exit 1; }
+
 build_for_arch() {
   local abi="$1"
   local platform="$2"
@@ -44,9 +66,30 @@ build_for_arch() {
     -v "$CACHE_DIR:/cache:ro" \
     -v "$out_dir:/out" \
     alpine:3.20 /bin/sh -euxc '
-      apk add --no-cache build-base busybox-static ncurses-dev ncurses-static
-      cp /bin/busybox.static /out/libbusybox.so
-      strip /out/libbusybox.so || true
+      apk add --no-cache build-base bzip2 linux-headers ncurses-dev ncurses-static
+
+      # Build BusyBox from source with SUID/syslog/utmp disabled so Android seccomp
+      # does not terminate applet dispatch with SIGSYS (exit 159).
+      rm -rf /tmp/bb-src && mkdir -p /tmp/bb-src
+      tar -xjf "/cache/busybox-'"${BUSYBOX_VERSION}"'.tar.bz2" -C /tmp/bb-src --strip-components=1
+      cd /tmp/bb-src
+      make defconfig
+      sed -i \
+        -e "s/^# CONFIG_STATIC is not set/CONFIG_STATIC=y/" \
+        -e "s/^CONFIG_FEATURE_SUID=y/# CONFIG_FEATURE_SUID is not set/" \
+        -e "s/^CONFIG_FEATURE_SUID_CONFIG=y/# CONFIG_FEATURE_SUID_CONFIG is not set/" \
+        -e "s/^CONFIG_FEATURE_SYSLOG=y/# CONFIG_FEATURE_SYSLOG is not set/" \
+        -e "s/^CONFIG_FEATURE_UTMP=y/# CONFIG_FEATURE_UTMP is not set/" \
+        -e "s/^CONFIG_FEATURE_WTMP=y/# CONFIG_FEATURE_WTMP is not set/" \
+        -e "s/^CONFIG_TC=y/# CONFIG_TC is not set/" \
+        -e "s/^CONFIG_FEATURE_TC_INGRESS=y/# CONFIG_FEATURE_TC_INGRESS is not set/" \
+        -e "s/^CONFIG_SHA1_HWACCEL=y/# CONFIG_SHA1_HWACCEL is not set/" \
+        -e "s/^CONFIG_SHA256_HWACCEL=y/# CONFIG_SHA256_HWACCEL is not set/" \
+        .config
+      yes "" | make oldconfig >/dev/null 2>&1 || true
+      make -j"$(nproc)"
+      strip busybox
+      cp busybox /out/libbusybox.so
 
       rm -rf /tmp/bash-src && mkdir -p /tmp/bash-src
       tar -xzf "/cache/bash-'"${BASH_VERSION}"'.tar.gz" -C /tmp/bash-src --strip-components=1

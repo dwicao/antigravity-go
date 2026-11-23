@@ -69,6 +69,7 @@ class PhonePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChannel
                     "accessibilityConnected" to (AgyAccessibilityService.instance != null),
                     "safetyGateStrict" to safetyStrict,
                     "mcpPort" to mcpServer.port,
+                    "mcpToken" to mcpServer.authToken,
                 )
             )
             "setEnabled" -> {

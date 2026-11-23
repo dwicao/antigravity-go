@@ -45,15 +45,26 @@ void main() {
       expect((init! as AgyInitEvent).conversationId, 'sess-99');
 
       final res = codec.parseNotificationOrRequest(
-        '{"jsonrpc":"2.0","id":3,"result":{"sessionId":"sess-99","stopReason":"end_turn","durationMs":2400,"usage":{"inputTokens":200,"outputTokens":145,"totalTokens":345}}}',
+        '{"jsonrpc":"2.0","id":3,"result":{"sessionId":"sess-99","stopReason":"end_turn","durationMs":2400,"numTurns":4,"usage":{"inputTokens":200,"outputTokens":145,"totalTokens":345}}}',
       );
       expect(res, isA<AgyTurnResultEvent>());
       final turn = res! as AgyTurnResultEvent;
       expect(turn.status, 'SUCCESS');
       expect(turn.durationSeconds, 2.4);
+      expect(turn.numTurns, 4);
       expect(turn.usage.inputTokens, 200);
       expect(turn.usage.outputTokens, 145);
       expect(turn.usage.totalTokens, 345);
+    });
+
+    test('parses stepUsage on session/update chunks for accurate context occupancy', () {
+      final codec = AcpCodec();
+      final chunk = codec.parseNotificationOrRequest(
+        '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hi"},"usage":{"inputTokens":12000,"cacheReadTokens":30000,"outputTokens":250}}}}',
+      );
+      expect(chunk, isA<AgyTextDeltaEvent>());
+      final textEvt = chunk! as AgyTextDeltaEvent;
+      expect(textEvt.stepUsage?.contextTokens, 42250);
     });
 
     test('androidSafe maps OS-sandbox-only auto mode/preset to mobile-safe defaults', () {

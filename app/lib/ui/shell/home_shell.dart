@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../state/automations_state.dart';
 import '../../state/chat_state.dart';
 import '../../state/permissions_state.dart';
 import '../../state/sessions_state.dart';
+import '../../state/settings_state.dart';
 import '../../state/side_panel_state.dart';
 import '../../state/update_state.dart';
 import '../chat/chat_screen.dart';
@@ -37,6 +39,17 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         ref.read(appUpdateProvider.notifier).autoCheckIfDue();
+        ref.read(automationsProvider.notifier).onAutomationDue = (task) async {
+          if (!mounted) return;
+          if (ref.read(chatProvider).isStreaming) return;
+          await ref
+              .read(settingsProvider.notifier)
+              .setModel(task.modelTier.modelId);
+          await ref
+              .read(sessionsProvider.notifier)
+              .createSession(title: 'Auto: ${task.name}');
+          await ref.read(chatProvider.notifier).sendPrompt(task.prompt);
+        };
       }
     });
   }

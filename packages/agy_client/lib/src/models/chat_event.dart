@@ -28,11 +28,13 @@ class AgyThoughtDeltaEvent extends AgyChatEvent {
     required this.delta,
     this.stepIndex = 0,
     this.isDone = false,
+    this.stepUsage,
   });
 
   final String delta;
   final int stepIndex;
   final bool isDone;
+  final TokenUsage? stepUsage;
 }
 
 class AgyTextDeltaEvent extends AgyChatEvent {
@@ -40,11 +42,13 @@ class AgyTextDeltaEvent extends AgyChatEvent {
     required this.delta,
     this.stepIndex = 0,
     this.isDone = false,
+    this.stepUsage,
   });
 
   final String delta;
   final int stepIndex;
   final bool isDone;
+  final TokenUsage? stepUsage;
 }
 
 enum ToolCallState { pending, running, completed, failed }

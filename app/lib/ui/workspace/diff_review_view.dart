@@ -60,8 +60,11 @@ class _DiffReviewViewState extends ConsumerState<DiffReviewView> {
           cwd: _activeCwd(),
           password: pwd,
           privateKeyPem: key,
+          onTrustFirstKey: (fp) => ref
+              .read(hostsProvider.notifier)
+              .saveHostFingerprint(sshHost.id, fp),
           command:
-              "git branch --show-current 2>/dev/null || true; printf '\\n===STATUS===\\n'; git status --short 2>/dev/null || true; printf '\\n===NUMSTAT===\\n'; git diff --numstat 2>/dev/null || true; printf '\\n===DIFF===\\n'; git diff 2>/dev/null || true",
+              "git branch --show-current 2>/dev/null || true; printf '\\n===STATUS===\\n'; git status --short 2>/dev/null || true; printf '\\n===NUMSTAT===\\n'; git diff --numstat 2>/dev/null || true; git diff --cached --numstat 2>/dev/null || true; printf '\\n===DIFF===\\n'; git diff 2>/dev/null || true; git diff --cached 2>/dev/null || true",
         );
         final parts = raw.split('\n===STATUS===\n');
         final branch = parts.first.trim();

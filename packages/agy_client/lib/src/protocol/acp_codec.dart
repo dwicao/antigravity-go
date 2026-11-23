@@ -293,12 +293,35 @@ class AcpCodec {
     if (method == 'session/update') {
       final update = _asMap(params['update']);
       final kind = update['sessionUpdate']?.toString() ?? '';
+      TokenUsage? parseUpdateUsage() {
+        final meta = _asMap(update['_meta']);
+        final rawUsage = _asMap(
+          update['usage'] ??
+              update['tokenUsage'] ??
+              meta['usage'] ??
+              params['usage'],
+        );
+        if (rawUsage.isEmpty) return null;
+        final parsed = TokenUsage.fromJson(rawUsage);
+        final ctx = parsed.contextTokens > 0
+            ? parsed.contextTokens
+            : (parsed.inputTokens +
+                parsed.cacheReadTokens +
+                parsed.outputTokens);
+        if (ctx <= 0) return null;
+        return parsed.copyWith(contextTokens: ctx);
+      }
+
       switch (kind) {
         case 'agent_message_chunk':
-          return AgyTextDeltaEvent(delta: _extractContentText(update['content']));
+          return AgyTextDeltaEvent(
+            delta: _extractContentText(update['content']),
+            stepUsage: parseUpdateUsage(),
+          );
         case 'agent_thought_chunk':
           return AgyThoughtDeltaEvent(
             delta: _extractContentText(update['content']),
+            stepUsage: parseUpdateUsage(),
           );
         case 'tool_call':
         case 'tool_call_update':
@@ -389,11 +412,16 @@ class AcpCodec {
           'refusal' || 'error' => 'ERROR',
           _ => 'SUCCESS',
         };
+        final numTurns = (result['numTurns'] as num?)?.toInt() ??
+            (result['num_turns'] as num?)?.toInt() ??
+            (meta['numTurns'] as num?)?.toInt() ??
+            1;
         return AgyTurnResultEvent(
           conversationId: result['sessionId']?.toString() ?? '',
           status: status,
           response: '',
           durationSeconds: durationSec,
+          numTurns: numTurns,
           usage: TokenUsage.fromJson(usageMap),
           error: status == 'ERROR' ? 'Turn stopped: $stopReason' : null,
         );

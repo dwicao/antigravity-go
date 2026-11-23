@@ -1,9 +1,14 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:agy_client/agy_client.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
+
+typedef AutomationTriggerCallback = Future<void> Function(
+  AgyAutomation automation,
+);
 
 final automationsProvider =
     NotifierProvider<AutomationsNotifier, List<AgyAutomation>>(
@@ -13,14 +18,27 @@ final automationsProvider =
 class AutomationsNotifier extends Notifier<List<AgyAutomation>> {
   static const _prefsKey = 'agy_automations_v1';
 
+  Timer? _schedulerTimer;
+  AutomationTriggerCallback? onAutomationDue;
+
   @override
   List<AgyAutomation> build() {
+    _schedulerTimer?.cancel();
+    _schedulerTimer = Timer.periodic(
+      const Duration(seconds: 60),
+      (_) => unawaited(runDueAutomations()),
+    );
+    ref.onDispose(() {
+      _schedulerTimer?.cancel();
+      _schedulerTimer = null;
+    });
     Future.microtask(_load);
     return const [];
   }
 
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
+    if (!ref.mounted) return;
     final raw = prefs.getString(_prefsKey);
     if (raw == null || raw.isEmpty) return;
     try {
@@ -29,7 +47,22 @@ class AutomationsNotifier extends Notifier<List<AgyAutomation>> {
           .whereType<Map<String, dynamic>>()
           .map(AgyAutomation.fromJson)
           .toList();
+      await runDueAutomations();
     } catch (_) {}
+  }
+
+  Future<int> runDueAutomations({DateTime? now}) async {
+    final cb = onAutomationDue;
+    if (cb == null || state.isEmpty) return 0;
+    final ts = now ?? DateTime.now();
+    var count = 0;
+    for (final a in state.toList()) {
+      if (!a.isDueAt(ts)) continue;
+      await markRun(a.id, 'Scheduled');
+      await cb(a);
+      count++;
+    }
+    return count;
   }
 
   Future<void> add({
@@ -48,6 +81,11 @@ class AutomationsNotifier extends Notifier<List<AgyAutomation>> {
       projectId: projectId,
     );
     state = [item, ...state];
+    await _persist();
+  }
+
+  Future<void> update(AgyAutomation updated) async {
+    state = state.map((a) => a.id == updated.id ? updated : a).toList();
     await _persist();
   }
 

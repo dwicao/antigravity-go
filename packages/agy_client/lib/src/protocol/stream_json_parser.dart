@@ -64,6 +64,26 @@ class StreamJsonParser {
         final isDone = stateUpper == 'DONE' || stateUpper == 'COMPLETED';
         final stepIndex = (step['step_index'] as num?)?.toInt() ?? 0;
 
+        TokenUsage? parseStepUsage() {
+          final rawUsage = _asMap(step['usage']);
+          if (rawUsage.isEmpty) return null;
+          final parsed = TokenUsage.fromJson(rawUsage);
+          final ctx = parsed.contextTokens > 0
+              ? parsed.contextTokens
+              : (parsed.inputTokens +
+                  parsed.cacheReadTokens +
+                  parsed.outputTokens);
+          if (ctx <= 0) return null;
+          return TokenUsage(
+            inputTokens: parsed.inputTokens,
+            outputTokens: parsed.outputTokens,
+            thinkingTokens: parsed.thinkingTokens,
+            cacheReadTokens: parsed.cacheReadTokens,
+            totalTokens: parsed.totalTokens,
+            contextTokens: ctx,
+          );
+        }
+
         if (stepType == 'agent_response') {
           final delta = step['text_delta']?.toString() ??
               step['delta']?.toString() ??
@@ -73,6 +93,7 @@ class StreamJsonParser {
             delta: delta,
             stepIndex: stepIndex,
             isDone: isDone,
+            stepUsage: parseStepUsage(),
           );
         }
 
@@ -85,6 +106,7 @@ class StreamJsonParser {
             delta: delta,
             stepIndex: stepIndex,
             isDone: isDone,
+            stepUsage: parseStepUsage(),
           );
         }
 

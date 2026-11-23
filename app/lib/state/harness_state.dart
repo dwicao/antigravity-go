@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:agy_client/agy_client.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -129,15 +130,45 @@ final contextBudgetProvider = Provider<HarnessContextSnapshot>((ref) {
     compactedMessages: compactedCount,
     activeMessages: activeMessages.length,
   );
-  // When the backend reported real inputTokens for an active turn, prefer the
-  // higher of real usage + post-usage delta vs text estimate so system prompts
-  // and tool schemas aren't under-counted.
+  // When the backend reported real usage for an active turn, prefer the
+  // single-step context occupancy (`contextTokens`) when known, or bound
+  // cumulative multi-step turn `inputTokens` so tool loops don't inflate 10x.
   final lastUsageIdx = activeMessages.lastIndexWhere(
-    (m) => (m.usage?.inputTokens ?? 0) > 0,
+    (m) =>
+        (m.contextTokens ?? 0) > 0 ||
+        (m.usage?.contextTokens ?? 0) > 0 ||
+        (m.usage?.inputTokens ?? 0) > 0,
   );
   if (lastUsageIdx >= 0) {
-    final baseTokens = activeMessages[lastUsageIdx].usage!.inputTokens +
-        activeMessages[lastUsageIdx].usage!.outputTokens;
+    final usageMsg = activeMessages[lastUsageIdx];
+    final stepCtx =
+        (usageMsg.contextTokens ?? 0) > 0
+            ? usageMsg.contextTokens!
+            : (usageMsg.usage?.contextTokens ?? 0);
+    final int baseTokens;
+    if (stepCtx > 0) {
+      baseTokens = stepCtx;
+    } else {
+      final rawTurnTokens =
+          (usageMsg.usage?.inputTokens ?? 0) + (usageMsg.usage?.outputTokens ?? 0);
+      if (usageMsg.tools.isEmpty) {
+        baseTokens = rawTurnTokens;
+      } else {
+        final prefixSnap = monitor.evaluate(
+          messageTexts: activeMessages.take(lastUsageIdx + 1).map((m) => m.text),
+          toolOutputs: activeMessages
+              .take(lastUsageIdx + 1)
+              .expand((m) => m.tools)
+              .map((t) {
+                final params =
+                    t.parameters.isEmpty ? '' : jsonEncode(t.parameters);
+                return '${t.toolName} $params ${t.output ?? ''} ${t.error ?? ''}';
+              }),
+          modelId: threadModelId,
+        );
+        baseTokens = math.min(rawTurnTokens, prefixSnap.usedTokens + 16000);
+      }
+    }
     final tailSnap = monitor.evaluate(
       messageTexts: activeMessages.skip(lastUsageIdx + 1).map((m) => m.text),
       toolOutputs: activeMessages

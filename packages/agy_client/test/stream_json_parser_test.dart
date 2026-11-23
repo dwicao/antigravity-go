@@ -14,12 +14,13 @@ void main() {
       expect(init.model, 'gemini-4-argon');
 
       final deltaEvt = StreamJsonParser.parseLine(
-        '{"event":"step_update","step_update":{"conversation_id":"c-1","step_index":2,"state":"ACTIVE","step_type":"agent_response","text_delta":"Hello "}}',
+        '{"event":"step_update","step_update":{"conversation_id":"c-1","step_index":2,"state":"ACTIVE","step_type":"agent_response","text_delta":"Hello ","usage":{"input_tokens":2200,"output_tokens":40,"cache_read_tokens":6300,"total_tokens":2240}}}',
       );
       expect(deltaEvt, isA<AgyTextDeltaEvent>());
       final delta = deltaEvt! as AgyTextDeltaEvent;
       expect(delta.delta, 'Hello ');
       expect(delta.isDone, isFalse);
+      expect(delta.stepUsage?.contextTokens, 8540);
 
       final toolEvt = StreamJsonParser.parseLine(
         '{"event":"step_update","step_update":{"conversation_id":"c-1","step_index":3,"state":"DONE","step_type":"tool","tool_name":"run_command","duration_seconds":0.25,"tool_info":{"name":"run_command","parameters":{"CommandLine":"ls"},"output":"README.md"}}}',

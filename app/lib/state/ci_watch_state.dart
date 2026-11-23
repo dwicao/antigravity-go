@@ -183,9 +183,12 @@ class CiWatchNotifier extends Notifier<List<CiWatchItem>> {
     if (!_inFlightPolls.add(watchId)) return;
 
     try {
-      final hasRunId = watch.runId != null && watch.runId!.isNotEmpty;
+      final rawRunId = watch.runId?.trim() ?? '';
+      final safeRunId =
+          RegExp(r'^\d+$').hasMatch(rawRunId) ? rawRunId : '';
+      final hasRunId = safeRunId.isNotEmpty;
       final cmd = hasRunId
-          ? 'gh run view ${watch.runId} --json databaseId,workflowName,status,conclusion,url,headBranch 2>/dev/null || echo "{}"'
+          ? 'gh run view $safeRunId --json databaseId,workflowName,status,conclusion,url,headBranch 2>/dev/null || echo "{}"'
           : 'gh run list -L 5 --json databaseId,workflowName,status,conclusion,url,headBranch 2>/dev/null || echo "[]"';
       final raw = await _exec(cmd, watch.cwd);
       if (!ref.mounted) return;
@@ -249,10 +252,11 @@ class CiWatchNotifier extends Notifier<List<CiWatchItem>> {
       final normalizedConclusion =
           conclusion.trim().isEmpty ? 'completed' : conclusion.trim();
       final passed = normalizedConclusion.toLowerCase() == 'success';
+      final validRunId = RegExp(r'^\d+$').hasMatch(runId) ? runId : '';
       String? failedLog;
-      if (!passed && runId.isNotEmpty) {
+      if (!passed && validRunId.isNotEmpty) {
         failedLog = (await _exec(
-          'gh run view $runId --log-failed 2>&1 | tail -n 60 || true',
+          'gh run view $validRunId --log-failed 2>&1 | tail -n 60 || true',
           watch.cwd,
         ))
             .trim();

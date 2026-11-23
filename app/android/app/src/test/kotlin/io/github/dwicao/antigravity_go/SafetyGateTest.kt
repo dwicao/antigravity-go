@@ -21,6 +21,9 @@ class SafetyGateTest {
     fun blocksSensitiveLabelsEvenInRegularApps() {
         val transfer = SafetyGate.evaluate(true, "com.example.app", "tap", "Confirm payment")
         assertFalse(transfer.allowed)
+
+        val passwordField = SafetyGate.evaluate(true, "com.example.app", "type", "Input", isPasswordField = true)
+        assertFalse(passwordField.allowed)
     }
 
     @Test

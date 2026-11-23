@@ -19,6 +19,7 @@ class AgyPromptRequest {
     this.disableSlashCommands = false,
     this.continueLast = false,
     this.remoteAgent,
+    this.attachments = const [],
   });
 
   final String prompt;
@@ -36,6 +37,7 @@ class AgyPromptRequest {
   final bool disableSlashCommands;
   final bool continueLast;
   final String? remoteAgent;
+  final List<String> attachments;
 }
 
 /// Abstract transport implemented by both on-device Android `agy` and remote SSH `agy`.

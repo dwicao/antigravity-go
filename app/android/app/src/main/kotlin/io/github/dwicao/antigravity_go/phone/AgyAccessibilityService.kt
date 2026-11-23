@@ -33,6 +33,59 @@ class AgyAccessibilityService : AccessibilityService() {
 
     fun currentPackageName(): String? = rootInActiveWindow?.packageName?.toString()
 
+    fun isFocusedInputPassword(): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return false
+        return focused.isPassword
+    }
+
+    fun describeFocusedInput(): Pair<String, Boolean> {
+        val root = rootInActiveWindow ?: return "" to false
+        val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return "" to false
+        val label = listOfNotNull(
+            focused.hintText?.toString(),
+            focused.contentDescription?.toString(),
+            focused.text?.toString(),
+            focused.viewIdResourceName,
+        ).filter { it.isNotBlank() }.joinToString(" ")
+        return label to focused.isPassword
+    }
+
+    fun describeNodeAt(x: Float, y: Float): Pair<String, Boolean> {
+        val root = rootInActiveWindow ?: return "" to false
+        val ix = x.toInt()
+        val iy = y.toInt()
+        var bestLabel = ""
+        var bestPassword = false
+        var bestArea = Long.MAX_VALUE
+        var visited = 0
+        fun walk(node: AccessibilityNodeInfo?) {
+            if (node == null || visited >= 120) return
+            visited++
+            val rect = Rect()
+            node.getBoundsInScreen(rect)
+            if (rect.contains(ix, iy)) {
+                val area = rect.width().toLong() * rect.height().toLong()
+                val label = listOfNotNull(
+                    node.text?.toString(),
+                    node.contentDescription?.toString(),
+                    node.hintText?.toString(),
+                    node.viewIdResourceName,
+                ).filter { it.isNotBlank() }.joinToString(" ")
+                if ((label.isNotEmpty() || node.isPassword) && area <= bestArea) {
+                    bestArea = area
+                    if (label.isNotEmpty()) bestLabel = label
+                    if (node.isPassword) bestPassword = true
+                }
+                for (i in 0 until node.childCount) {
+                    walk(node.getChild(i))
+                }
+            }
+        }
+        walk(root)
+        return bestLabel to bestPassword
+    }
+
     fun dumpTree(maxNodes: Int = 60): String {
         val root = rootInActiveWindow ?: return "(no active window)"
         val sb = StringBuilder()

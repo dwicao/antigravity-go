@@ -26,6 +26,7 @@ class TokenUsage {
     this.thinkingTokens = 0,
     this.cacheReadTokens = 0,
     this.totalTokens = 0,
+    this.contextTokens = 0,
   });
 
   final int inputTokens;
@@ -33,6 +34,9 @@ class TokenUsage {
   final int thinkingTokens;
   final int cacheReadTokens;
   final int totalTokens;
+
+  /// Latest single-request context window occupancy (non-cumulative), when known.
+  final int contextTokens;
 
   factory TokenUsage.fromJson(Map<String, dynamic> json) {
     int readAny(List<String> keys) {
@@ -84,6 +88,14 @@ class TokenUsage {
       'totalTokens',
       'totalTokenCount',
     ]);
+    final contextTokens = readAny([
+      'context_tokens',
+      'contextTokens',
+      'context_window_tokens',
+      'contextWindowTokens',
+      'last_input_tokens',
+      'lastInputTokens',
+    ]);
     final total = explicitTotal > 0 ? explicitTotal : (input + output + thinking);
 
     return TokenUsage(
@@ -92,6 +104,25 @@ class TokenUsage {
       thinkingTokens: thinking,
       cacheReadTokens: cacheRead,
       totalTokens: total,
+      contextTokens: contextTokens,
+    );
+  }
+
+  TokenUsage copyWith({
+    int? inputTokens,
+    int? outputTokens,
+    int? thinkingTokens,
+    int? cacheReadTokens,
+    int? totalTokens,
+    int? contextTokens,
+  }) {
+    return TokenUsage(
+      inputTokens: inputTokens ?? this.inputTokens,
+      outputTokens: outputTokens ?? this.outputTokens,
+      thinkingTokens: thinkingTokens ?? this.thinkingTokens,
+      cacheReadTokens: cacheReadTokens ?? this.cacheReadTokens,
+      totalTokens: totalTokens ?? this.totalTokens,
+      contextTokens: contextTokens ?? this.contextTokens,
     );
   }
 
@@ -101,6 +132,7 @@ class TokenUsage {
         'thinking_tokens': thinkingTokens,
         'cache_read_tokens': cacheReadTokens,
         'total_tokens': totalTokens,
+        if (contextTokens > 0) 'context_tokens': contextTokens,
       };
 
   TokenUsage operator +(TokenUsage other) {
@@ -110,6 +142,8 @@ class TokenUsage {
       thinkingTokens: thinkingTokens + other.thinkingTokens,
       cacheReadTokens: cacheReadTokens + other.cacheReadTokens,
       totalTokens: totalTokens + other.totalTokens,
+      contextTokens:
+          other.contextTokens > 0 ? other.contextTokens : contextTokens,
     );
   }
 }

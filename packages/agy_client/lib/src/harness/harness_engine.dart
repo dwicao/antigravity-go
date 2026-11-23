@@ -204,13 +204,17 @@ class HarnessLoopDetector {
       }
     }
 
-    // 2. Consecutive identical tool call signature.
+    // 2. Consecutive identical tool call signature (ignore empty/pending `{}` inputs).
+    final hasConcreteInput =
+        !last.signature.endsWith('::') && !last.signature.endsWith('::{}');
     var consecutiveSame = 0;
-    for (var i = _history.length - 1; i >= 0; i--) {
-      if (_history[i].signature == last.signature) {
-        consecutiveSame++;
-      } else {
-        break;
+    if (hasConcreteInput) {
+      for (var i = _history.length - 1; i >= 0; i--) {
+        if (_history[i].signature == last.signature) {
+          consecutiveSame++;
+        } else {
+          break;
+        }
       }
     }
     if (consecutiveSame >= repeatThreshold) {
@@ -230,8 +234,9 @@ class HarnessLoopDetector {
     }
 
     // 3. Non-consecutive identical signature spike in rolling window.
-    final windowHits =
-        _history.where((e) => e.signature == last.signature).length;
+    final windowHits = hasConcreteInput
+        ? _history.where((e) => e.signature == last.signature).length
+        : 0;
     if (windowHits >= repeatThreshold + 1) {
       return LoopDetectionResult(
         kind: HarnessLoopKind.repeatedCall,
@@ -348,25 +353,24 @@ class HarnessContextMonitor {
   final double warningThreshold;
   final double compactThreshold;
 
-  /// Effective working window (deliberately capped below raw theoretical limits
-  /// because reasoning quality degrades well before 100% fill).
+  /// Effective working window matching the model's context capacity
+  /// (1M for Gemini 4 / 3.8 / 3 / 2.5 / Orchestrator, 200K for Claude, 160K for GPT).
   static int effectiveBudgetForModel(String? modelId) {
     final m = (modelId ?? '').trim().toLowerCase();
-    if (m.contains('gemini-3.8') || m.contains('1m')) {
-      return 400000;
-    }
-    if (m.contains('gemini-4') ||
+    if (m.contains('1m') ||
+        m.contains('gemini-4') ||
+        m.contains('gemini-3.8') ||
+        m.contains('gemini-3') ||
+        m.contains('gemini-2.5') ||
         m.contains('orchestrator') ||
         m.contains('neon') ||
         m.contains('carbon') ||
         m.contains('argon') ||
-        m.contains('hydrogen') ||
-        m.contains('gemini-2.5') ||
-        m.contains('gemini-3')) {
-      return 256000;
+        m.contains('hydrogen')) {
+      return 1000000;
     }
     if (m.contains('claude') || m.contains('opus') || m.contains('sonnet')) {
-      return 160000;
+      return 200000;
     }
     if (m.contains('gpt-5') ||
         m.contains('gpt-oss') ||

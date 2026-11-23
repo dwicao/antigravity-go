@@ -70,22 +70,26 @@ void main() {
       expect(full.percentage, greaterThanOrEqualTo(80));
     });
 
-    test('assigns realistic budgets for Gemini 4, Orchestrator, and Flash', () {
+    test('assigns 1M budgets for Gemini 4, Orchestrator, and Flash', () {
       expect(
         HarnessContextMonitor.effectiveBudgetForModel('Orchestrator (Neon)'),
-        256000,
+        1000000,
       );
       expect(
         HarnessContextMonitor.effectiveBudgetForModel('gemini-4-neon'),
-        256000,
+        1000000,
+      );
+      expect(
+        HarnessContextMonitor.effectiveBudgetForModel('gemini-4-hydrogen'),
+        1000000,
       );
       expect(
         HarnessContextMonitor.effectiveBudgetForModel('gemini-3.8-flash'),
-        400000,
+        1000000,
       );
       expect(
         HarnessContextMonitor.effectiveBudgetForModel('claude-opus-5.5-thinking'),
-        160000,
+        200000,
       );
     });
 
@@ -193,6 +197,16 @@ void main() {
       final hit = failDetector.markLastFailed(callId: 'f2');
       expect(hit.triggered, isTrue);
       expect(hit.kind, HarnessLoopKind.repeatedFailure);
+
+      final emptyInputDetector = HarnessLoopDetector(repeatThreshold: 3);
+      for (var i = 0; i < 5; i++) {
+        expect(
+          emptyInputDetector
+              .recordToolCall(name: 'edit_file', input: '{}', callId: 'e-$i')
+              .triggered,
+          isFalse,
+        );
+      }
     });
 
     test('supports gpt-oss model budget and preserves compaction anchor turn', () {
@@ -213,6 +227,38 @@ void main() {
       );
       expect(prompt, contains('Turn 0 '));
       expect(prompt, contains('Turn 7 '));
+    });
+
+    test('AgyAutomation.isDueAt evaluates interval and daily schedules', () {
+      final now = DateTime(2026, 11, 23, 10, 0);
+      const every15m = AgyAutomation(
+        id: 'a1',
+        name: 'Check',
+        prompt: 'git status',
+        scheduleLabel: 'Every 15m',
+      );
+      expect(every15m.isDueAt(now), isTrue);
+      expect(
+        every15m.copyWith(lastRunAt: now.subtract(const Duration(minutes: 5))).isDueAt(now),
+        isFalse,
+      );
+      expect(
+        every15m.copyWith(lastRunAt: now.subtract(const Duration(minutes: 20))).isDueAt(now),
+        isTrue,
+      );
+
+      const daily = AgyAutomation(
+        id: 'a2',
+        name: 'Daily',
+        prompt: 'summarize',
+        scheduleLabel: 'Daily · 09:00',
+      );
+      expect(daily.isDueAt(DateTime(2026, 11, 23, 8, 59)), isFalse);
+      expect(daily.isDueAt(now), isTrue);
+      expect(
+        daily.copyWith(lastRunAt: DateTime(2026, 11, 23, 9, 5)).isDueAt(now),
+        isFalse,
+      );
     });
   });
 }

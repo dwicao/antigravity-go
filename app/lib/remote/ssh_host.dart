@@ -8,6 +8,7 @@ class SshHostConfig {
     this.defaultWorkspace = '~',
     this.agyBinary = 'agy',
     this.usePrivateKey = false,
+    this.hostKeyFingerprint,
   });
 
   final String id;
@@ -18,6 +19,7 @@ class SshHostConfig {
   final String defaultWorkspace;
   final String agyBinary;
   final bool usePrivateKey;
+  final String? hostKeyFingerprint;
 
   SshHostConfig copyWith({
     String? name,
@@ -27,6 +29,7 @@ class SshHostConfig {
     String? defaultWorkspace,
     String? agyBinary,
     bool? usePrivateKey,
+    String? hostKeyFingerprint,
   }) {
     return SshHostConfig(
       id: id,
@@ -37,6 +40,7 @@ class SshHostConfig {
       defaultWorkspace: defaultWorkspace ?? this.defaultWorkspace,
       agyBinary: agyBinary ?? this.agyBinary,
       usePrivateKey: usePrivateKey ?? this.usePrivateKey,
+      hostKeyFingerprint: hostKeyFingerprint ?? this.hostKeyFingerprint,
     );
   }
 
@@ -49,6 +53,8 @@ class SshHostConfig {
         'defaultWorkspace': defaultWorkspace,
         'agyBinary': agyBinary,
         'usePrivateKey': usePrivateKey,
+        if (hostKeyFingerprint != null)
+          'hostKeyFingerprint': hostKeyFingerprint,
       };
 
   factory SshHostConfig.fromJson(Map<String, dynamic> json) {
@@ -61,6 +67,7 @@ class SshHostConfig {
       defaultWorkspace: json['defaultWorkspace'] as String? ?? '~',
       agyBinary: json['agyBinary'] as String? ?? 'agy',
       usePrivateKey: json['usePrivateKey'] as bool? ?? false,
+      hostKeyFingerprint: json['hostKeyFingerprint'] as String?,
     );
   }
 }

@@ -166,6 +166,7 @@ class RuntimeBridge {
     AgyPromptRequest request,
     String turnId, {
     bool useAcp = true,
+    List<String> attachments = const [],
   }) async* {
     final controller = StreamController<AgyChatEvent>();
     final acpCodec = AcpCodec();
@@ -228,6 +229,7 @@ class RuntimeBridge {
         'disableSlashCommands': request.disableSlashCommands,
         'continueLast': request.continueLast,
         'remoteAgent': ?request.remoteAgent,
+        if (request.attachments.isNotEmpty) 'attachments': request.attachments,
       });
 
       await for (final evt in controller.stream) {
@@ -488,6 +490,87 @@ class RuntimeBridge {
   Future<String> readWorkspaceFile(String path) async {
     return await _method.invokeMethod<String>('readFile', {'path': path}) ??
         '';
+  }
+
+  Future<bool> createDirectory(String path) async {
+    try {
+      return await _method.invokeMethod<bool>(
+            'createDirectory',
+            {'path': path},
+          ) ??
+          false;
+    } on MissingPluginException {
+      return false;
+    }
+  }
+
+  Future<bool> deleteWorkspaceEntry(String path) async {
+    try {
+      return await _method.invokeMethod<bool>(
+            'deleteWorkspaceEntry',
+            {'path': path},
+          ) ??
+          false;
+    } on MissingPluginException {
+      return false;
+    }
+  }
+
+  Future<void> startTerminalSession(String sessionId, {String? cwd}) async {
+    try {
+      await _method.invokeMethod<void>('startTerminalSession', {
+        'sessionId': sessionId,
+        'cwd': ?cwd,
+      });
+    } on MissingPluginException {
+      // No-op in tests.
+    }
+  }
+
+  Future<bool> writeTerminalInput(String sessionId, String input) async {
+    try {
+      return await _method.invokeMethod<bool>('writeTerminalInput', {
+            'sessionId': sessionId,
+            'input': input,
+          }) ??
+          false;
+    } on MissingPluginException {
+      return false;
+    }
+  }
+
+  Future<void> closeTerminalSession(String sessionId) async {
+    try {
+      await _method.invokeMethod<void>('closeTerminalSession', {
+        'sessionId': sessionId,
+      });
+    } on MissingPluginException {
+      // No-op in tests.
+    }
+  }
+
+  Future<bool> createWorkspaceDirectory(String path) async {
+    try {
+      return await _method.invokeMethod<bool>(
+            'createDirectory',
+            {'path': path},
+          ) ??
+          false;
+    } on MissingPluginException {
+      return false;
+    }
+  }
+
+  Future<bool> deleteWorkspaceEntry(String path) async {
+    try {
+      return await _method.invokeMethod<bool>(
+            'deleteWorkspaceEntry',
+            {'path': path},
+          ) ??
+          false;
+    } on MissingPluginException {
+      return false;
+    }
   }
 
   Future<Map<String, Object?>> diagnoseRuntime() async {

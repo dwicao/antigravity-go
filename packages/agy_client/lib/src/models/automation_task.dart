@@ -32,6 +32,57 @@ class AgyAutomation {
   final DateTime? lastRunAt;
   final String? lastStatus;
 
+  /// Parses [scheduleLabel] (e.g. `Every 15m`, `Every 2h`, `Hourly`,
+  /// `Daily · 09:00`) and returns whether this automation is due at [now].
+  bool isDueAt(DateTime now) {
+    if (!enabled) return false;
+    final raw = scheduleLabel.trim().toLowerCase();
+    if (raw.isEmpty) return false;
+
+    final minMatch = RegExp(r'every\s+(\d+)\s*m').firstMatch(raw);
+    if (minMatch != null) {
+      final mins = int.tryParse(minMatch.group(1)!) ?? 0;
+      if (mins <= 0) return false;
+      return lastRunAt == null ||
+          now.difference(lastRunAt!) >= Duration(minutes: mins);
+    }
+
+    final hourMatch = RegExp(r'every\s+(\d+)\s*h').firstMatch(raw);
+    if (hourMatch != null) {
+      final hrs = int.tryParse(hourMatch.group(1)!) ?? 0;
+      if (hrs <= 0) return false;
+      return lastRunAt == null ||
+          now.difference(lastRunAt!) >= Duration(hours: hrs);
+    }
+
+    if (raw.contains('hourly')) {
+      return lastRunAt == null ||
+          now.difference(lastRunAt!) >= const Duration(hours: 1);
+    }
+
+    final timeMatch = RegExp(r'(\d{1,2}):(\d{2})').firstMatch(raw);
+    if (timeMatch != null) {
+      final targetHour = int.tryParse(timeMatch.group(1)!) ?? 9;
+      final targetMin = int.tryParse(timeMatch.group(2)!) ?? 0;
+      if (targetHour < 0 || targetHour > 23 || targetMin < 0 || targetMin > 59) {
+        return false;
+      }
+      final localNow = now.toLocal();
+      final scheduledToday = DateTime(
+        localNow.year,
+        localNow.month,
+        localNow.day,
+        targetHour,
+        targetMin,
+      );
+      if (localNow.isBefore(scheduledToday)) return false;
+      if (lastRunAt == null) return true;
+      return lastRunAt!.toLocal().isBefore(scheduledToday);
+    }
+
+    return false;
+  }
+
   AgyAutomation copyWith({
     String? name,
     String? prompt,

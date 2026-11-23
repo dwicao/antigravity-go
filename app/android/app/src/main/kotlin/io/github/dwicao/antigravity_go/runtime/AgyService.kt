@@ -50,6 +50,7 @@ class AgyService : Service() {
             }
 
             ACTION_UPDATE_STATUS -> {
+                activeInstance = this
                 val statusText = intent.getStringExtra(EXTRA_STATUS_TEXT)
                     ?: "On-device Antigravity CLI harness active"
                 latestStatusText = statusText
@@ -76,6 +77,7 @@ class AgyService : Service() {
             }
 
             else -> {
+                activeInstance = this
                 val statusText = intent?.getStringExtra(EXTRA_STATUS_TEXT)
                     ?: latestStatusText
                 latestStatusText = statusText
@@ -99,6 +101,9 @@ class AgyService : Service() {
 
     override fun onDestroy() {
         running = false
+        if (activeInstance === this) {
+            activeInstance = null
+        }
         networkCallback?.let { cb ->
             val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
             runCatching { cm.unregisterNetworkCallback(cb) }
@@ -157,15 +162,29 @@ class AgyService : Service() {
             private set
 
         @Volatile
+        private var activeInstance: AgyService? = null
+
+        @Volatile
         private var latestStatusText: String = "On-device Antigravity CLI harness active"
 
         fun refreshWakeLock(context: Context) {
             if (!running) return
+            val svc = activeInstance
+            if (svc != null) {
+                svc.acquireWakeLock(refresh = true)
+                return
+            }
             val intent = Intent(context.applicationContext, AgyService::class.java).apply {
                 action = ACTION_UPDATE_STATUS
                 putExtra(EXTRA_STATUS_TEXT, latestStatusText)
             }
-            runCatching { context.applicationContext.startService(intent) }
+            runCatching {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.applicationContext.startForegroundService(intent)
+                } else {
+                    context.applicationContext.startService(intent)
+                }
+            }
         }
 
         fun updateTurnStatus(context: Context, statusText: String) {
