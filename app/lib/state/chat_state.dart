@@ -87,6 +87,7 @@ class ChatMessage {
     this.reasoningEffort,
     this.completedAt,
     this.changedFiles = const [],
+    this.steps = const [],
   });
 
   final String id;
@@ -105,6 +106,7 @@ class ChatMessage {
   final String? reasoningEffort;
   final DateTime? completedAt;
   final List<FileChangeEntry> changedFiles;
+  final List<ChatMilestoneStep> steps;
 
   ChatMessage copyWith({
     String? text,
@@ -119,6 +121,7 @@ class ChatMessage {
     String? reasoningEffort,
     DateTime? completedAt,
     List<FileChangeEntry>? changedFiles,
+    List<ChatMilestoneStep>? steps,
   }) {
     return ChatMessage(
       id: id,
@@ -137,6 +140,7 @@ class ChatMessage {
       reasoningEffort: reasoningEffort ?? this.reasoningEffort,
       completedAt: completedAt ?? this.completedAt,
       changedFiles: changedFiles ?? this.changedFiles,
+      steps: steps ?? this.steps,
     );
   }
 
@@ -156,6 +160,7 @@ class ChatMessage {
         if (completedAt != null) 'completedAt': completedAt!.toIso8601String(),
         if (changedFiles.isNotEmpty)
           'changedFiles': changedFiles.map((f) => f.toJson()).toList(),
+        if (steps.isNotEmpty) 'steps': steps.map((s) => s.toJson()).toList(),
       };
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) {
@@ -188,6 +193,10 @@ class ChatMessage {
       changedFiles: (json['changedFiles'] as List<dynamic>? ?? const [])
           .whereType<Map<String, dynamic>>()
           .map(FileChangeEntry.fromJson)
+          .toList(),
+      steps: (json['steps'] as List<dynamic>? ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(ChatMilestoneStep.fromJson)
           .toList(),
     );
   }
@@ -640,10 +649,30 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           final rate = _recordRateSample(evt.delta);
           state = state.copyWith(tokensPerSecond: rate);
         }
+        final nextSteps = [...current.steps];
+        if (evt.delta.isNotEmpty) {
+          if (nextSteps.isNotEmpty &&
+              nextSteps.last.kind == ChatMilestoneKind.thought) {
+            final last = nextSteps.last;
+            nextSteps[nextSteps.length - 1] =
+                last.copyWith(text: '${last.text}${evt.delta}');
+          } else {
+            nextSteps.add(
+              ChatMilestoneStep(
+                id: 'thought-${nextSteps.length}',
+                kind: ChatMilestoneKind.thought,
+                text: evt.delta,
+              ),
+            );
+          }
+        }
         _replaceMessageInSession(
           session.id,
           idx,
-          current.copyWith(thoughts: '${current.thoughts}${evt.delta}'),
+          current.copyWith(
+            thoughts: '${current.thoughts}${evt.delta}',
+            steps: nextSteps,
+          ),
         );
       case AgyTextDeltaEvent():
         _receivedTurnContent = true;
@@ -660,6 +689,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       case AgyToolCallEvent():
         _receivedTurnContent = true;
         final tools = [...current.tools];
+        final nextSteps = [...current.steps];
         final tIdx = tools.indexWhere((t) => t.id == evt.callId);
         if (tIdx >= 0) {
           final prev = tools[tIdx];
@@ -688,11 +718,18 @@ class ChatNotifier extends Notifier<ChatThreadState> {
                   evt.state == ToolCallState.running ? DateTime.now() : null,
             ),
           );
+          nextSteps.add(
+            ChatMilestoneStep(
+              id: 'tool-${evt.callId}',
+              kind: ChatMilestoneKind.tool,
+              toolId: evt.callId,
+            ),
+          );
         }
         _replaceMessageInSession(
           session.id,
           idx,
-          current.copyWith(tools: tools),
+          current.copyWith(tools: tools, steps: nextSteps),
         );
         // Checkpoint completed tool steps mid-turn against OS process kills.
         if (evt.state != ToolCallState.running) {

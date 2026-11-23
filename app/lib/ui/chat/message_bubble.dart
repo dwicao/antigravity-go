@@ -248,20 +248,30 @@ class MessageBubble extends StatelessWidget {
                 ),
             ],
           ),
-          if (message.thoughts.isNotEmpty) ...[
+          if (message.steps.isNotEmpty) ...[
             const SizedBox(height: 6),
-            _CollapsibleSection(
-              icon: Icons.psychology_outlined,
-              title: 'Reasoning & Thoughts',
-              body: message.thoughts,
-            ),
-          ],
-          if (message.tools.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            _FoldedToolsBar(
-              key: ValueKey('tools-${message.id}'),
+            _MilestoneStackCard(
+              key: ValueKey('steps-${message.id}'),
+              steps: message.steps,
               tools: message.tools,
+              isStreaming: message.isStreaming,
             ),
+          ] else ...[
+            if (message.thoughts.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              _CollapsibleSection(
+                icon: Icons.psychology_outlined,
+                title: 'Reasoning & Thoughts',
+                body: message.thoughts,
+              ),
+            ],
+            if (message.tools.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              _FoldedToolsBar(
+                key: ValueKey('tools-${message.id}'),
+                tools: message.tools,
+              ),
+            ],
           ],
           if (message.text.isNotEmpty) ...[
             const SizedBox(height: 8),
@@ -606,6 +616,309 @@ class _FoldedToolsBarState extends State<_FoldedToolsBar> {
                   );
                 }).toList()
               : const [],
+        ),
+      ),
+    );
+  }
+}
+
+/// Chronological `dsh-Go` style stacked progress & milestone feed showing
+/// interleaved `Thinking — ...` and `Run · ...` cards inside one turn.
+class _MilestoneStackCard extends StatefulWidget {
+  const _MilestoneStackCard({
+    super.key,
+    required this.steps,
+    required this.tools,
+    required this.isStreaming,
+  });
+
+  final List<ChatMilestoneStep> steps;
+  final List<ChatToolStep> tools;
+  final bool isStreaming;
+
+  @override
+  State<_MilestoneStackCard> createState() => _MilestoneStackCardState();
+}
+
+class _MilestoneStackCardState extends State<_MilestoneStackCard> {
+  bool _stackOpen = true;
+  final Set<String> _expandedSteps = <String>{};
+
+  static String _firstLine(String raw) {
+    final single = raw.trim().replaceAll(RegExp(r'\s+'), ' ');
+    return single;
+  }
+
+  static String _toolActionVerb(String toolName) {
+    final lower = toolName.toLowerCase();
+    if (lower.contains('run') ||
+        lower.contains('command') ||
+        lower.contains('terminal') ||
+        lower.contains('shell') ||
+        lower.contains('exec')) {
+      return 'Run';
+    }
+    if (lower.contains('write') ||
+        lower.contains('edit') ||
+        lower.contains('replace')) {
+      return 'Edit';
+    }
+    if (lower.contains('read') || lower.contains('view')) return 'Read';
+    if (lower.contains('grep') ||
+        lower.contains('find') ||
+        lower.contains('search')) {
+      return 'Search';
+    }
+    return toolName;
+  }
+
+  static String _toolCommandOrTarget(ChatToolStep step) {
+    final v = step.parameters['CommandLine'] ??
+        step.parameters['command'] ??
+        step.parameters['TargetFile'] ??
+        step.parameters['AbsolutePath'] ??
+        step.parameters['Path'] ??
+        step.parameters['path'] ??
+        step.parameters['Query'];
+    if (v != null && v.toString().trim().isNotEmpty) {
+      return v.toString().trim().replaceAll(RegExp(r'\s+'), ' ');
+    }
+    return '';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final semantic = AgySemanticColors.of(context);
+    final toolsById = {for (final t in widget.tools) t.id: t};
+    final runningCount = widget.tools
+        .where((t) => t.state == ToolCallState.running)
+        .length;
+    final cmdCount = widget.tools.length;
+    final thoughtCount = widget.steps
+        .where((s) => s.kind == ChatMilestoneKind.thought)
+        .length;
+
+    final headerLabel = runningCount > 0
+        ? 'Running $runningCount command${runningCount == 1 ? '' : 's'} ($cmdCount total)'
+        : cmdCount > 0
+            ? 'Ran $cmdCount command${cmdCount == 1 ? '' : 's'}'
+            : '$thoughtCount thinking step${thoughtCount == 1 ? '' : 's'}';
+
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: () => setState(() => _stackOpen = !_stackOpen),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Row(
+                children: [
+                  Icon(
+                    runningCount > 0
+                        ? Icons.sync
+                        : Icons.layers_outlined,
+                    size: 16,
+                    color: theme.colorScheme.primary,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      headerLabel,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  Icon(
+                    _stackOpen
+                        ? Icons.keyboard_arrow_up
+                        : Icons.keyboard_arrow_down,
+                    size: 18,
+                    color: semantic.textSecondary,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (_stackOpen) ...[
+            const Divider(height: 1),
+            for (final step in widget.steps)
+              _buildStepTile(context, step, toolsById, theme, semantic),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStepTile(
+    BuildContext context,
+    ChatMilestoneStep step,
+    Map<String, ChatToolStep> toolsById,
+    ThemeData theme,
+    AgySemanticColors semantic,
+  ) {
+    final isOpen = _expandedSteps.contains(step.id);
+
+    if (step.kind == ChatMilestoneKind.thought) {
+      final preview = _firstLine(step.text);
+      return InkWell(
+        onTap: () => setState(() {
+          if (isOpen) {
+            _expandedSteps.remove(step.id);
+          } else {
+            _expandedSteps.add(step.id);
+          }
+        }),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          decoration: BoxDecoration(
+            border: Border(
+              top: BorderSide(
+                color: theme.colorScheme.outlineVariant.withOpacity(0.25),
+              ),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    Icons.psychology_outlined,
+                    size: 15,
+                    color: theme.colorScheme.primary,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'Thinking — $preview',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: semantic.textSecondary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              if (isOpen) ...[
+                const SizedBox(height: 6),
+                AgyMarkdown(text: step.text.trim(), secondary: true),
+              ],
+            ],
+          ),
+        ),
+      );
+    }
+
+    final tool = toolsById[step.toolId];
+    if (tool == null) return const SizedBox.shrink();
+    final verb = _toolActionVerb(tool.toolName);
+    final arg = _toolCommandOrTarget(tool);
+    final label = arg.isEmpty ? verb : '$verb — $arg';
+
+    return InkWell(
+      onTap: () => setState(() {
+        if (isOpen) {
+          _expandedSteps.remove(step.id);
+        } else {
+          _expandedSteps.add(step.id);
+        }
+      }),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration: BoxDecoration(
+          border: Border(
+            top: BorderSide(
+              color: theme.colorScheme.outlineVariant.withOpacity(0.25),
+            ),
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  tool.state == ToolCallState.failed
+                      ? Icons.error_outline
+                      : tool.state == ToolCallState.running
+                          ? Icons.play_circle_outline
+                          : Icons.terminal,
+                  size: 15,
+                  color: tool.state == ToolCallState.failed
+                      ? semantic.danger
+                      : tool.state == ToolCallState.running
+                          ? theme.colorScheme.primary
+                          : Colors.green,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    AgySecretMask.mask(label),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      fontFamily: arg.isNotEmpty ? 'monospace' : null,
+                      color: tool.state == ToolCallState.failed
+                          ? semantic.danger
+                          : semantic.textPrimary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                if (tool.durationSeconds != null) ...[
+                  const SizedBox(width: 6),
+                  Text(
+                    formatDurationSeconds(tool.durationSeconds!),
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      fontSize: 10.5,
+                      color: semantic.textTertiary,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            if (isOpen &&
+                ((tool.output?.isNotEmpty ?? false) ||
+                    (tool.error?.isNotEmpty ?? false))) ...[
+              const SizedBox(height: 6),
+              if (tool.output != null && tool.output!.isNotEmpty)
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: semantic.codeWellBg,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    AgySecretMask.mask(
+                      tool.output!.length > 600
+                          ? '${tool.output!.substring(0, 600)}…'
+                          : tool.output!,
+                    ),
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 11,
+                      color: semantic.codeWellFg,
+                    ),
+                  ),
+                ),
+              if (tool.error != null && tool.error!.isNotEmpty)
+                Text(
+                  AgySecretMask.mask(tool.error!),
+                  style: TextStyle(color: semantic.danger, fontSize: 11.5),
+                ),
+            ],
+          ],
         ),
       ),
     );

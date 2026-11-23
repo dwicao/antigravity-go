@@ -732,95 +732,107 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             ),
           ),
         if (_showSlashMenu)
-          wrapCentered(
-            Container(
-              constraints: const BoxConstraints(maxHeight: 240),
-              margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              child: Card(
-                child: ListView(
-                  shrinkWrap: true,
-                  children: AgyCliCatalog.slashCommands
-                      .where((c) => c.matches(_inputController.text))
-                      .map(
-                        (c) => ListTile(
-                          dense: true,
-                          title: Row(
-                            children: [
-                              Text(
-                                c.command,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                              if (c.argHint != null) ...[
-                                const SizedBox(width: 6),
+          Flexible(
+            fit: FlexFit.loose,
+            child: wrapCentered(
+              Container(
+                constraints: BoxConstraints(
+                  maxHeight:
+                      (MediaQuery.sizeOf(context).height * 0.28).clamp(100.0, 220.0),
+                ),
+                margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                child: Card(
+                  child: ListView(
+                    shrinkWrap: true,
+                    children: AgyCliCatalog.slashCommands
+                        .where((c) => c.matches(_inputController.text))
+                        .map(
+                          (c) => ListTile(
+                            dense: true,
+                            title: Row(
+                              children: [
                                 Text(
-                                  c.argHint!,
-                                  style: theme.textTheme.labelSmall?.copyWith(
-                                    color: theme.colorScheme.onSurfaceVariant,
+                                  c.command,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
                                   ),
                                 ),
+                                if (c.argHint != null) ...[
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    c.argHint!,
+                                    style: theme.textTheme.labelSmall?.copyWith(
+                                      color: theme.colorScheme.onSurfaceVariant,
+                                    ),
+                                  ),
+                                ],
                               ],
-                            ],
+                            ),
+                            subtitle: Text(
+                              c.description,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            onTap: () {
+                              final next = c.argHint != null
+                                  ? '${c.command} '
+                                  : c.command;
+                              _inputController.text = next;
+                              _inputController.selection = TextSelection.collapsed(
+                                offset: next.length,
+                              );
+                              setState(() => _showSlashMenu = false);
+                              if (c.handledLocally && c.argHint == null) {
+                                _submit();
+                              }
+                            },
                           ),
-                          subtitle: Text(
-                            c.description,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          onTap: () {
-                            final next = c.argHint != null
-                                ? '${c.command} '
-                                : c.command;
-                            _inputController.text = next;
-                            _inputController.selection = TextSelection.collapsed(
-                              offset: next.length,
-                            );
-                            setState(() => _showSlashMenu = false);
-                            if (c.handledLocally && c.argHint == null) {
-                              _submit();
-                            }
-                          },
-                        ),
-                      )
-                      .toList(),
+                        )
+                        .toList(),
+                  ),
                 ),
               ),
             ),
           ),
         if (_showMentionMenu && _mentionFiles.isNotEmpty)
-          wrapCentered(
-            Container(
-              constraints: const BoxConstraints(maxHeight: 200),
-              margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              child: Card(
-                child: ListView(
-                  shrinkWrap: true,
-                  children: _mentionFiles.take(12).map((f) {
-                    final name = f['name'] ?? '';
-                    final path = f['path'] ?? '';
-                    return ListTile(
-                      dense: true,
-                      leading: Icon(
-                        f['type'] == 'dir'
-                            ? Icons.folder
-                            : Icons.insert_drive_file_outlined,
-                        size: 16,
-                      ),
-                      title: Text('@$name'),
-                      subtitle: Text(path, overflow: TextOverflow.ellipsis),
-                      onTap: () {
-                        final text = _inputController.text;
-                        final idx = text.lastIndexOf('@');
-                        final next =
-                            '${text.substring(0, idx)}@$path ';
-                        _inputController.text = next;
-                        _inputController.selection =
-                            TextSelection.collapsed(offset: next.length);
-                        setState(() => _showMentionMenu = false);
-                      },
-                    );
-                  }).toList(),
+          Flexible(
+            fit: FlexFit.loose,
+            child: wrapCentered(
+              Container(
+                constraints: BoxConstraints(
+                  maxHeight:
+                      (MediaQuery.sizeOf(context).height * 0.25).clamp(90.0, 190.0),
+                ),
+                margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                child: Card(
+                  child: ListView(
+                    shrinkWrap: true,
+                    children: _mentionFiles.take(12).map((f) {
+                      final name = f['name'] ?? '';
+                      final path = f['path'] ?? '';
+                      return ListTile(
+                        dense: true,
+                        leading: Icon(
+                          f['type'] == 'dir'
+                              ? Icons.folder
+                              : Icons.insert_drive_file_outlined,
+                          size: 16,
+                        ),
+                        title: Text('@$name'),
+                        subtitle: Text(path, overflow: TextOverflow.ellipsis),
+                        onTap: () {
+                          final text = _inputController.text;
+                          final idx = text.lastIndexOf('@');
+                          final next =
+                              '${text.substring(0, idx)}@$path ';
+                          _inputController.text = next;
+                          _inputController.selection =
+                              TextSelection.collapsed(offset: next.length);
+                          setState(() => _showMentionMenu = false);
+                        },
+                      );
+                    }).toList(),
+                  ),
                 ),
               ),
             ),

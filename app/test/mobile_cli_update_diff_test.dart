@@ -112,15 +112,97 @@ void main() {
     final fieldRect = tester.getRect(find.byType(TextField));
     expect(fieldRect.width, greaterThanOrEqualTo(150));
 
-    // Typing '/' shows Antigravity CLI slash commands catalog.
+    // Typing '/' shows Antigravity CLI slash commands catalog and supports filtering.
     await tester.enterText(find.byType(TextField), '/');
     await tester.pump();
     expect(find.text('/plan'), findsOneWidget);
+    expect(find.text('/goal'), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField), '/grill');
+    await tester.pump();
     expect(find.text('/grill-me'), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField), '/mcp');
+    await tester.pump();
     expect(find.text('/mcp'), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox());
     await tester.pump(const Duration(milliseconds: 500));
+  });
+
+  testWidgets(
+      'MessageBubble renders chronological DSH-Go style stacked milestone cards',
+      (tester) async {
+    final msg = ChatMessage(
+      id: 'm-stack',
+      role: ChatRole.assistant,
+      text: 'Done updating files.',
+      createdAt: DateTime(2026, 11, 23, 9, 0),
+      completedAt: DateTime(2026, 11, 23, 9, 1),
+      tools: const [
+        ChatToolStep(
+          id: 'cmd-1',
+          toolName: 'run_command',
+          state: ToolCallState.completed,
+          parameters: {'CommandLine': 'cd /sdcard/Projects && git status'},
+          output: 'clean',
+        ),
+        ChatToolStep(
+          id: 'cmd-2',
+          toolName: 'run_command',
+          state: ToolCallState.completed,
+          parameters: {'CommandLine': 'cd /sdcard/Projects && dart test'},
+          output: 'All tests passed',
+        ),
+      ],
+      steps: const [
+        ChatMilestoneStep(
+          id: 'th-1',
+          kind: ChatMilestoneKind.thought,
+          text: 'Now add the responsive composer widget.',
+        ),
+        ChatMilestoneStep(
+          id: 't-1',
+          kind: ChatMilestoneKind.tool,
+          toolId: 'cmd-1',
+        ),
+        ChatMilestoneStep(
+          id: 't-2',
+          kind: ChatMilestoneKind.tool,
+          toolId: 'cmd-2',
+        ),
+        ChatMilestoneStep(
+          id: 'th-2',
+          kind: ChatMilestoneKind.thought,
+          text: "The 'return@forEachIndex' label avoids returning early.",
+        ),
+      ],
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: MessageBubble(message: msg),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Ran 2 commands'), findsOneWidget);
+    expect(
+      find.textContaining('Thinking — Now add the responsive composer'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('cd /sdcard/Projects && git status'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining("Thinking — The 'return@forEachIndex'"),
+      findsOneWidget,
+    );
   });
 
   testWidgets('MessageBubble renders ChangeCard for changed files', (tester) async {

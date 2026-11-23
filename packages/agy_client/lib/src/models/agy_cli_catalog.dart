@@ -312,3 +312,51 @@ class FileChangeEntry {
     return out;
   }
 }
+
+enum ChatMilestoneKind { thought, tool }
+
+/// One chronological milestone/progress card inside an assistant turn
+/// (e.g. `Thinking - ...`, `Run - cd /sdcard...`, `Thinking - ...`).
+class ChatMilestoneStep {
+  const ChatMilestoneStep({
+    required this.id,
+    required this.kind,
+    this.text = '',
+    this.toolId,
+  });
+
+  final String id;
+  final ChatMilestoneKind kind;
+  final String text;
+  final String? toolId;
+
+  ChatMilestoneStep copyWith({String? text}) {
+    return ChatMilestoneStep(
+      id: id,
+      kind: kind,
+      text: text ?? this.text,
+      toolId: toolId,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'kind': kind.name,
+        if (text.isNotEmpty) 'text': text,
+        if (toolId != null) 'toolId': toolId,
+      };
+
+  factory ChatMilestoneStep.fromJson(Map<String, dynamic> json) {
+    final kindRaw = json['kind']?.toString() ?? 'thought';
+    return ChatMilestoneStep(
+      id: json['id']?.toString() ?? '',
+      kind: ChatMilestoneKind.values.firstWhere(
+        (k) => k.name == kindRaw,
+        orElse: () => ChatMilestoneKind.thought,
+      ),
+      text: json['text']?.toString() ?? '',
+      toolId: json['toolId']?.toString(),
+    );
+  }
+}
+

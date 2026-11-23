@@ -205,6 +205,8 @@ class AcpSessionManager(
                 var promptReqId = -1
                 var promptSent = false
                 var triedLoadFallback = false
+                var triedNewFallback = false
+                val pendingConfigReqIds = mutableSetOf<Int>()
                 var gotTurnResult = false
 
                 BufferedReader(InputStreamReader(proc.inputStream)).use { reader ->
@@ -237,12 +239,13 @@ class AcpSessionManager(
                             onAuthenticated()
                             newSessionReqId = active.nextId.getAndIncrement()
                             if (!existingSessionId.isNullOrBlank()) {
+                                // Prefer session/resume so conversation continues WITHOUT replaying old turns.
                                 sendJson(
                                     writer,
                                     JSONObject()
                                         .put("jsonrpc", "2.0")
                                         .put("id", newSessionReqId)
-                                        .put("method", "session/load")
+                                        .put("method", "session/resume")
                                         .put(
                                             "params",
                                             JSONObject()
@@ -268,10 +271,38 @@ class AcpSessionManager(
                             continue
                         }
 
-                        // Handle session/new or session/load response -> send prompt
+                        // Handle session/new, session/resume, or session/load response -> send config then prompt
                         if (msgId is Number && msgId.toInt() == newSessionReqId) {
                             if (msg.has("error") && !existingSessionId.isNullOrBlank() && !triedLoadFallback) {
                                 triedLoadFallback = true
+                                val errObj = msg.optJSONObject("error")
+                                val errCode = errObj?.optInt("code", 0) ?: 0
+                                newSessionReqId = active.nextId.getAndIncrement()
+                                // If session/resume isn't supported (-32601), try session/load;
+                                // if session was not found / expired, start fresh with session/new.
+                                val fallbackMethod = if (errCode == -32601) "session/load" else "session/new"
+                                val fallbackParams = if (fallbackMethod == "session/load") {
+                                    JSONObject()
+                                        .put("sessionId", existingSessionId)
+                                        .put("cwd", cwd.absolutePath)
+                                } else {
+                                    JSONObject()
+                                        .put("cwd", cwd.absolutePath)
+                                        .put("mcpServers", JSONArray())
+                                }
+                                sendJson(
+                                    writer,
+                                    JSONObject()
+                                        .put("jsonrpc", "2.0")
+                                        .put("id", newSessionReqId)
+                                        .put("method", fallbackMethod)
+                                        .put("params", fallbackParams)
+                                )
+                                continue
+                            }
+                            if (msg.has("error") && triedLoadFallback && !triedNewFallback && acpSessionId == null) {
+                                triedNewFallback = true
+                                // Final fallback: if session/load also failed, open a clean session/new
                                 newSessionReqId = active.nextId.getAndIncrement()
                                 sendJson(
                                     writer,
@@ -302,12 +333,15 @@ class AcpSessionManager(
 
                             if (acpSessionId != null) {
                                 active.sessionId = acpSessionId
+                                pendingConfigReqIds.clear()
                                 if (!modelId.isNullOrBlank()) {
+                                    val cfgId = active.nextId.getAndIncrement()
+                                    pendingConfigReqIds.add(cfgId)
                                     sendJson(
                                         writer,
                                         JSONObject()
                                             .put("jsonrpc", "2.0")
-                                            .put("id", active.nextId.getAndIncrement())
+                                            .put("id", cfgId)
                                             .put("method", "session/set_config_option")
                                             .put(
                                                 "params",
@@ -323,11 +357,13 @@ class AcpSessionManager(
                                     else -> modeCli
                                 }
                                 if (!safeModeCli.isNullOrBlank()) {
+                                    val cfgId = active.nextId.getAndIncrement()
+                                    pendingConfigReqIds.add(cfgId)
                                     sendJson(
                                         writer,
                                         JSONObject()
                                             .put("jsonrpc", "2.0")
-                                            .put("id", active.nextId.getAndIncrement())
+                                            .put("id", cfgId)
                                             .put("method", "session/set_config_option")
                                             .put(
                                                 "params",
@@ -339,6 +375,39 @@ class AcpSessionManager(
                                     )
                                 }
 
+                                if (pendingConfigReqIds.isEmpty()) {
+                                    promptReqId = active.nextId.getAndIncrement()
+                                    promptSent = true
+                                    sendJson(
+                                        writer,
+                                        JSONObject()
+                                            .put("jsonrpc", "2.0")
+                                            .put("id", promptReqId)
+                                            .put("method", "session/prompt")
+                                            .put(
+                                                "params",
+                                                JSONObject()
+                                                    .put("sessionId", acpSessionId)
+                                                    .put(
+                                                        "prompt",
+                                                        JSONArray().put(
+                                                            JSONObject()
+                                                                .put("type", "text")
+                                                                .put("text", prompt)
+                                                        )
+                                                    )
+                                            )
+                                    )
+                                }
+                            } else {
+                                break
+                            }
+                            continue
+                        }
+
+                        // Wait until all session/set_config_option responses arrive before sending session/prompt.
+                        if (msgId is Number && pendingConfigReqIds.remove(msgId.toInt())) {
+                            if (pendingConfigReqIds.isEmpty() && !promptSent && acpSessionId != null) {
                                 promptReqId = active.nextId.getAndIncrement()
                                 promptSent = true
                                 sendJson(
@@ -361,8 +430,6 @@ class AcpSessionManager(
                                                 )
                                         )
                                 )
-                            } else {
-                                break
                             }
                             continue
                         }
