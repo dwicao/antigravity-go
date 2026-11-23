@@ -145,10 +145,9 @@ void main() {
         reparsed.first.copyWith(passes: false, clearVerifiedAt: true).verifiedAt,
         isNull,
       );
-      expect(
-        () => HarnessFeatureItem.parseFeatureListStrict('{corrupt'),
-        throwsFormatException,
-      );
+      final strictBad = HarnessFeatureItem.parseFeatureListStrict('{corrupt');
+      expect(strictBad.hasParseError, isTrue);
+      expect(strictBad.items, isEmpty);
       expect(
         HarnessWorkspaceTemplates.detectVerifyCommand(
           gradlewCommand: './gradlew testArm64DebugUnitTest',

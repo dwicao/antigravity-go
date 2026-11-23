@@ -733,7 +733,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       final queueSid = ref.read(sessionsProvider).activeSessionId ??
           _loadedSessionId ??
           'default';
-      final nextQueue = [
+      final nextQueue = <({String prompt, List<String> attachments})>[
         ...(_queuedItemsBySession[queueSid] ?? const []),
         (prompt: prompt, attachments: List<String>.from(attachments)),
       ];
