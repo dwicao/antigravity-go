@@ -23,6 +23,16 @@ void main() {
     final decoded = ChatMessage.fromJson(original.toJson());
     expect(decoded.checkpointRef, 'abc1234def5678');
     expect(decoded.text, 'Refactor auth flow');
+    expect(decoded.isCompactionSummary, isFalse);
+
+    final compacted = ChatMessage(
+      id: 'c1',
+      role: ChatRole.assistant,
+      text: 'Summary handoff',
+      createdAt: DateTime.utc(2026, 11, 23, 12, 10),
+      isCompactionSummary: true,
+    );
+    expect(ChatMessage.fromJson(compacted.toJson()).isCompactionSummary, isTrue);
   });
 
   test('harnessProvider toggles and contextBudgetProvider evaluates pressure', () async {
@@ -36,6 +46,32 @@ void main() {
     final snap = container.read(contextBudgetProvider);
     expect(snap.usedTokens, 0);
     expect(snap.shouldCompact, isFalse);
+  });
+
+  test('contextBudgetProvider excludes historical turns after compactThread', () async {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    container.listen(contextBudgetProvider, (_, _) {});
+
+    // Wait for initial microtask loads (sessions / runtime / settings).
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    final notifier = container.read(chatProvider.notifier);
+    final hugeText = List<String>.filled(1000000, 'u').join();
+
+    await notifier.appendSystemFeedback(hugeText);
+    await notifier.appendSystemFeedback('Second message before compaction');
+
+    final beforeCompact = container.read(contextBudgetProvider);
+    expect(beforeCompact.percentage, 100);
+    expect(beforeCompact.shouldCompact, isTrue);
+
+    final res = await notifier.compactThread();
+    expect(res.ok, isTrue);
+
+    final afterCompact = container.read(contextBudgetProvider);
+    expect(afterCompact.compactedMessages, 2);
+    expect(afterCompact.percentage, lessThan(5));
+    expect(afterCompact.shouldCompact, isFalse);
   });
 
   testWidgets('MessageBubble renders Rewind button on user messages with checkpoint', (tester) async {

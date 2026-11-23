@@ -80,6 +80,7 @@ class AgyCliCatalog {
       command: '/compact',
       argHint: '[instructions]',
       description: 'Summarize conversation history to free context window',
+      handledLocally: true,
     ),
     AgySlashCommand(
       command: '/context',

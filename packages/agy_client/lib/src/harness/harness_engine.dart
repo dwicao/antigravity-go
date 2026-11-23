@@ -243,6 +243,20 @@ class HarnessLoopDetector {
   }
 }
 
+/// Minimal turn representation consumed by [HarnessContextMonitor] compaction
+/// helpers without coupling `agy_client` to Flutter chat state classes.
+class HarnessCompactionTurn {
+  const HarnessCompactionTurn({
+    required this.role,
+    required this.text,
+    this.toolSummaries = const <String>[],
+  });
+
+  final String role;
+  final String text;
+  final List<String> toolSummaries;
+}
+
 /// Snapshot of estimated conversation context pressure against the effective
 /// working budget.
 class HarnessContextSnapshot {
@@ -253,6 +267,8 @@ class HarnessContextSnapshot {
     required this.needsWarning,
     required this.shouldCompact,
     required this.statusLabel,
+    this.compactedMessages = 0,
+    this.activeMessages = 0,
   });
 
   final int usedTokens;
@@ -261,6 +277,8 @@ class HarnessContextSnapshot {
   final bool needsWarning;
   final bool shouldCompact;
   final String statusLabel;
+  final int compactedMessages;
+  final int activeMessages;
 
   int get percentage => (ratio * 100).clamp(0, 100).round();
 }
@@ -280,8 +298,18 @@ class HarnessContextMonitor {
   /// because reasoning quality degrades well before 100% fill).
   static int effectiveBudgetForModel(String? modelId) {
     final m = (modelId ?? '').trim().toLowerCase();
-    if (m.contains('gemini-2.5') || m.contains('gemini-3')) {
-      return 250000;
+    if (m.contains('gemini-3.8') || m.contains('1m')) {
+      return 400000;
+    }
+    if (m.contains('gemini-4') ||
+        m.contains('orchestrator') ||
+        m.contains('neon') ||
+        m.contains('carbon') ||
+        m.contains('argon') ||
+        m.contains('hydrogen') ||
+        m.contains('gemini-2.5') ||
+        m.contains('gemini-3')) {
+      return 256000;
     }
     if (m.contains('claude') || m.contains('opus') || m.contains('sonnet')) {
       return 160000;
@@ -302,9 +330,13 @@ class HarnessContextMonitor {
     Iterable<String> toolOutputs = const <String>[],
     String? modelId,
     int? overrideBudgetTokens,
+    int compactedMessages = 0,
+    int? activeMessages,
   }) {
     var totalTokens = 0;
+    var msgCount = 0;
     for (final text in messageTexts) {
+      msgCount++;
       totalTokens += estimateTokens(text) + 12;
     }
     for (final output in toolOutputs) {
@@ -330,7 +362,136 @@ class HarnessContextMonitor {
       needsWarning: needsWarning,
       shouldCompact: shouldCompact,
       statusLabel: statusLabel,
+      compactedMessages: compactedMessages,
+      activeMessages: activeMessages ?? msgCount,
     );
+  }
+
+  /// Builds a bounded prompt for a stateless LLM compaction turn so `/compact`
+  /// still works even when the prior session hit 100% context.
+  static String buildCompactionPrompt(
+    List<HarnessCompactionTurn> turns, {
+    required int compactedMessages,
+    String? focusInstructions,
+  }) {
+    final focus = focusInstructions?.trim() ?? '';
+    final transcript = _renderDigest(turns, maxChars: 34000);
+    final buf = StringBuffer()
+      ..writeln(
+        'Compact the following $compactedMessages-message conversation into a concise, self-contained handoff summary so work can resume seamlessly in a fresh context window.',
+      );
+    if (focus.isNotEmpty) {
+      buf.writeln('Focus instructions: $focus');
+    }
+    buf
+      ..writeln()
+      ..writeln('Include only verified facts observed in the transcript under these headings:')
+      ..writeln('### Goal & Decisions')
+      ..writeln('### Touched Files & Changes')
+      ..writeln('### Verified Checks')
+      ..writeln('### Open Blockers & Next Steps')
+      ..writeln()
+      ..writeln('<transcript>')
+      ..writeln(transcript)
+      ..writeln('</transcript>');
+    return buf.toString();
+  }
+
+  /// Deterministic extractive compaction fallback used when the agent runtime
+  /// is offline, unauthenticated, or returns an error during `/compact`.
+  static String buildFallbackCompactionSummary(
+    List<HarnessCompactionTurn> turns, {
+    required int compactedMessages,
+    String? focusInstructions,
+  }) {
+    final userRequests = <String>[];
+    final toolList = <String>{};
+    String lastAssistant = '';
+
+    for (final t in turns) {
+      final cleaned = t.text.trim().replaceAll(RegExp(r'\s+'), ' ');
+      if (t.role == 'user' && cleaned.isNotEmpty) {
+        userRequests.add(
+          cleaned.length > 140 ? '${cleaned.substring(0, 140)}…' : cleaned,
+        );
+      } else if (t.role == 'assistant' && cleaned.isNotEmpty) {
+        lastAssistant =
+            cleaned.length > 500 ? '${cleaned.substring(0, 500)}…' : cleaned;
+      }
+      for (final tool in t.toolSummaries) {
+        final trimmedTool = tool.trim();
+        if (trimmedTool.isNotEmpty) toolList.add(trimmedTool);
+      }
+    }
+
+    final recentUsers = userRequests.length > 5
+        ? userRequests.sublist(userRequests.length - 5)
+        : userRequests;
+    final focus = focusInstructions?.trim() ?? '';
+
+    final buf = StringBuffer()
+      ..writeln('### Context Compacted ($compactedMessages messages archived)');
+    if (focus.isNotEmpty) {
+      buf.writeln('- **Focus**: $focus');
+    }
+    if (recentUsers.isNotEmpty) {
+      buf.writeln('\n#### Recent User Requests');
+      for (final r in recentUsers) {
+        buf.writeln('- $r');
+      }
+    }
+    if (lastAssistant.isNotEmpty) {
+      buf.writeln('\n#### Latest State');
+      buf.writeln(lastAssistant);
+    }
+    if (toolList.isNotEmpty) {
+      buf.writeln('\n#### Tools Run');
+      for (final tool in toolList.take(12)) {
+        final oneLine = tool.replaceAll(RegExp(r'\s+'), ' ');
+        buf.writeln(
+          '- ${oneLine.length > 120 ? '${oneLine.substring(0, 120)}…' : oneLine}',
+        );
+      }
+    }
+    return buf.toString().trim();
+  }
+
+  static String _renderDigest(
+    List<HarnessCompactionTurn> turns, {
+    int maxChars = 34000,
+  }) {
+    if (turns.isEmpty) return '';
+    final blocks = <String>[];
+    for (final t in turns) {
+      final body = t.text.trim();
+      final clippedBody =
+          body.length > 2400 ? '${body.substring(0, 2400)}\n…[truncated]' : body;
+      final sb = StringBuffer('[${t.role.toUpperCase()}]');
+      if (clippedBody.isNotEmpty) {
+        sb.write('\n$clippedBody');
+      }
+      if (t.toolSummaries.isNotEmpty) {
+        final tools = t.toolSummaries.take(8).join('; ');
+        sb.write('\n[tools: $tools]');
+      }
+      blocks.add(sb.toString());
+    }
+
+    // Keep oldest anchor + as many recent turns as fit in maxChars.
+    final selected = <String>[];
+    var used = 0;
+    for (var i = blocks.length - 1; i >= 0; i--) {
+      final b = blocks[i];
+      if (used + b.length + 2 > maxChars && selected.isNotEmpty) {
+        if (i > 0) {
+          selected.add('… (${i + 1} earlier turns omitted for brevity) …');
+        }
+        break;
+      }
+      selected.add(b);
+      used += b.length + 2;
+    }
+    return selected.reversed.join('\n\n');
   }
 }
 

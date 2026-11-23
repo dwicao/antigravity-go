@@ -151,6 +151,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       return;
     }
 
+    if (firstWord == '/compact') {
+      _clearInputMenus();
+      final instructions = text.length > firstWord.length
+          ? text.substring(firstWord.length).trim()
+          : null;
+      final res = await ref.read(chatProvider.notifier).compactThread(
+            instructions: instructions,
+          );
+      if (!res.ok && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(res.message)),
+        );
+      }
+      return;
+    }
+
     if (firstWord == '/context' || firstWord == '/harness') {
       _clearInputMenus();
       await Navigator.of(context).push(
@@ -1263,49 +1279,53 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                               .setExecutionMode(v),
                         ),
                         const SizedBox(width: 6),
-                        InkWell(
-                          borderRadius: BorderRadius.circular(20),
-                          onTap: () => Navigator.of(context).push(
-                            MaterialPageRoute<void>(
-                              builder: (_) => const HarnessPage(),
+                        Tooltip(
+                          message:
+                              '~${ctxSnap.usedTokens} / ${ctxSnap.budgetTokens} tokens (${ctxSnap.statusLabel}) — tap for Harness & /compact',
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(20),
+                            onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => const HarnessPage(),
+                              ),
                             ),
-                          ),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 5,
-                            ),
-                            decoration: BoxDecoration(
-                              color: ctxSnap.shouldCompact
-                                  ? theme.colorScheme.errorContainer
-                                  : ctxSnap.needsWarning
-                                      ? Colors.amber.withOpacity(0.18)
-                                      : theme.colorScheme.surfaceContainerHighest,
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  Icons.engineering_outlined,
-                                  size: 13,
-                                  color: ctxSnap.shouldCompact
-                                      ? theme.colorScheme.error
-                                      : ctxSnap.needsWarning
-                                          ? Colors.amber.shade800
-                                          : theme.colorScheme.onSurfaceVariant,
-                                ),
-                                const SizedBox(width: 4),
-                                Text(
-                                  '${ctxSnap.percentage}% ctx',
-                                  style: theme.textTheme.labelSmall?.copyWith(
-                                    fontWeight: FontWeight.w600,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 5,
+                              ),
+                              decoration: BoxDecoration(
+                                color: ctxSnap.shouldCompact
+                                    ? theme.colorScheme.errorContainer
+                                    : ctxSnap.needsWarning
+                                        ? Colors.amber.withOpacity(0.18)
+                                        : theme.colorScheme.surfaceContainerHighest,
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.engineering_outlined,
+                                    size: 13,
                                     color: ctxSnap.shouldCompact
                                         ? theme.colorScheme.error
-                                        : null,
+                                        : ctxSnap.needsWarning
+                                            ? Colors.amber.shade800
+                                            : theme.colorScheme.onSurfaceVariant,
                                   ),
-                                ),
-                              ],
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    '${ctxSnap.percentage}% ctx',
+                                    style: theme.textTheme.labelSmall?.copyWith(
+                                      fontWeight: FontWeight.w600,
+                                      color: ctxSnap.shouldCompact
+                                          ? theme.colorScheme.error
+                                          : null,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
                         ),

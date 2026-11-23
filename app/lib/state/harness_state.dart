@@ -100,13 +100,25 @@ final harnessProvider =
 final contextBudgetProvider = Provider<HarnessContextSnapshot>((ref) {
   final messages = ref.watch(chatProvider.select((s) => s.messages));
   final modelId = ref.watch(settingsProvider.select((s) => s.selectedModelId));
+  final lastCompactIdx = messages.lastIndexWhere((m) => m.isCompactionSummary);
+  final activeMessages =
+      lastCompactIdx >= 0 ? messages.sublist(lastCompactIdx) : messages;
+  final compactedCount = lastCompactIdx >= 0 ? lastCompactIdx : 0;
   const monitor = HarnessContextMonitor();
   return monitor.evaluate(
-    messageTexts: messages.map((m) => '${m.text}\n${m.thoughts}'),
-    toolOutputs: messages
+    // Historical completed turns' internal thoughts are excluded from
+    // subsequent API prompt windows; only include thoughts while streaming.
+    messageTexts: activeMessages.map(
+      (m) => m.isStreaming && m.thoughts.isNotEmpty
+          ? '${m.text}\n${m.thoughts}'
+          : m.text,
+    ),
+    toolOutputs: activeMessages
         .expand((m) => m.tools)
         .map((t) => '${t.toolName} ${t.output ?? ''} ${t.error ?? ''}'),
     modelId: modelId,
+    compactedMessages: compactedCount,
+    activeMessages: activeMessages.length,
   );
 });
 

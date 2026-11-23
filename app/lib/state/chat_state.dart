@@ -92,6 +92,7 @@ class ChatMessage {
     this.changedFiles = const [],
     this.steps = const [],
     this.checkpointRef,
+    this.isCompactionSummary = false,
   });
 
   final String id;
@@ -112,6 +113,7 @@ class ChatMessage {
   final List<FileChangeEntry> changedFiles;
   final List<ChatMilestoneStep> steps;
   final String? checkpointRef;
+  final bool isCompactionSummary;
 
   ChatMessage copyWith({
     String? text,
@@ -128,6 +130,7 @@ class ChatMessage {
     List<FileChangeEntry>? changedFiles,
     List<ChatMilestoneStep>? steps,
     String? checkpointRef,
+    bool? isCompactionSummary,
   }) {
     return ChatMessage(
       id: id,
@@ -148,6 +151,7 @@ class ChatMessage {
       changedFiles: changedFiles ?? this.changedFiles,
       steps: steps ?? this.steps,
       checkpointRef: checkpointRef ?? this.checkpointRef,
+      isCompactionSummary: isCompactionSummary ?? this.isCompactionSummary,
     );
   }
 
@@ -169,6 +173,7 @@ class ChatMessage {
           'changedFiles': changedFiles.map((f) => f.toJson()).toList(),
         if (steps.isNotEmpty) 'steps': steps.map((s) => s.toJson()).toList(),
         'checkpointRef': ?checkpointRef,
+        if (isCompactionSummary) 'isCompactionSummary': true,
       };
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) {
@@ -207,6 +212,7 @@ class ChatMessage {
           .map(ChatMilestoneStep.fromJson)
           .toList(),
       checkpointRef: json['checkpointRef'] as String?,
+      isCompactionSummary: json['isCompactionSummary'] == true,
     );
   }
 }
@@ -289,6 +295,14 @@ class ChatNotifier extends Notifier<ChatThreadState> {
   final Map<String, DateTime> _firstOutputAt = {};
   final Map<String, String> _turnModelId = {};
   final Map<String, String> _turnEffort = {};
+  final Map<
+      String,
+      ({
+        List<HarnessCompactionTurn> turns,
+        int compactCount,
+        String? instructions,
+        String? tempRemoteId,
+      })> _pendingCompactions = {};
   String? _activeStreamingSessionId;
 
   static List<ChatToolStep> _finalizeTools(
@@ -563,6 +577,17 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     final effectivePrompt = '$prompt$attachmentNote';
     final now = DateTime.now();
 
+    final priorMsgs = _messagesForSession(session.id);
+    final prevCompactIdx = priorMsgs.lastIndexWhere((m) => m.isCompactionSummary);
+    final hasPostCompactUserTurn = prevCompactIdx >= 0 &&
+        priorMsgs.skip(prevCompactIdx + 1).any((m) => m.role == ChatRole.user);
+    final carryCompactContext =
+        (session.remoteConversationId == null ||
+                session.remoteConversationId!.isEmpty) &&
+            prevCompactIdx >= 0 &&
+            !hasPostCompactUserTurn &&
+            priorMsgs[prevCompactIdx].text.trim().isNotEmpty;
+
     final userMsgId = const Uuid().v4();
     final userMsg = ChatMessage(
       id: userMsgId,
@@ -636,8 +661,12 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         ? requestedMode
         : requestedMode.androidSafe;
 
+    final requestPrompt = carryCompactContext
+        ? '[Compacted Session Context]\n${priorMsgs[prevCompactIdx].text.trim()}\n\n[User Request]\n$effectivePrompt'
+        : effectivePrompt;
+
     final request = AgyPromptRequest(
-      prompt: effectivePrompt,
+      prompt: requestPrompt,
       workspacePath: effectiveWorkspace,
       extraDirs: [
         ...project.folders,
@@ -752,7 +781,17 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         if (evt.model != null && evt.model!.isNotEmpty) {
           _turnModelId[assistantId] = evt.model!;
         }
-        if (evt.conversationId.isNotEmpty) {
+        if (current.isCompactionSummary) {
+          final pending = _pendingCompactions[assistantId];
+          if (pending != null && evt.conversationId.isNotEmpty) {
+            _pendingCompactions[assistantId] = (
+              turns: pending.turns,
+              compactCount: pending.compactCount,
+              instructions: pending.instructions,
+              tempRemoteId: evt.conversationId,
+            );
+          }
+        } else if (evt.conversationId.isNotEmpty) {
           ref.read(sessionsProvider.notifier).updateSession(
                 session.copyWith(remoteConversationId: evt.conversationId),
               );
@@ -876,9 +915,13 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           ref.read(authProvider.notifier).markAuthenticatedFromTurn();
         }
         final finalText = current.text.isEmpty ? evt.response : current.text;
+        final resolvedText = current.isCompactionSummary &&
+                finalText.trim().isEmpty
+            ? _compactionFallbackText(assistantId)
+            : finalText;
         final stats = _computeTurnStats(
           assistantId: assistantId,
-          text: finalText,
+          text: resolvedText,
           thoughts: current.thoughts,
           usage: evt.usage,
           reportedDurationSeconds: evt.durationSeconds,
@@ -887,7 +930,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           session.id,
           idx,
           current.copyWith(
-            text: finalText,
+            text: resolvedText,
             usage: evt.usage,
             tools: _finalizeTools(current.tools),
             durationSeconds: stats.durationSec,
@@ -898,12 +941,22 @@ class ChatNotifier extends Notifier<ChatThreadState> {
             isStreaming: false,
           ),
         );
-        if (evt.conversationId.isNotEmpty) {
+        if (current.isCompactionSummary) {
+          final pending = _pendingCompactions[assistantId];
+          if (pending != null && evt.conversationId.isNotEmpty) {
+            _pendingCompactions[assistantId] = (
+              turns: pending.turns,
+              compactCount: pending.compactCount,
+              instructions: pending.instructions,
+              tempRemoteId: evt.conversationId,
+            );
+          }
+        } else if (evt.conversationId.isNotEmpty) {
           ref.read(sessionsProvider.notifier).updateSession(
                 session.copyWith(
                   remoteConversationId: evt.conversationId,
                   updatedAt: DateTime.now(),
-                  lastPreview: finalText,
+                  lastPreview: resolvedText,
                 ),
               );
         }
@@ -934,7 +987,9 @@ class ChatNotifier extends Notifier<ChatThreadState> {
                 onError: (Object err) => _finishAssistantMessage(
                   session: session,
                   assistantId: assistantId,
-                  text: 'Agent error: $err',
+                  text: current.isCompactionSummary
+                      ? _compactionFallbackText(assistantId)
+                      : 'Agent error: $err',
                 ),
                 onDone: () => _completeStreaming(session, assistantId),
               );
@@ -946,13 +1001,18 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           thoughts: current.thoughts,
           usage: current.usage,
         );
+        final errorOrFallback = current.isCompactionSummary
+            ? (current.text.trim().isNotEmpty
+                ? current.text
+                : _compactionFallbackText(assistantId))
+            : (current.text.isEmpty
+                ? evt.message
+                : '${current.text}\n\n${evt.message}');
         _replaceMessageInSession(
           session.id,
           idx,
           current.copyWith(
-            text: current.text.isEmpty
-                ? evt.message
-                : '${current.text}\n\n${evt.message}',
+            text: errorOrFallback,
             tools: _finalizeTools(current.tools, failed: true),
             durationSeconds: current.durationSeconds ?? stats.durationSec,
             tokensPerSecond: current.tokensPerSecond ?? stats.tokPerSec,
@@ -960,7 +1020,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
             reasoningEffort: _turnEffort[assistantId] ?? current.reasoningEffort,
             completedAt: current.completedAt ?? DateTime.now(),
             isStreaming: false,
-            requiresAuth: evt.requiresAuth,
+            requiresAuth: !current.isCompactionSummary && evt.requiresAuth,
           ),
         );
     }
@@ -1025,13 +1085,18 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     if (idx >= 0) {
       final cur = msgs[idx];
       final finalizedTools = _finalizeTools(cur.tools);
+      final resolvedText =
+          cur.isCompactionSummary && cur.text.trim().isEmpty
+              ? _compactionFallbackText(assistantId)
+              : cur.text;
       if (cur.isStreaming ||
           cur.durationSeconds == null ||
           cur.completedAt == null ||
+          resolvedText != cur.text ||
           !identical(finalizedTools, cur.tools)) {
         final stats = _computeTurnStats(
           assistantId: assistantId,
-          text: cur.text,
+          text: resolvedText,
           thoughts: cur.thoughts,
           usage: cur.usage,
         );
@@ -1039,6 +1104,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           session.id,
           idx,
           cur.copyWith(
+            text: resolvedText,
             isStreaming: false,
             tools: finalizedTools,
             durationSeconds: cur.durationSeconds ?? stats.durationSec,
@@ -1052,6 +1118,13 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           ),
         );
       }
+    }
+    final pendingCompact = _pendingCompactions.remove(assistantId);
+    if (pendingCompact?.tempRemoteId != null &&
+        pendingCompact!.tempRemoteId!.isNotEmpty) {
+      unawaited(
+        RuntimeBridge.instance.closeSessionWorker(pendingCompact.tempRemoteId!),
+      );
     }
     final persisted = _messagesForSession(session.id);
     _inFlightMessages.remove(session.id);
@@ -1361,10 +1434,248 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     final activeId = ref.read(sessionsProvider).activeSessionId;
     _loopDetector.reset();
     _seenLoopCallIds.clear();
+    _pendingCompactions.clear();
     state = const ChatThreadState();
     if (activeId != null) {
       await _persistMessages(activeId, const []);
     }
+  }
+
+  String _compactionFallbackText(String assistantId) {
+    final info = _pendingCompactions[assistantId];
+    if (info == null) {
+      return '### Context Compacted\nConversation context reset for a fresh window.';
+    }
+    return HarnessContextMonitor.buildFallbackCompactionSummary(
+      info.turns,
+      compactedMessages: info.compactCount,
+      focusInstructions: info.instructions,
+    );
+  }
+
+  /// Compacts the active conversation window:
+  /// 1. Closes and resets the old bloated backend ACP session (`remoteConversationId`).
+  /// 2. Distills uncompacted turns into a fresh [ChatMessage] with
+  ///    `isCompactionSummary: true` (via stateless LLM turn when online, or
+  ///    deterministic extractive fallback when offline/error).
+  /// 3. Keeps older messages visible in scrollback while excluding them from
+  ///    `contextBudgetProvider` so context drops immediately and subsequent
+  ///    prompts resume cleanly from the compacted handoff summary.
+  Future<({bool ok, String message})> compactThread({
+    String? instructions,
+  }) async {
+    final busy = state.isStreaming ||
+        _activeStreamingSessionId != null ||
+        state.activeBackgroundSessionIds.isNotEmpty ||
+        ref.read(runtimeProvider).backgroundTasks.isNotEmpty;
+    if (busy) {
+      return (
+        ok: false,
+        message: 'Wait for or stop the active turn before compacting.',
+      );
+    }
+
+    final session = ref.read(sessionsProvider).activeSession;
+    final msgs = state.messages;
+    if (session == null || msgs.isEmpty) {
+      return (ok: false, message: 'Nothing to compact yet.');
+    }
+
+    final lastCompactIdx = msgs.lastIndexWhere((m) => m.isCompactionSummary);
+    if (lastCompactIdx == msgs.length - 1) {
+      return (
+        ok: false,
+        message: 'Context was just compacted — no new turns since compaction.',
+      );
+    }
+
+    final activeSlice = lastCompactIdx >= 0 ? msgs.sublist(lastCompactIdx) : msgs;
+    final turns = activeSlice
+        .map(
+          (m) => HarnessCompactionTurn(
+            role: m.role.name,
+            text: m.text,
+            toolSummaries: m.tools
+                .map((t) {
+                  final out = (t.error != null && t.error!.isNotEmpty)
+                      ? 'ERR: ${t.error}'
+                      : (t.output ?? '');
+                  final clipped =
+                      out.length > 240 ? '${out.substring(0, 240)}…' : out;
+                  return clipped.isEmpty ? t.toolName : '${t.toolName} ($clipped)';
+                })
+                .toList(growable: false),
+          ),
+        )
+        .toList(growable: false);
+    final compactCount = msgs.length;
+    final cleanInstructions = instructions?.trim();
+
+    final hosts = ref.read(hostsProvider);
+    final sshHost = hosts.activeSshHost;
+    final runtime = ref.read(runtimeProvider);
+    final oldRemoteId = session.remoteConversationId;
+
+    // Close the old bloated backend session and detach it so the next prompt
+    // starts from a clean context window seeded with the handoff summary.
+    if (sshHost == null && oldRemoteId != null && oldRemoteId.isNotEmpty) {
+      try {
+        await RuntimeBridge.instance.closeSessionWorker(oldRemoteId);
+      } catch (_) {}
+      if (!ref.mounted) return (ok: false, message: 'Cancelled');
+    }
+
+    final resetSession = session.copyWith(
+      clearRemoteConversationId: true,
+      updatedAt: DateTime.now(),
+    );
+    await ref.read(sessionsProvider.notifier).updateSession(resetSession);
+    if (!ref.mounted) return (ok: false, message: 'Cancelled');
+
+    final settings = ref.read(settingsProvider);
+    _loopDetector.reset();
+    _seenLoopCallIds.clear();
+
+    if (sshHost == null && !runtime.status.isReady) {
+      final fallback = HarnessContextMonitor.buildFallbackCompactionSummary(
+        turns,
+        compactedMessages: compactCount,
+        focusInstructions: cleanInstructions,
+      );
+      final summaryMsg = ChatMessage(
+        id: const Uuid().v4(),
+        role: ChatRole.assistant,
+        text: fallback,
+        createdAt: DateTime.now(),
+        completedAt: DateTime.now(),
+        modelId: settings.selectedModelId,
+        isCompactionSummary: true,
+      );
+      final updated = [...msgs, summaryMsg];
+      _loadedSessionId = resetSession.id;
+      _updateSessionMessages(resetSession.id, updated);
+      await _persistMessages(resetSession.id, updated);
+      return (
+        ok: true,
+        message: 'Compacted $compactCount messages into a fresh context.',
+      );
+    }
+
+    final assistantId = const Uuid().v4();
+    final now = DateTime.now();
+    final summaryMsg = ChatMessage(
+      id: assistantId,
+      role: ChatRole.assistant,
+      text: '',
+      createdAt: now,
+      modelId: settings.selectedModelId,
+      reasoningEffort: settings.reasoningEffort,
+      isStreaming: true,
+      isCompactionSummary: true,
+    );
+    final nextMessages = [...msgs, summaryMsg];
+    final turnId = const Uuid().v4();
+    _loadedSessionId = resetSession.id;
+    _activeStreamingSessionId = resetSession.id;
+    _turnStartedAt[assistantId] = now;
+    _turnModelId[assistantId] = settings.selectedModelId;
+    _turnEffort[assistantId] = settings.reasoningEffort;
+    _inFlightMessages[resetSession.id] = nextMessages;
+    _pendingCompactions[assistantId] = (
+      turns: turns,
+      compactCount: compactCount,
+      instructions: cleanInstructions,
+      tempRemoteId: null,
+    );
+
+    state = state.copyWith(
+      messages: nextMessages,
+      isStreaming: true,
+      activeTurnId: turnId,
+      activeBackgroundSessionIds: {
+        ...state.activeBackgroundSessionIds,
+        resetSession.id,
+      },
+      tokensPerSecond: 0,
+      clearPermission: true,
+      clearStallWarning: true,
+      clearLoopWarning: true,
+    );
+
+    final project = ref.read(projectsProvider).activeProject;
+    final perms = ref.read(permissionsProvider);
+    final apiKey = await ref.read(authServiceProvider).readGeminiApiKey();
+    if (!ref.mounted) return (ok: false, message: 'Cancelled');
+
+    final effectiveWorkspace = resetSession.workspacePath.isNotEmpty
+        ? resetSession.workspacePath
+        : (project.primaryFolder.isNotEmpty
+            ? project.primaryFolder
+            : (runtime.status.workspaceRoot ?? ''));
+
+    final compactPrompt = HarnessContextMonitor.buildCompactionPrompt(
+      turns,
+      compactedMessages: compactCount,
+      focusInstructions: cleanInstructions,
+    );
+
+    final request = AgyPromptRequest(
+      prompt: compactPrompt,
+      workspacePath: effectiveWorkspace,
+      extraDirs: [
+        ...project.folders,
+        if (perms.allFilesAccess) perms.externalStorageRoot,
+        if (perms.allFilesAccess) '/sdcard',
+      ],
+      conversationId: null,
+      modelId: settings.selectedModelId,
+      effortCliValue: settings.reasoningEffort,
+      mode: sshHost != null
+          ? AgyExecutionMode.plan
+          : AgyExecutionMode.plan.androidSafe,
+      dangerouslySkipPermissions: true,
+      allowNonWorkspaceAccess: true,
+      geminiApiKey: apiKey,
+      continueLast: false,
+      remoteAgent: settings.remoteAgent.isEmpty ? null : settings.remoteAgent,
+    );
+
+    final Stream<AgyChatEvent> stream;
+    if (sshHost != null) {
+      final (pwd, key) =
+          await ref.read(hostsProvider.notifier).readCredentials(sshHost.id);
+      if (!ref.mounted) return (ok: false, message: 'Cancelled');
+      stream = SshAgyRunner.instance.runPrompt(
+        host: sshHost,
+        request: request,
+        password: pwd,
+        privateKeyPem: key,
+      );
+    } else {
+      stream = RuntimeBridge.instance.runPrompt(request, turnId);
+    }
+
+    _receivedTurnContent = false;
+    _usedFallbackForTurn = false;
+    _activeLocalRequest = sshHost == null ? request : null;
+    _rateSamples.clear();
+    _streamBurstStart = null;
+    _resetWatchdog();
+
+    await _activeSub?.cancel();
+    _activeSub = stream.listen(
+      (evt) => _handleEvent(resetSession, assistantId, evt),
+      onError: (_) {
+        _finishAssistantMessage(
+          session: resetSession,
+          assistantId: assistantId,
+          text: _compactionFallbackText(assistantId),
+        );
+      },
+      onDone: () => _completeStreaming(resetSession, assistantId),
+    );
+
+    return (ok: true, message: 'Compacting $compactCount messages…');
   }
 
   void dismissLoopWarning() {

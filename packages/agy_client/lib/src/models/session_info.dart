@@ -38,6 +38,7 @@ class AgySessionSummary {
     String? projectId,
     String? workspacePath,
     String? remoteConversationId,
+    bool clearRemoteConversationId = false,
     int? messageCount,
     String? lastPreview,
   }) {
@@ -51,7 +52,9 @@ class AgySessionSummary {
       modelId: modelId ?? this.modelId,
       updatedAt: updatedAt ?? this.updatedAt,
       projectId: projectId ?? this.projectId,
-      remoteConversationId: remoteConversationId ?? this.remoteConversationId,
+      remoteConversationId: clearRemoteConversationId
+          ? null
+          : (remoteConversationId ?? this.remoteConversationId),
       messageCount: messageCount ?? this.messageCount,
       lastPreview: lastPreview ?? this.lastPreview,
     );

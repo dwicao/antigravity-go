@@ -46,6 +46,15 @@ class _HarnessPageState extends ConsumerState<HarnessPage> {
     await ref.read(chatProvider.notifier).sendPrompt(prompt);
   }
 
+  Future<void> _compactThread() async {
+    final notifier = ref.read(chatProvider.notifier);
+    Navigator.of(context).pop();
+    await notifier.compactThread(
+      instructions:
+          'Summarize decisions, touched files, open blockers, and verified checks concisely.',
+    );
+  }
+
   Future<void> _promptCustomVerify(HarnessState harness) async {
     final ctrl = TextEditingController(
       text: harness.customVerifyCommand ?? harness.detectedVerifyCommand ?? '',
@@ -195,15 +204,15 @@ class _HarnessPageState extends ConsumerState<HarnessPage> {
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
                       Text(
-                        '~${ctxSnap.usedTokens} / ${ctxSnap.budgetTokens} tokens · ${ctxSnap.statusLabel}',
+                        ctxSnap.compactedMessages > 0
+                            ? '~${ctxSnap.usedTokens} / ${ctxSnap.budgetTokens} tokens (${ctxSnap.compactedMessages} archived) · ${ctxSnap.statusLabel}'
+                            : '~${ctxSnap.usedTokens} / ${ctxSnap.budgetTokens} tokens · ${ctxSnap.statusLabel}',
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant,
                         ),
                       ),
                       FilledButton.tonalIcon(
-                        onPressed: () => _sendAgentPrompt(
-                          '/compact Summarize decisions, touched files, open blockers, and verified checks concisely.',
-                        ),
+                        onPressed: _compactThread,
                         icon: const Icon(Icons.compress_rounded, size: 16),
                         label: const Text('Compact Thread'),
                       ),

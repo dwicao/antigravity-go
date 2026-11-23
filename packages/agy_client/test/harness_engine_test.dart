@@ -69,6 +69,57 @@ void main() {
       expect(full.shouldCompact, isTrue);
       expect(full.percentage, greaterThanOrEqualTo(80));
     });
+
+    test('assigns realistic budgets for Gemini 4, Orchestrator, and Flash', () {
+      expect(
+        HarnessContextMonitor.effectiveBudgetForModel('Orchestrator (Neon)'),
+        256000,
+      );
+      expect(
+        HarnessContextMonitor.effectiveBudgetForModel('gemini-4-neon'),
+        256000,
+      );
+      expect(
+        HarnessContextMonitor.effectiveBudgetForModel('gemini-3.8-flash'),
+        400000,
+      );
+      expect(
+        HarnessContextMonitor.effectiveBudgetForModel('claude-opus-5.5-thinking'),
+        160000,
+      );
+    });
+
+    test('builds bounded compaction prompt and deterministic fallback summary', () {
+      const turns = <HarnessCompactionTurn>[
+        HarnessCompactionTurn(
+          role: 'user',
+          text: 'Fix context percentage bug',
+          toolSummaries: ['read_file (harness_engine.dart)'],
+        ),
+        HarnessCompactionTurn(
+          role: 'assistant',
+          text: 'Updated effective budgets and compaction slicing.',
+        ),
+      ];
+
+      final prompt = HarnessContextMonitor.buildCompactionPrompt(
+        turns,
+        compactedMessages: 2,
+        focusInstructions: 'Keep file paths',
+      );
+      expect(prompt, contains('Focus instructions: Keep file paths'));
+      expect(prompt, contains('Fix context percentage bug'));
+
+      final fallback = HarnessContextMonitor.buildFallbackCompactionSummary(
+        turns,
+        compactedMessages: 2,
+        focusInstructions: 'Keep file paths',
+      );
+      expect(fallback, contains('Context Compacted (2 messages archived)'));
+      expect(fallback, contains('Keep file paths'));
+      expect(fallback, contains('Fix context percentage bug'));
+      expect(fallback, contains('read_file (harness_engine.dart)'));
+    });
   });
 
   group('HarnessFeatureItem & templates', () {

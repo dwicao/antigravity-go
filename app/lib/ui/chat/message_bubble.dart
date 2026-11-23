@@ -213,6 +213,33 @@ class MessageBubble extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if (message.isCompactionSummary)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                children: [
+                  const Expanded(child: Divider()),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: Chip(
+                      visualDensity: VisualDensity.compact,
+                      avatar: Icon(
+                        Icons.compress_rounded,
+                        size: 14,
+                        color: theme.colorScheme.primary,
+                      ),
+                      label: Text(
+                        'Context compacted · Fresh window active',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const Expanded(child: Divider()),
+                ],
+              ),
+            ),
           Row(
             children: [
               CircleAvatar(
