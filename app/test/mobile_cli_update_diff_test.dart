@@ -125,7 +125,10 @@ void main() {
 
     await tester.enterText(find.byType(TextField), '/mcp');
     await tester.pump();
-    expect(find.text('/mcp'), findsOneWidget);
+    expect(
+      find.text('Manage Model Context Protocol (MCP) servers'),
+      findsOneWidget,
+    );
 
     await tester.pumpWidget(const SizedBox());
     await tester.pump(const Duration(milliseconds: 500));
