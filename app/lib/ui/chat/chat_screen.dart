@@ -64,10 +64,42 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   bool _showMentionMenu = false;
   bool _listeningVoice = false;
   bool _enterToSend = true;
+  bool _showJumpToBottom = false;
   String? _draftSessionId;
 
   @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_onScroll);
+  }
+
+  void _onScroll() {
+    if (!_scrollController.hasClients) return;
+    final pos = _scrollController.position;
+    final distFromBottom = pos.maxScrollExtent - pos.pixels;
+    final show = distFromBottom > 120;
+    if (show != _showJumpToBottom && mounted) {
+      setState(() => _showJumpToBottom = show);
+    }
+  }
+
+  void _jumpToBottom({bool animate = true}) {
+    if (!_scrollController.hasClients) return;
+    final target = _scrollController.position.maxScrollExtent;
+    if (animate) {
+      _scrollController.animateTo(
+        target,
+        duration: const Duration(milliseconds: 240),
+        curve: Curves.easeOutCubic,
+      );
+    } else {
+      _scrollController.jumpTo(target);
+    }
+  }
+
+  @override
   void dispose() {
+    _scrollController.removeListener(_onScroll);
     _inputController.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -153,6 +185,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       _showSlashMenu = false;
       _showMentionMenu = false;
     });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
     await ref.read(chatProvider.notifier).sendPrompt(text, attachments: files);
   }
 
@@ -371,37 +404,64 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     _inputController.text = s;
                   },
                 )
-              : Scrollbar(
-                  controller: _scrollController,
-                  child: ListView.builder(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.only(top: 8, bottom: 16),
-                    itemCount: chat.messages.length,
-                    itemBuilder: (context, index) {
-                      final m = chat.messages[index];
-                      final isLastAssistant = !chat.isStreaming &&
-                          m.role == ChatRole.assistant &&
-                          index == chat.messages.length - 1;
-                      return wrapCentered(
-                        MessageBubble(
-                          message: m,
-                          tokensPerSecond:
-                              m.isStreaming ? chat.tokensPerSecond : null,
-                          onRegenerate: isLastAssistant
-                              ? () => ref
-                                  .read(chatProvider.notifier)
-                                  .regenerateLastTurn()
-                              : null,
-                          onEditResend:
-                              !chat.isStreaming && m.role == ChatRole.user
-                                  ? (newText) => ref
-                                      .read(chatProvider.notifier)
-                                      .editAndResend(m.id, newText)
-                                  : null,
+              : Stack(
+                  children: [
+                    NotificationListener<ScrollMetricsNotification>(
+                      onNotification: (notification) {
+                        final show = (notification.metrics.maxScrollExtent -
+                                notification.metrics.pixels) >
+                            120;
+                        if (show != _showJumpToBottom && mounted) {
+                          WidgetsBinding.instance
+                              .addPostFrameCallback((_) => _onScroll());
+                        }
+                        return false;
+                      },
+                      child: Scrollbar(
+                        controller: _scrollController,
+                        child: ListView.builder(
+                          controller: _scrollController,
+                          padding: const EdgeInsets.only(top: 8, bottom: 24),
+                          itemCount: chat.messages.length,
+                          itemBuilder: (context, index) {
+                            final m = chat.messages[index];
+                            final isLastAssistant = !chat.isStreaming &&
+                                m.role == ChatRole.assistant &&
+                                index == chat.messages.length - 1;
+                            return wrapCentered(
+                              MessageBubble(
+                                message: m,
+                                tokensPerSecond:
+                                    m.isStreaming ? chat.tokensPerSecond : null,
+                                onRegenerate: isLastAssistant
+                                    ? () => ref
+                                        .read(chatProvider.notifier)
+                                        .regenerateLastTurn()
+                                    : null,
+                                onEditResend:
+                                    !chat.isStreaming && m.role == ChatRole.user
+                                        ? (newText) => ref
+                                            .read(chatProvider.notifier)
+                                            .editAndResend(m.id, newText)
+                                        : null,
+                              ),
+                            );
+                          },
                         ),
-                      );
-                    },
-                  ),
+                      ),
+                    ),
+                    if (_showJumpToBottom)
+                      Positioned(
+                        right: 16,
+                        bottom: 12,
+                        child: FloatingActionButton.small(
+                          heroTag: 'jump-to-latest-chat',
+                          tooltip: 'Jump to latest',
+                          onPressed: _jumpToBottom,
+                          child: const Icon(Icons.arrow_downward_rounded),
+                        ),
+                      ),
+                  ],
                 ),
         ),
         if (chat.stallWarning != null)

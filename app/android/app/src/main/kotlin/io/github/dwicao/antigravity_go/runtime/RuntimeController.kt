@@ -210,6 +210,9 @@ class RuntimeController private constructor(private val appContext: Context) {
         val started = turnStartedAt.remove(turnId)
         val upMs = started?.let { System.currentTimeMillis() - it }
         val receivedOut = turnReceivedOutput.remove(turnId) ?: false
+        activeTurns.remove(turnId)
+        nonAcpTurnMeta.remove(turnId)
+        emitBackgroundTasks()
         if (AgyService.running) {
             AgyService.updateTurnStatus(appContext, "On-device Antigravity CLI harness active")
         }

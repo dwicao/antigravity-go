@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../state/auth_state.dart';
 import '../../state/usage_state.dart';
+import '../../theme/app_theme.dart';
+import '../chat/message_bubble.dart' show formatChatTimestamp;
 
 class UsagePage extends ConsumerStatefulWidget {
   const UsagePage({super.key, this.autoRefreshOnOpen = true});
@@ -40,6 +42,16 @@ class _UsagePageState extends ConsumerState<UsagePage> {
     final usage = ref.watch(usageProvider);
     final auth = ref.watch(authProvider);
     final theme = Theme.of(context);
+    final semantic = AgySemanticColors.of(context);
+
+    final fiveHReset = _resolveResetLabel(
+      resetAt: usage.overallFiveHourResetAt,
+      resetText: usage.overallFiveHourResetText,
+    );
+    final weeklyReset = _resolveResetLabel(
+      resetAt: usage.overallWeeklyResetAt,
+      resetText: usage.overallWeeklyResetText,
+    );
 
     return Scaffold(
       appBar: AppBar(
@@ -77,41 +89,67 @@ class _UsagePageState extends ConsumerState<UsagePage> {
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            'Plan & Rolling Windows',
+                            'Quota Overview',
                             style: theme.textTheme.titleMedium?.copyWith(
                               fontWeight: FontWeight.w700,
                             ),
                           ),
                         ),
-                        Chip(label: Text(auth.planTier.label)),
+                        Chip(
+                          visualDensity: VisualDensity.compact,
+                          label: Text(auth.planTier.label),
+                        ),
                       ],
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      'Source: ${usage.source} · Updated ${TimeOfDay.fromDateTime(usage.fetchedAt.toLocal()).format(context)}',
+                      'Updated ${TimeOfDay.fromDateTime(usage.fetchedAt.toLocal()).format(context)} · ${usage.source}',
                       style: theme.textTheme.labelSmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
+                        color: semantic.textSecondary,
                       ),
                     ),
                     const SizedBox(height: 14),
-                    _WindowSummaryRow(
-                      title: '5-Hour Rolling Window',
-                      remainingPct: usage.overallFiveHourRemainingPct,
-                      resetText: usage.overallFiveHourResetText,
-                      tokensUsed: usage.fiveHourLedgerTokens.totalTokens,
-                      color: theme.colorScheme.primary,
-                    ),
-                    const SizedBox(height: 14),
-                    _WindowSummaryRow(
-                      title: 'Weekly Limit',
-                      remainingPct: usage.overallWeeklyRemainingPct,
-                      resetText: usage.overallWeeklyResetText,
-                      tokensUsed: usage.weeklyLedgerTokens.totalTokens,
-                      color: theme.colorScheme.tertiary,
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final twoCol = constraints.maxWidth >= 480;
+                        final fiveHCard = _WindowHeroTile(
+                          title: '5-Hour Rolling Window',
+                          remainingPct: usage.overallFiveHourRemainingPct,
+                          resetCountdown: fiveHReset,
+                          resetAt: usage.overallFiveHourResetAt,
+                          tokensUsed: usage.fiveHourLedgerTokens.totalTokens,
+                          defaultColor: theme.colorScheme.primary,
+                        );
+                        final weeklyCard = _WindowHeroTile(
+                          title: 'Weekly Limit',
+                          remainingPct: usage.overallWeeklyRemainingPct,
+                          resetCountdown: weeklyReset,
+                          resetAt: usage.overallWeeklyResetAt,
+                          tokensUsed: usage.weeklyLedgerTokens.totalTokens,
+                          defaultColor: theme.colorScheme.tertiary,
+                        );
+                        if (twoCol) {
+                          return Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(child: fiveHCard),
+                              const SizedBox(width: 12),
+                              Expanded(child: weeklyCard),
+                            ],
+                          );
+                        }
+                        return Column(
+                          children: [
+                            fiveHCard,
+                            const SizedBox(height: 10),
+                            weeklyCard,
+                          ],
+                        );
+                      },
                     ),
                     const SizedBox(height: 12),
                     Wrap(
-                      spacing: 12,
+                      spacing: 8,
                       runSpacing: 6,
                       children: [
                         _TokenChip(
@@ -136,13 +174,26 @@ class _UsagePageState extends ConsumerState<UsagePage> {
                 ),
               ),
             ),
+            const SizedBox(height: 14),
+            Text(
+              'Model & Group Quotas',
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+                color: semantic.textSecondary,
+              ),
+            ),
+            const SizedBox(height: 8),
+            for (final entry in usage.entries) ...[
+              _ModelQuotaCard(entry: entry),
+              const SizedBox(height: 10),
+            ],
             if (usage.discoveredModels.isNotEmpty) ...[
-              const SizedBox(height: 14),
+              const SizedBox(height: 6),
               Text(
                 'Models Enabled On Your Account (${usage.discoveredModels.length})',
                 style: theme.textTheme.titleSmall?.copyWith(
                   fontWeight: FontWeight.w700,
-                  color: theme.colorScheme.onSurfaceVariant,
+                  color: semantic.textSecondary,
                 ),
               ),
               const SizedBox(height: 8),
@@ -159,20 +210,7 @@ class _UsagePageState extends ConsumerState<UsagePage> {
                     .toList(),
               ),
             ],
-            const SizedBox(height: 14),
-            Text(
-              'Model & Group Quotas',
-              style: theme.textTheme.titleSmall?.copyWith(
-                fontWeight: FontWeight.w700,
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 8),
-            for (final entry in usage.entries) ...[
-              _ModelQuotaCard(entry: entry),
-              const SizedBox(height: 10),
-            ],
-            const SizedBox(height: 6),
+            const SizedBox(height: 10),
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
@@ -234,30 +272,33 @@ class _UsagePageState extends ConsumerState<UsagePage> {
                 usage.rawProbeOutput!.isNotEmpty) ...[
               const SizedBox(height: 10),
               Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Live CLI Report (/usage & models)',
-                        style: theme.textTheme.titleSmall?.copyWith(
-                          fontWeight: FontWeight.w700,
-                        ),
+                child: Theme(
+                  data: theme.copyWith(dividerColor: Colors.transparent),
+                  child: ExpansionTile(
+                    dense: true,
+                    initiallyExpanded: false,
+                    title: Text(
+                      'Raw CLI Report (/usage & models)',
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
                       ),
-                      const SizedBox(height: 8),
+                    ),
+                    childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+                    children: [
                       Container(
                         width: double.infinity,
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
-                          color: theme.colorScheme.surfaceContainerHighest,
+                          color: semantic.codeWellBg,
                           borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: semantic.codeWellBorder),
                         ),
                         child: SelectableText(
                           usage.rawProbeOutput!,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontFamily: 'monospace',
-                            fontSize: 12,
+                            fontSize: 11.5,
+                            color: semantic.codeWellFg,
                           ),
                         ),
                       ),
@@ -273,74 +314,127 @@ class _UsagePageState extends ConsumerState<UsagePage> {
   }
 }
 
-class _WindowSummaryRow extends StatelessWidget {
-  const _WindowSummaryRow({
+String? _resolveResetLabel({
+  DateTime? resetAt,
+  String? resetText,
+}) {
+  if (resetAt != null) {
+    return formatResetCountdown(resetAt);
+  }
+  if (resetText != null && resetText.trim().isNotEmpty) {
+    return resetText.trim();
+  }
+  return null;
+}
+
+Color _quotaBarColor(BuildContext context, double? pct, Color fallback) {
+  if (pct == null) return fallback;
+  final theme = Theme.of(context);
+  final semantic = AgySemanticColors.of(context);
+  if (pct < 15) return theme.colorScheme.error;
+  if (pct < 40) return semantic.warning;
+  return semantic.success;
+}
+
+class _WindowHeroTile extends StatelessWidget {
+  const _WindowHeroTile({
     required this.title,
     required this.remainingPct,
-    required this.resetText,
+    required this.resetCountdown,
+    required this.resetAt,
     required this.tokensUsed,
-    required this.color,
+    required this.defaultColor,
   });
 
   final String title;
   final double? remainingPct;
-  final String? resetText;
+  final String? resetCountdown;
+  final DateTime? resetAt;
   final int tokensUsed;
-  final Color color;
+  final Color defaultColor;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final semantic = AgySemanticColors.of(context);
     final pct = remainingPct;
+    final barColor = _quotaBarColor(context, pct, defaultColor);
     final progress = pct != null ? (pct / 100.0).clamp(0.0, 1.0) : null;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                title,
-                style: theme.textTheme.titleSmall?.copyWith(
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.45),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: theme.colorScheme.outlineVariant.withOpacity(0.45),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: theme.textTheme.labelMedium?.copyWith(
+              color: semantic.textSecondary,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.baseline,
+            textBaseline: TextBaseline.alphabetic,
+            children: [
+              Text(
+                pct != null ? '${pct.toStringAsFixed(0)}%' : '—',
+                style: theme.textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.w800,
+                  color: barColor,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                pct != null ? 'left' : '${_formatTokens(tokensUsed)} logged',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: semantic.textSecondary,
                   fontWeight: FontWeight.w600,
                 ),
               ),
-            ),
-            Text(
-              pct != null
-                  ? '${pct.toStringAsFixed(0)}% remaining'
-                  : '${_formatTokens(tokensUsed)} tokens logged',
-              style: theme.textTheme.bodySmall?.copyWith(
-                fontWeight: FontWeight.w600,
-                color: color,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 6),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(8),
-          child: LinearProgressIndicator(
-            value: progress ?? (tokensUsed > 0 ? 0.15 : 1.0),
-            minHeight: 8,
-            color: color,
-            backgroundColor: color.withOpacity(0.16),
+            ],
           ),
-        ),
-        if (resetText != null || tokensUsed > 0) ...[
-          const SizedBox(height: 4),
-          Text(
-            [
-              if (resetText != null) 'Resets in $resetText',
-              '${_formatTokens(tokensUsed)} tokens',
-            ].join(' · '),
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
+          const SizedBox(height: 8),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: LinearProgressIndicator(
+              value: progress ?? (tokensUsed > 0 ? 0.15 : 1.0),
+              minHeight: 8,
+              color: barColor,
+              backgroundColor: barColor.withOpacity(0.16),
             ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Icon(Icons.schedule_outlined,
+                  size: 14, color: semantic.textSecondary),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(
+                  resetCountdown != null
+                      ? 'Reset in $resetCountdown${resetAt != null ? " (${formatChatTimestamp(resetAt!)})" : ""}'
+                      : '${_formatTokens(tokensUsed)} tokens logged',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: semantic.textPrimary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
-      ],
+      ),
     );
   }
 }
@@ -353,6 +447,7 @@ class _ModelQuotaCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final semantic = AgySemanticColors.of(context);
     final icon = switch (entry.group) {
       QuotaGroup.geminiArgon => Icons.auto_awesome,
       QuotaGroup.geminiPro => Icons.diamond_outlined,
@@ -360,6 +455,15 @@ class _ModelQuotaCard extends StatelessWidget {
       QuotaGroup.claudeAndGpt => Icons.hub_outlined,
       QuotaGroup.orchestrator => Icons.account_tree_outlined,
     };
+
+    final fiveHReset = _resolveResetLabel(
+      resetAt: entry.fiveHourResetAt,
+      resetText: entry.fiveHourResetText,
+    );
+    final weeklyReset = _resolveResetLabel(
+      resetAt: entry.weeklyResetAt,
+      resetText: entry.weeklyResetText,
+    );
 
     return Card(
       child: Padding(
@@ -380,44 +484,53 @@ class _ModelQuotaCard extends StatelessWidget {
                   ),
                 ),
                 if (!entry.isAvailable)
-                  Chip(
+                  const Chip(
                     visualDensity: VisualDensity.compact,
-                    label: const Text('Not in plan'),
+                    label: Text('Not in plan'),
                   )
                 else
                   Text(
                     '${entry.fiveHourRequests} turns (5h) · ${entry.weeklyRequests} (7d)',
                     style: theme.textTheme.labelSmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
+                      color: semantic.textSecondary,
                     ),
                   ),
               ],
             ),
             const SizedBox(height: 10),
             if (entry.fiveHourRemainingPct != null) ...[
-              _MiniQuotaBar(
+              _QuotaWindowRow(
                 label: '5-Hour Limit',
                 pct: entry.fiveHourRemainingPct!,
-                reset: entry.fiveHourResetText,
+                resetCountdown: fiveHReset,
+                resetAt: entry.fiveHourResetAt,
               ),
-              const SizedBox(height: 6),
+              const SizedBox(height: 8),
             ],
             if (entry.weeklyRemainingPct != null) ...[
-              _MiniQuotaBar(
+              _QuotaWindowRow(
                 label: 'Weekly Limit',
                 pct: entry.weeklyRemainingPct!,
-                reset: entry.weeklyResetText,
+                resetCountdown: weeklyReset,
+                resetAt: entry.weeklyResetAt,
               ),
-              const SizedBox(height: 6),
+              const SizedBox(height: 8),
             ],
+            if (entry.fiveHourRemainingPct == null &&
+                entry.weeklyRemainingPct == null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Text(
+                  'Tap refresh to probe live % remaining and next reset time.',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: semantic.textSecondary,
+                  ),
+                ),
+              ),
             Text(
-              [
-                if (entry.statusNote != null && entry.statusNote!.isNotEmpty)
-                  entry.statusNote!,
-                'Logged: ${_formatTokens(entry.fiveHourTokensUsed)} tok (5h) · ${_formatTokens(entry.weeklyTokensUsed)} tok (7d)',
-              ].join('\n'),
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
+              'Logged: ${_formatTokens(entry.fiveHourTokensUsed)} tok (5h) · ${_formatTokens(entry.weeklyTokensUsed)} tok (7d)',
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: semantic.textTertiary,
               ),
             ),
           ],
@@ -427,38 +540,59 @@ class _ModelQuotaCard extends StatelessWidget {
   }
 }
 
-class _MiniQuotaBar extends StatelessWidget {
-  const _MiniQuotaBar({
+class _QuotaWindowRow extends StatelessWidget {
+  const _QuotaWindowRow({
     required this.label,
     required this.pct,
-    this.reset,
+    this.resetCountdown,
+    this.resetAt,
   });
 
   final String label;
   final double pct;
-  final String? reset;
+  final String? resetCountdown;
+  final DateTime? resetAt;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final barColor = pct < 15
-        ? theme.colorScheme.error
-        : pct < 40
-            ? Colors.amber
-            : theme.colorScheme.primary;
+    final semantic = AgySemanticColors.of(context);
+    final barColor = _quotaBarColor(context, pct, theme.colorScheme.primary);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           children: [
-            Text(label, style: theme.textTheme.labelSmall),
-            const Spacer(),
             Text(
-              '${pct.toStringAsFixed(0)}%${reset != null ? " · resets $reset" : ""}',
-              style: theme.textTheme.labelSmall?.copyWith(
+              label,
+              style: theme.textTheme.labelMedium?.copyWith(
                 fontWeight: FontWeight.w600,
               ),
             ),
+            const SizedBox(width: 8),
+            Text(
+              '${pct.toStringAsFixed(0)}% left',
+              style: theme.textTheme.labelLarge?.copyWith(
+                fontWeight: FontWeight.w800,
+                color: barColor,
+              ),
+            ),
+            if (resetCountdown != null) ...[
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Reset in $resetCountdown${resetAt != null ? " · ${formatChatTimestamp(resetAt!)}" : ""}',
+                  textAlign: TextAlign.right,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: semantic.textSecondary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
         const SizedBox(height: 4),
@@ -466,7 +600,7 @@ class _MiniQuotaBar extends StatelessWidget {
           borderRadius: BorderRadius.circular(6),
           child: LinearProgressIndicator(
             value: (pct / 100.0).clamp(0.0, 1.0),
-            minHeight: 6,
+            minHeight: 7,
             color: barColor,
             backgroundColor: barColor.withOpacity(0.18),
           ),

@@ -109,9 +109,9 @@ final backgroundTasksProvider = Provider<List<BackgroundTaskItem>>((ref) {
     );
   }
 
-  // 3. Running tool steps in the active thread (subagents, workflows, commands, etc.).
+  // 3. Running tool steps in currently streaming assistant messages only.
   for (final m in chat.messages) {
-    if (!m.isStreaming && m.tools.every((t) => t.state != ToolCallState.running)) {
+    if (!m.isStreaming) {
       continue;
     }
     for (final tool in m.tools) {

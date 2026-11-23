@@ -1,3 +1,4 @@
+import 'package:agy_client/agy_client.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -300,20 +301,30 @@ class OverviewPanel extends ConsumerWidget {
                                 Icon(Icons.speed_rounded,
                                     size: 18, color: theme.colorScheme.primary),
                                 const SizedBox(width: 6),
-                                Text(
-                                  'Quotas & Limits',
-                                  style: theme.textTheme.labelLarge?.copyWith(
-                                    fontWeight: FontWeight.w700,
+                                Expanded(
+                                  child: Text(
+                                    'Quotas & Limits',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: theme.textTheme.labelLarge?.copyWith(
+                                      fontWeight: FontWeight.w700,
+                                    ),
                                   ),
                                 ),
-                                const Spacer(),
+                                const SizedBox(width: 6),
                                 const Icon(Icons.open_in_new, size: 15),
                               ],
                             ),
                             const SizedBox(height: 6),
                             Text(
-                              usage.overallFiveHourRemainingPct != null
-                                  ? '5h: ${usage.overallFiveHourRemainingPct!.toStringAsFixed(0)}% · Weekly: ${(usage.overallWeeklyRemainingPct ?? 100).toStringAsFixed(0)}%'
+                              usage.overallFiveHourRemainingPct != null ||
+                                      usage.overallWeeklyRemainingPct != null
+                                  ? [
+                                      if (usage.overallFiveHourRemainingPct != null)
+                                        '5h: ${usage.overallFiveHourRemainingPct!.toStringAsFixed(0)}% left${usage.overallFiveHourResetAt != null ? " (${formatResetCountdown(usage.overallFiveHourResetAt!)})" : (usage.overallFiveHourResetText != null ? " (${usage.overallFiveHourResetText})" : "")}',
+                                      if (usage.overallWeeklyRemainingPct != null)
+                                        'Weekly: ${usage.overallWeeklyRemainingPct!.toStringAsFixed(0)}% left${usage.overallWeeklyResetAt != null ? " (${formatResetCountdown(usage.overallWeeklyResetAt!)})" : (usage.overallWeeklyResetText != null ? " (${usage.overallWeeklyResetText})" : "")}',
+                                    ].join(' · ')
                                   : '5h: ${usage.fiveHourLedgerTokens.totalTokens} tok · 7d: ${usage.weeklyLedgerTokens.totalTokens} tok',
                               style: theme.textTheme.bodySmall,
                             ),

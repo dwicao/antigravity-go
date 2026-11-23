@@ -84,6 +84,7 @@ class ChatMessage {
     this.durationSeconds,
     this.tokensPerSecond,
     this.modelId,
+    this.reasoningEffort,
     this.completedAt,
   });
 
@@ -100,6 +101,7 @@ class ChatMessage {
   final double? durationSeconds;
   final double? tokensPerSecond;
   final String? modelId;
+  final String? reasoningEffort;
   final DateTime? completedAt;
 
   ChatMessage copyWith({
@@ -112,6 +114,7 @@ class ChatMessage {
     double? durationSeconds,
     double? tokensPerSecond,
     String? modelId,
+    String? reasoningEffort,
     DateTime? completedAt,
   }) {
     return ChatMessage(
@@ -128,6 +131,7 @@ class ChatMessage {
       durationSeconds: durationSeconds ?? this.durationSeconds,
       tokensPerSecond: tokensPerSecond ?? this.tokensPerSecond,
       modelId: modelId ?? this.modelId,
+      reasoningEffort: reasoningEffort ?? this.reasoningEffort,
       completedAt: completedAt ?? this.completedAt,
     );
   }
@@ -144,6 +148,7 @@ class ChatMessage {
         if (durationSeconds != null) 'durationSeconds': durationSeconds,
         if (tokensPerSecond != null) 'tokensPerSecond': tokensPerSecond,
         if (modelId != null) 'modelId': modelId,
+        if (reasoningEffort != null) 'reasoningEffort': reasoningEffort,
         if (completedAt != null) 'completedAt': completedAt!.toIso8601String(),
       };
 
@@ -172,6 +177,7 @@ class ChatMessage {
       durationSeconds: (json['durationSeconds'] as num?)?.toDouble(),
       tokensPerSecond: (json['tokensPerSecond'] as num?)?.toDouble(),
       modelId: json['modelId'] as String?,
+      reasoningEffort: json['reasoningEffort'] as String?,
       completedAt: DateTime.tryParse(json['completedAt'] as String? ?? ''),
     );
   }
@@ -243,7 +249,32 @@ class ChatNotifier extends Notifier<ChatThreadState> {
   final Map<String, DateTime> _turnStartedAt = {};
   final Map<String, DateTime> _firstOutputAt = {};
   final Map<String, String> _turnModelId = {};
+  final Map<String, String> _turnEffort = {};
   String? _activeStreamingSessionId;
+
+  static List<ChatToolStep> _finalizeTools(
+    List<ChatToolStep> tools, {
+    bool failed = false,
+  }) {
+    var changed = false;
+    final out = tools.map((t) {
+      if (t.state == ToolCallState.running || t.state == ToolCallState.pending) {
+        changed = true;
+        return ChatToolStep(
+          id: t.id,
+          toolName: t.toolName,
+          state: failed ? ToolCallState.failed : ToolCallState.completed,
+          parameters: t.parameters,
+          output: t.output,
+          error: t.error,
+          durationSeconds: t.durationSeconds,
+          startedAt: t.startedAt,
+        );
+      }
+      return t;
+    }).toList();
+    return changed ? out : tools;
+  }
 
   double _recordRateSample(String delta) {
     if (delta.isEmpty) return state.tokensPerSecond;
@@ -317,9 +348,16 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       return;
     }
     try {
-      final list = (jsonDecode(raw) as List<dynamic>)
+      final rawList = (jsonDecode(raw) as List<dynamic>)
           .whereType<Map<String, dynamic>>()
           .map(ChatMessage.fromJson)
+          .toList();
+      // Sanitize any stale streaming/running state persisted before an OS kill or restart.
+      final list = rawList
+          .map((m) => m.copyWith(
+                isStreaming: false,
+                tools: _finalizeTools(m.tools),
+              ))
           .toList();
       state = ChatThreadState(
         messages: list,
@@ -428,6 +466,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       text: '',
       createdAt: now,
       modelId: settings.selectedModelId,
+      reasoningEffort: settings.reasoningEffort,
       isStreaming: true,
     );
 
@@ -437,6 +476,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     _activeStreamingSessionId = session.id;
     _turnStartedAt[assistantId] = now;
     _turnModelId[assistantId] = settings.selectedModelId;
+    _turnEffort[assistantId] = settings.reasoningEffort;
     _inFlightMessages[session.id] = nextMessages;
     final bgIds = {...state.activeBackgroundSessionIds, session.id};
     state = state.copyWith(
@@ -657,9 +697,11 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           current.copyWith(
             text: finalText,
             usage: evt.usage,
+            tools: _finalizeTools(current.tools),
             durationSeconds: stats.durationSec,
             tokensPerSecond: stats.tokPerSec,
             modelId: _turnModelId[assistantId] ?? current.modelId,
+            reasoningEffort: _turnEffort[assistantId] ?? current.reasoningEffort,
             completedAt: DateTime.now(),
             isStreaming: false,
           ),
@@ -719,9 +761,11 @@ class ChatNotifier extends Notifier<ChatThreadState> {
             text: current.text.isEmpty
                 ? evt.message
                 : '${current.text}\n\n${evt.message}',
+            tools: _finalizeTools(current.tools, failed: true),
             durationSeconds: current.durationSeconds ?? stats.durationSec,
             tokensPerSecond: current.tokensPerSecond ?? stats.tokPerSec,
             modelId: _turnModelId[assistantId] ?? current.modelId,
+            reasoningEffort: _turnEffort[assistantId] ?? current.reasoningEffort,
             completedAt: current.completedAt ?? DateTime.now(),
             isStreaming: false,
             requiresAuth: evt.requiresAuth,
@@ -761,9 +805,11 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         idx,
         cur.copyWith(
           text: text,
+          tools: _finalizeTools(cur.tools),
           durationSeconds: cur.durationSeconds ?? stats.durationSec,
           tokensPerSecond: cur.tokensPerSecond ?? stats.tokPerSec,
           modelId: _turnModelId[assistantId] ?? cur.modelId,
+          reasoningEffort: _turnEffort[assistantId] ?? cur.reasoningEffort,
           completedAt: cur.completedAt ?? DateTime.now(),
           isStreaming: false,
         ),
@@ -786,7 +832,11 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     final idx = msgs.indexWhere((m) => m.id == assistantId);
     if (idx >= 0) {
       final cur = msgs[idx];
-      if (cur.isStreaming || cur.durationSeconds == null || cur.completedAt == null) {
+      final finalizedTools = _finalizeTools(cur.tools);
+      if (cur.isStreaming ||
+          cur.durationSeconds == null ||
+          cur.completedAt == null ||
+          !identical(finalizedTools, cur.tools)) {
         final stats = _computeTurnStats(
           assistantId: assistantId,
           text: cur.text,
@@ -798,9 +848,11 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           idx,
           cur.copyWith(
             isStreaming: false,
+            tools: finalizedTools,
             durationSeconds: cur.durationSeconds ?? stats.durationSec,
             tokensPerSecond: cur.tokensPerSecond ?? stats.tokPerSec,
             modelId: _turnModelId[assistantId] ?? cur.modelId,
+            reasoningEffort: _turnEffort[assistantId] ?? cur.reasoningEffort,
             completedAt: cur.completedAt ?? DateTime.now(),
           ),
         );
@@ -811,6 +863,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     _turnStartedAt.remove(assistantId);
     _firstOutputAt.remove(assistantId);
     _turnModelId.remove(assistantId);
+    _turnEffort.remove(assistantId);
 
     final nextBgIds = {...state.activeBackgroundSessionIds}..remove(session.id);
     state = state.copyWith(
@@ -850,7 +903,11 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     } catch (_) {}
     final updated = state.messages
         .map((m) => m.isStreaming
-            ? m.copyWith(isStreaming: false, completedAt: DateTime.now())
+            ? m.copyWith(
+                isStreaming: false,
+                tools: _finalizeTools(m.tools, failed: true),
+                completedAt: DateTime.now(),
+              )
             : m)
         .toList();
     if (streamingSid != null) {
@@ -858,7 +915,11 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       if (bgMsgs != null && streamingSid != _loadedSessionId) {
         final cleanedBg = bgMsgs
             .map((m) => m.isStreaming
-                ? m.copyWith(isStreaming: false, completedAt: DateTime.now())
+                ? m.copyWith(
+                    isStreaming: false,
+                    tools: _finalizeTools(m.tools, failed: true),
+                    completedAt: DateTime.now(),
+                  )
                 : m)
             .toList();
         await _persistMessages(streamingSid, cleanedBg);

@@ -397,6 +397,15 @@ class AcpSessionManager(
 
                         if (msgId is Number && msgId.toInt() == promptReqId) {
                             gotTurnResult = true
+                            val finished = sessions.remove(turnId)
+                            finished?.terminals?.values?.forEach { term ->
+                                try {
+                                    term.process.destroyForcibly()
+                                } catch (_: Throwable) {}
+                            }
+                            if (finished != null) {
+                                onTasksChanged()
+                            }
                             break
                         }
                     }
@@ -405,8 +414,19 @@ class AcpSessionManager(
                 try {
                     writer.close()
                 } catch (_: Throwable) {}
-                errFuture.get(3, TimeUnit.SECONDS)
-                val exitCode = proc.waitFor()
+                try {
+                    errFuture.get(2, TimeUnit.SECONDS)
+                } catch (_: Throwable) {}
+                val exitCode = if (gotTurnResult) {
+                    if (!proc.waitFor(2, TimeUnit.SECONDS)) {
+                        proc.destroyForcibly()
+                        0
+                    } else {
+                        proc.exitValue()
+                    }
+                } else {
+                    proc.waitFor()
+                }
                 emit(
                     mapOf(
                         "kind" to "turn_exit",

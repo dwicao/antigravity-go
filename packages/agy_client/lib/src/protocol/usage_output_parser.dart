@@ -20,6 +20,10 @@ class UsageOutputParser {
 
   static final RegExp _pctPattern = RegExp(r'(\d{1,3}(?:\.\d+)?)\s*%');
 
+  static final RegExp _isoTimestampPattern = RegExp(
+    r'\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})\b',
+  );
+
   static final RegExp _resetPattern = RegExp(
     r'(?:resets?|refresh(?:es)?)\s*(?::|in|at)?\s*([^\n,|;\)]+)',
     caseSensitive: false,
@@ -58,6 +62,8 @@ class UsageOutputParser {
         clean.contains('models & quota') ||
         clean.contains('5-hour') ||
         clean.contains('5 hour') ||
+        clean.contains('five hour') ||
+        clean.contains('limit remaining') ||
         clean.contains('weekly');
   }
 
@@ -93,8 +99,27 @@ class UsageOutputParser {
     return results;
   }
 
+  static bool _hasFiveHourKeyword(String lower) {
+    return lower.contains('5-hour') ||
+        lower.contains('5 hour') ||
+        lower.contains('five hour') ||
+        lower.contains('five-hour') ||
+        lower.contains('5h');
+  }
+
+  static bool _hasWeeklyKeyword(String lower) {
+    return lower.contains('weekly') || lower.contains('7-day');
+  }
+
+  static DateTime? _extractIsoTimestamp(String text) {
+    final m = _isoTimestampPattern.firstMatch(text);
+    if (m == null) return null;
+    return DateTime.tryParse(m.group(0)!)?.toUtc();
+  }
+
   /// Parses `/usage`, `/credits`, and `agy models` output into quota entries.
-  static ParsedUsageReport parseUsageText(String raw) {
+  static ParsedUsageReport parseUsageText(String raw, {DateTime? now}) {
+    final currentNow = (now ?? DateTime.now()).toUtc();
     final clean = stripAnsi(raw);
     final lines = clean
         .split('\n')
@@ -131,11 +156,20 @@ class UsageOutputParser {
     double? overallWeekly;
     String? overall5hReset;
     String? overallWeeklyReset;
+    DateTime? overall5hResetAt;
+    DateTime? overallWeeklyResetAt;
     double? creditsRemaining;
 
     for (var i = 0; i < lines.length; i++) {
       final line = lines[i];
       final lower = line.toLowerCase();
+      // Ignore Go log prefix lines like `ERROR: logging before google.Init: ...`
+      if (lower.startsWith('error: logging before') ||
+          lower.startsWith('i11') ||
+          lower.startsWith('w11')) {
+        continue;
+      }
+
       final nextLine = i + 1 < lines.length ? lines[i + 1] : '';
       final combined = '$line $nextLine';
 
@@ -147,69 +181,122 @@ class UsageOutputParser {
         creditsRemaining = double.tryParse(creditMatch.group(1)!);
       }
 
-      if (lower.contains('5-hour') ||
-          lower.contains('5 hour') ||
-          lower.contains('5h')) {
-        final linePcts = _extractAllRemainingPcts(line);
-        final pcts =
-            linePcts.isNotEmpty ? linePcts : _extractAllRemainingPcts(combined);
-        final reset = _resetPattern.firstMatch(combined)?.group(1)?.trim();
-        if (pcts.isNotEmpty && overall5h == null) overall5h = pcts.first;
-        if (reset != null && overall5hReset == null) overall5hReset = reset;
-      }
+      final targetIds = _matchQuotaEntryIds(lower);
+      final lineIso = _extractIsoTimestamp(line);
+      final lineResetText = lineIso != null
+          ? formatResetCountdown(lineIso, now: currentNow)
+          : _resetPattern.firstMatch(combined)?.group(1)?.trim();
 
-      if (lower.contains('weekly') || lower.contains('7-day')) {
-        final linePcts = _extractAllRemainingPcts(line);
-        final pcts =
-            linePcts.isNotEmpty ? linePcts : _extractAllRemainingPcts(combined);
-        final reset = _resetPattern.firstMatch(combined)?.group(1)?.trim();
-        if (pcts.isNotEmpty && overallWeekly == null) {
-          overallWeekly = pcts.first;
-        }
-        if (reset != null && overallWeeklyReset == null) {
-          overallWeeklyReset = reset;
-        }
-      }
-
-      final targetId = _matchQuotaEntryId(lower);
-      if (targetId != null) {
-        final current = entriesById[targetId]!;
-        final linePcts = _extractAllRemainingPcts(line);
-        final combinedPcts =
-            linePcts.isNotEmpty ? linePcts : _extractAllRemainingPcts(combined);
-        final reset = _resetPattern.firstMatch(combined)?.group(1)?.trim();
-        final isWeeklyLine =
-            lower.contains('weekly') || nextLine.toLowerCase().contains('weekly');
-        final isFiveHourLine = lower.contains('5h') ||
-            lower.contains('5-hour') ||
-            lower.contains('5 hour') ||
-            nextLine.toLowerCase().contains('5h') ||
-            nextLine.toLowerCase().contains('5-hour');
-
-        double? fiveHPct;
-        double? weeklyPct;
-        if (linePcts.length >= 2) {
-          fiveHPct = linePcts[0];
-          weeklyPct = linePcts[1];
-        } else if (combinedPcts.isNotEmpty) {
-          final single = combinedPcts.first;
-          if (isWeeklyLine && !isFiveHourLine) {
-            weeklyPct = single;
-          } else {
-            fiveHPct = single;
+      if (targetIds.isEmpty) {
+        if (_hasFiveHourKeyword(lower)) {
+          final linePcts = _extractAllRemainingPcts(line);
+          final pcts = linePcts.isNotEmpty
+              ? linePcts
+              : _extractAllRemainingPcts(combined);
+          if (pcts.isNotEmpty && overall5h == null) overall5h = pcts.first;
+          if (lineResetText != null && overall5hReset == null) {
+            overall5hReset = lineResetText;
+          }
+          if (lineIso != null && overall5hResetAt == null) {
+            overall5hResetAt = lineIso;
           }
         }
 
+        if (_hasWeeklyKeyword(lower)) {
+          final linePcts = _extractAllRemainingPcts(line);
+          final pcts = linePcts.isNotEmpty
+              ? linePcts
+              : _extractAllRemainingPcts(combined);
+          if (pcts.isNotEmpty && overallWeekly == null) {
+            overallWeekly = pcts.first;
+          }
+          if (lineResetText != null && overallWeeklyReset == null) {
+            overallWeeklyReset = lineResetText;
+          }
+          if (lineIso != null && overallWeeklyResetAt == null) {
+            overallWeeklyResetAt = lineIso;
+          }
+        }
+        continue;
+      }
+
+      final linePcts = _extractAllRemainingPcts(line);
+      final combinedPcts =
+          linePcts.isNotEmpty ? linePcts : _extractAllRemainingPcts(combined);
+      final isWeeklyLine =
+          _hasWeeklyKeyword(lower) || _hasWeeklyKeyword(nextLine.toLowerCase());
+      final isFiveHourLine = _hasFiveHourKeyword(lower) ||
+          _hasFiveHourKeyword(nextLine.toLowerCase());
+
+      double? fiveHPct;
+      double? weeklyPct;
+      if (linePcts.length >= 2) {
+        fiveHPct = linePcts[0];
+        weeklyPct = linePcts[1];
+      } else if (combinedPcts.isNotEmpty) {
+        final single = combinedPcts.first;
+        if (isWeeklyLine && !isFiveHourLine) {
+          weeklyPct = single;
+        } else {
+          fiveHPct = single;
+        }
+      }
+
+      for (final targetId in targetIds) {
+        final current = entriesById[targetId]!;
         entriesById[targetId] = current.copyWith(
           fiveHourRemainingPct: fiveHPct ?? current.fiveHourRemainingPct,
           weeklyRemainingPct: weeklyPct ?? current.weeklyRemainingPct,
           fiveHourResetText: (!isWeeklyLine || isFiveHourLine)
-              ? (reset ?? current.fiveHourResetText)
-              : null,
-          weeklyResetText:
-              isWeeklyLine ? (reset ?? current.weeklyResetText) : null,
-          statusNote: line,
+              ? (lineResetText ?? current.fiveHourResetText)
+              : current.fiveHourResetText,
+          weeklyResetText: isWeeklyLine
+              ? (lineResetText ?? current.weeklyResetText)
+              : current.weeklyResetText,
+          fiveHourResetAt: (!isWeeklyLine || isFiveHourLine)
+              ? (lineIso ?? current.fiveHourResetAt)
+              : current.fiveHourResetAt,
+          weeklyResetAt: isWeeklyLine
+              ? (lineIso ?? current.weeklyResetAt)
+              : current.weeklyResetAt,
+          statusNote: targetIds.length > 1
+              ? 'Shared Gemini Models quota pool'
+              : current.statusNote,
         );
+      }
+    }
+
+    // Derive overall 5h & weekly summary from per-group quotas if no standalone header existed.
+    if (overall5h == null) {
+      ModelQuotaEntry? min5hEntry;
+      for (final entry in entriesById.values) {
+        final pct = entry.fiveHourRemainingPct;
+        if (pct == null) continue;
+        if (min5hEntry == null ||
+            pct < min5hEntry.fiveHourRemainingPct!) {
+          min5hEntry = entry;
+        }
+      }
+      if (min5hEntry != null) {
+        overall5h = min5hEntry.fiveHourRemainingPct;
+        overall5hReset ??= min5hEntry.fiveHourResetText;
+        overall5hResetAt ??= min5hEntry.fiveHourResetAt;
+      }
+    }
+    if (overallWeekly == null) {
+      ModelQuotaEntry? minWeeklyEntry;
+      for (final entry in entriesById.values) {
+        final pct = entry.weeklyRemainingPct;
+        if (pct == null) continue;
+        if (minWeeklyEntry == null ||
+            pct < minWeeklyEntry.weeklyRemainingPct!) {
+          minWeeklyEntry = entry;
+        }
+      }
+      if (minWeeklyEntry != null) {
+        overallWeekly = minWeeklyEntry.weeklyRemainingPct;
+        overallWeeklyReset ??= minWeeklyEntry.weeklyResetText;
+        overallWeeklyResetAt ??= minWeeklyEntry.weeklyResetAt;
       }
     }
 
@@ -221,7 +308,9 @@ class UsageOutputParser {
             .where((m) => m.quotaGroup == entry.group)
             .toList();
         entriesById[key] = entry.copyWith(
-          isAvailable: matchingModels.isNotEmpty,
+          isAvailable: matchingModels.isNotEmpty ||
+              entry.fiveHourRemainingPct != null ||
+              entry.weeklyRemainingPct != null,
           statusNote: entry.statusNote ??
               (matchingModels.isNotEmpty
                   ? matchingModels.map((m) => m.displayName).take(2).join(', ')
@@ -237,26 +326,33 @@ class UsageOutputParser {
       overallWeeklyRemainingPct: overallWeekly,
       overallFiveHourResetText: overall5hReset,
       overallWeeklyResetText: overallWeeklyReset,
+      overallFiveHourResetAt: overall5hResetAt,
+      overallWeeklyResetAt: overallWeeklyResetAt,
       aiCreditsRemaining: creditsRemaining,
     );
   }
 
-  static String? _matchQuotaEntryId(String lower) {
-    if (lower.contains('argon')) return 'gemini-4-argon';
-    if (lower.contains('claude') || lower.contains('gpt')) return 'claude-gpt';
+  static List<String> _matchQuotaEntryIds(String lower) {
+    if (lower.contains('argon')) return const ['gemini-4-argon'];
+    if (lower.contains('claude') || lower.contains('gpt')) {
+      return const ['claude-gpt'];
+    }
+    if (lower.contains('gemini models')) {
+      return const ['gemini-pro', 'gemini-flash'];
+    }
     if (lower.contains('neon') ||
         lower.contains('carbon') ||
         lower.contains('gemini pro') ||
         lower.contains('gemini-pro') ||
         lower.contains('3.1 pro')) {
-      return 'gemini-pro';
+      return const ['gemini-pro'];
     }
     if (lower.contains('hydrogen') ||
         lower.contains('flash') ||
         lower.contains('gemini flash')) {
-      return 'gemini-flash';
+      return const ['gemini-flash'];
     }
-    return null;
+    return const [];
   }
 
   static List<double> _extractAllRemainingPcts(String text) {
@@ -283,6 +379,8 @@ class ParsedUsageReport {
     this.overallWeeklyRemainingPct,
     this.overallFiveHourResetText,
     this.overallWeeklyResetText,
+    this.overallFiveHourResetAt,
+    this.overallWeeklyResetAt,
     this.aiCreditsRemaining,
   });
 
@@ -292,5 +390,7 @@ class ParsedUsageReport {
   final double? overallWeeklyRemainingPct;
   final String? overallFiveHourResetText;
   final String? overallWeeklyResetText;
+  final DateTime? overallFiveHourResetAt;
+  final DateTime? overallWeeklyResetAt;
   final double? aiCreditsRemaining;
 }

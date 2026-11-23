@@ -1,5 +1,23 @@
 import 'agy_model.dart';
 
+/// Formats a future reset timestamp as a concise countdown like `5d 13h` or `4h 48m`.
+String formatResetCountdown(DateTime resetAt, {DateTime? now}) {
+  final current = (now ?? DateTime.now()).toUtc();
+  final target = resetAt.toUtc();
+  final diff = target.difference(current);
+  if (diff <= Duration.zero) return 'now';
+  final days = diff.inDays;
+  final hours = diff.inHours % 24;
+  final mins = diff.inMinutes % 60;
+  if (days > 0) {
+    return hours > 0 ? '${days}d ${hours}h' : '${days}d';
+  }
+  if (diff.inHours > 0) {
+    return mins > 0 ? '${diff.inHours}h ${mins}m' : '${diff.inHours}h';
+  }
+  return '${mins.clamp(1, 59)}m';
+}
+
 /// Token usage reported for a single turn, step, or cumulative session.
 class TokenUsage {
   const TokenUsage({
@@ -147,6 +165,8 @@ class UsageQuotaSnapshot {
     this.overallWeeklyRemainingPct,
     this.overallFiveHourResetText,
     this.overallWeeklyResetText,
+    this.overallFiveHourResetAt,
+    this.overallWeeklyResetAt,
     this.fiveHourLedgerTokens = const TokenUsage(),
     this.weeklyLedgerTokens = const TokenUsage(),
     this.source = 'local-ledger',
@@ -164,6 +184,8 @@ class UsageQuotaSnapshot {
   final double? overallWeeklyRemainingPct;
   final String? overallFiveHourResetText;
   final String? overallWeeklyResetText;
+  final DateTime? overallFiveHourResetAt;
+  final DateTime? overallWeeklyResetAt;
   final TokenUsage fiveHourLedgerTokens;
   final TokenUsage weeklyLedgerTokens;
   final String source;

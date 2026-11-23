@@ -65,4 +65,33 @@ AI Credits balance: 250
     );
     expect(find.text('250 credits'), findsOneWidget);
   });
+
+  testWidgets('UsagePage renders % left and Reset countdown from real agy /usage tab output', (tester) async {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final future5h = DateTime.now().toUtc().add(const Duration(hours: 4, minutes: 30));
+    final futureWeek = DateTime.now().toUtc().add(const Duration(days: 5, hours: 13));
+    container.read(usageProvider.notifier).applyRawProbeOutput('''
+Gemini Models\tWeekly Limit Remaining\t96%\t${futureWeek.toIso8601String()}
+Gemini Models\tFive Hour Limit Remaining\t100%\t${future5h.toIso8601String()}
+Claude and GPT models\tWeekly Limit Remaining\t100%\t${futureWeek.toIso8601String()}
+Claude and GPT models\tFive Hour Limit Remaining\t100%\t${future5h.toIso8601String()}
+Gemini 4 Argon\tGemini 4 Argon Weekly Limit\t100%\t${futureWeek.toIso8601String()}
+''');
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(
+          home: UsagePage(autoRefreshOnOpen: false),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('96%'), findsOneWidget);
+    expect(find.textContaining('Reset in 5d 1'), findsWidgets);
+    expect(find.textContaining('Reset in 4h '), findsWidgets);
+  });
 }

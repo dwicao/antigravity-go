@@ -358,10 +358,15 @@ class _MessageMetricsFooter extends StatelessWidget {
     ));
 
     if (message.modelId != null && message.modelId!.isNotEmpty) {
-      final modelName = AgyModelCatalog.resolve(message.modelId!).displayName;
+      final model = AgyModelCatalog.resolve(message.modelId!);
+      final effortLabel = model.supportsEffort &&
+              message.reasoningEffort != null &&
+              message.reasoningEffort!.isNotEmpty
+          ? ' - ${ReasoningEffort.fromString(message.reasoningEffort!).label}'
+          : '';
       items.add((
         icon: Icons.auto_awesome_outlined,
-        label: modelName,
+        label: '${model.displayName}$effortLabel',
       ));
     }
 

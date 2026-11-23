@@ -40,6 +40,8 @@ class BackgroundTasksAppBarPill extends ConsumerWidget {
     final tasks = ref.watch(backgroundTasksProvider);
     if (tasks.isEmpty) return const SizedBox.shrink();
 
+    final hasRunningWork =
+        tasks.any((t) => t.kind != BackgroundTaskKind.queued);
     final theme = Theme.of(context);
     return Padding(
       padding: const EdgeInsets.only(right: 4),
@@ -60,14 +62,21 @@ class BackgroundTasksAppBarPill extends ConsumerWidget {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                SizedBox(
-                  width: 11,
-                  height: 11,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
+                if (hasRunningWork)
+                  SizedBox(
+                    width: 11,
+                    height: 11,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: theme.colorScheme.primary,
+                    ),
+                  )
+                else
+                  Icon(
+                    Icons.schedule_send_outlined,
+                    size: 13,
                     color: theme.colorScheme.primary,
                   ),
-                ),
                 const SizedBox(width: 6),
                 Text(
                   '${tasks.length} bg',
@@ -210,6 +219,9 @@ class _BackgroundTasksSheetState extends ConsumerState<BackgroundTasksSheet> {
     super.initState();
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() => _now = DateTime.now());
+    });
+    Future.microtask(() {
+      if (mounted) ref.read(runtimeProvider.notifier).refresh();
     });
   }
 

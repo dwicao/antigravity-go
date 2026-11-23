@@ -127,6 +127,8 @@ class UsageLedger {
       overallWeeklyRemainingPct: liveProbe?.overallWeeklyRemainingPct,
       overallFiveHourResetText: liveProbe?.overallFiveHourResetText,
       overallWeeklyResetText: liveProbe?.overallWeeklyResetText,
+      overallFiveHourResetAt: liveProbe?.overallFiveHourResetAt,
+      overallWeeklyResetAt: liveProbe?.overallWeeklyResetAt,
       fiveHourLedgerTokens: sumWindow(fiveHourWindow, now: current),
       weeklyLedgerTokens: sumWindow(weeklyWindow, now: current),
       source: liveProbe != null ? 'agy-live+ledger' : 'local-ledger',

@@ -58,5 +58,43 @@ Claude & GPT              40%      60%
       expect(claude.fiveHourRemainingPct, 40);
       expect(claude.weeklyRemainingPct, 60);
     });
+
+    test('parses tab-separated agy /usage lines with ISO-8601 reset timestamps', () {
+      const realOutput = '''
+ERROR: logging before google.Init: I1123 07:42:17.421015       1 server_zerog.go:46] Initialized Android local timezone to Asia/Jakarta
+Gemini Models\tWeekly Limit Remaining\t96%\t2026-11-29T14:30:20Z
+Gemini Models\tFive Hour Limit Remaining\t100%\t2026-11-23T05:30:20Z
+Claude and GPT models\tWeekly Limit Remaining\t100%\t2026-11-30T00:42:20Z
+Claude and GPT models\tFive Hour Limit Remaining\t100%\t2026-11-23T05:42:20Z
+Gemini 4 Argon\tGemini 4 Argon Weekly Limit\t100%\t2026-11-30T00:42:20Z
+''';
+      final now = DateTime.utc(2026, 11, 23, 0, 42, 20);
+      final parsed = UsageOutputParser.parseUsageText(realOutput, now: now);
+
+      expect(UsageOutputParser.outputIndicatesAuthenticated(realOutput), isTrue);
+      expect(parsed.overallFiveHourRemainingPct, 100);
+      expect(parsed.overallWeeklyRemainingPct, 96);
+      expect(parsed.overallFiveHourResetText, '4h 48m');
+      expect(parsed.overallWeeklyResetText, '6d 13h');
+
+      final pro = parsed.entries.firstWhere((e) => e.id == 'gemini-pro');
+      expect(pro.fiveHourRemainingPct, 100);
+      expect(pro.weeklyRemainingPct, 96);
+      expect(pro.fiveHourResetText, '4h 48m');
+      expect(pro.weeklyResetText, '6d 13h');
+
+      final flash = parsed.entries.firstWhere((e) => e.id == 'gemini-flash');
+      expect(flash.weeklyRemainingPct, 96);
+
+      final claude = parsed.entries.firstWhere((e) => e.id == 'claude-gpt');
+      expect(claude.fiveHourRemainingPct, 100);
+      expect(claude.weeklyRemainingPct, 100);
+      expect(claude.fiveHourResetText, '5h');
+      expect(claude.weeklyResetText, '7d');
+
+      final argon = parsed.entries.firstWhere((e) => e.id == 'gemini-4-argon');
+      expect(argon.weeklyRemainingPct, 100);
+      expect(argon.weeklyResetText, '7d');
+    });
   });
 }

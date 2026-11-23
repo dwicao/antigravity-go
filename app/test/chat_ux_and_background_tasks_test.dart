@@ -3,6 +3,7 @@ import 'package:antigravity_go/runtime/runtime_models.dart';
 import 'package:antigravity_go/state/background_tasks_state.dart';
 import 'package:antigravity_go/state/chat_state.dart';
 import 'package:antigravity_go/state/runtime_state.dart';
+import 'package:antigravity_go/ui/chat/chat_screen.dart';
 import 'package:antigravity_go/ui/chat/message_bubble.dart';
 import 'package:antigravity_go/ui/shell/background_tasks_sheet.dart';
 import 'package:flutter/material.dart';
@@ -17,6 +18,15 @@ class _FakeRuntimeNotifier extends RuntimeNotifier {
 
   @override
   RuntimeUiState build() => _initial;
+}
+
+class _FakeChatNotifier extends ChatNotifier {
+  _FakeChatNotifier(this._initial);
+
+  final ChatThreadState _initial;
+
+  @override
+  ChatThreadState build() => _initial;
 }
 
 void main() {
@@ -78,6 +88,7 @@ void main() {
       durationSeconds: 4.5,
       tokensPerSecond: 38.4,
       modelId: 'gemini-4-hydrogen',
+      reasoningEffort: 'high',
       usage: const TokenUsage(
         inputTokens: 900,
         outputTokens: 320,
@@ -101,7 +112,84 @@ void main() {
     expect(find.text('38.4 tok/s'), findsOneWidget);
     expect(find.text('4.5s'), findsOneWidget);
     expect(find.text('Nov 23, 06:12'), findsOneWidget);
-    expect(find.text('Gemini 4 Hydrogen'), findsOneWidget);
+    expect(find.text('Gemini 4 Hydrogen - High'), findsOneWidget);
+  });
+
+  test('Completed messages never leave stale running tool steps in backgroundTasksProvider', () {
+    final container = ProviderContainer(
+      overrides: [
+        runtimeProvider.overrideWith(
+          () => _FakeRuntimeNotifier(const RuntimeUiState()),
+        ),
+        chatProvider.overrideWith(
+          () => _FakeChatNotifier(
+            ChatThreadState(
+              isStreaming: false,
+              messages: [
+                ChatMessage(
+                  id: 'm1',
+                  role: ChatRole.assistant,
+                  text: 'Done',
+                  createdAt: DateTime(2026, 11, 23, 7, 0),
+                  isStreaming: false,
+                  tools: const [
+                    ChatToolStep(
+                      id: 't1',
+                      toolName: 'run_command',
+                      state: ToolCallState.running,
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    expect(container.read(backgroundTasksProvider), isEmpty);
+  });
+
+  testWidgets('ChatScreen shows jump-to-latest button when scrolled up and scrolls to bottom on tap', (tester) async {
+    final longMessages = List.generate(
+      25,
+      (i) => ChatMessage(
+        id: 'm-$i',
+        role: i.isEven ? ChatRole.user : ChatRole.assistant,
+        text: 'Message #$i\nLine 2\nLine 3\nLine 4',
+        createdAt: DateTime(2026, 11, 23, 7, i),
+      ),
+    );
+    final container = ProviderContainer(
+      overrides: [
+        runtimeProvider.overrideWith(
+          () => _FakeRuntimeNotifier(const RuntimeUiState()),
+        ),
+        chatProvider.overrideWith(
+          () => _FakeChatNotifier(ChatThreadState(messages: longMessages)),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(
+          home: Scaffold(body: ChatScreen()),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 200));
+
+    // At top of a long list, jump-to-latest FAB should appear.
+    expect(find.byTooltip('Jump to latest'), findsOneWidget);
+    await tester.tap(find.byTooltip('Jump to latest'));
+    await tester.pumpAndSettle();
+
+    expect(find.byTooltip('Jump to latest'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
   });
 
   testWidgets(
