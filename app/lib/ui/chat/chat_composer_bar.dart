@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../state/chat_state.dart';
-import '../../state/harness_state.dart';
 import '../../state/hosts_state.dart';
 import '../../state/settings_state.dart';
 import '../../state/update_state.dart';
