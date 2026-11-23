@@ -28,6 +28,10 @@ class _FakeChatNotifier extends ChatNotifier {
 
   @override
   ChatThreadState build() => _initial;
+
+  void setMessages(List<ChatMessage> next) {
+    state = state.copyWith(messages: next);
+  }
 }
 
 class _FakeSessionsNotifier extends SessionsNotifier {
@@ -164,7 +168,9 @@ void main() {
     expect(container.read(backgroundTasksProvider), isEmpty);
   });
 
-  testWidgets('ChatScreen shows jump-to-latest button when scrolled up and scrolls to bottom on tap', (tester) async {
+  testWidgets(
+      'ChatScreen auto-jumps to bottom on open, shows Follow toggle at bottom, Jump to latest when scrolled up, and auto-follows new messages',
+      (tester) async {
     final longMessages = List.generate(
       25,
       (i) => ChatMessage(
@@ -174,6 +180,7 @@ void main() {
         createdAt: DateTime(2026, 11, 23, 7, i),
       ),
     );
+    final fakeChat = _FakeChatNotifier(ChatThreadState(messages: longMessages));
     final container = ProviderContainer(
       overrides: [
         sessionsProvider.overrideWith(
@@ -182,9 +189,7 @@ void main() {
         runtimeProvider.overrideWith(
           () => _FakeRuntimeNotifier(const RuntimeUiState()),
         ),
-        chatProvider.overrideWith(
-          () => _FakeChatNotifier(ChatThreadState(messages: longMessages)),
-        ),
+        chatProvider.overrideWith(() => fakeChat),
       ],
     );
     addTearDown(container.dispose);
@@ -198,15 +203,51 @@ void main() {
       ),
     );
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 200));
-
-    // At top of a long list, jump-to-latest FAB should appear.
-    expect(find.byTooltip('Jump to latest'), findsOneWidget);
-    await tester.tap(find.byTooltip('Jump to latest'));
     await tester.pumpAndSettle();
 
+    // Opening a chat auto-jumps to the very bottom and shows Follow instead of Jump to latest.
+    expect(find.textContaining('Message #24'), findsOneWidget);
     expect(find.byTooltip('Jump to latest'), findsNothing);
+    expect(find.text('Follow'), findsOneWidget);
+
+    // Scrolling up shows Jump to latest and hides Follow.
+    await tester.drag(find.byType(ListView), const Offset(0, 600));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Jump to latest'), findsOneWidget);
+    expect(find.text('Follow'), findsNothing);
+
+    // Tapping Jump to latest scrolls back to bottom and shows Follow again.
+    await tester.tap(find.byTooltip('Jump to latest'));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Jump to latest'), findsNothing);
+    expect(find.text('Follow'), findsOneWidget);
+
+    // Tapping Follow enables Following mode and keeps scrolling to new messages.
+    await tester.tap(find.text('Follow'));
+    await tester.pumpAndSettle();
+    expect(find.text('Following'), findsOneWidget);
+
+    fakeChat.setMessages([
+      ...longMessages,
+      ChatMessage(
+        id: 'm-25',
+        role: ChatRole.assistant,
+        text: 'Message #25 latest follow item',
+        createdAt: DateTime(2026, 11, 23, 7, 30),
+      ),
+    ]);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Message #25 latest follow item'), findsOneWidget);
+    expect(find.text('Following'), findsOneWidget);
+
+    // Manually scrolling up while Following pauses auto-follow and shows Jump to latest.
+    await tester.drag(find.byType(ListView), const Offset(0, 600));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Jump to latest'), findsOneWidget);
+    expect(find.text('Following'), findsNothing);
+
     await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(milliseconds: 500));
   });
 
   testWidgets('ChatScreen queues messages when background task is active and exposes Steer button', (tester) async {
@@ -247,6 +288,10 @@ void main() {
 
     expect(find.byTooltip('Queue'), findsOneWidget);
     expect(find.byTooltip('Steer (force send now)'), findsOneWidget);
+    // BackgroundTasksBanner must not appear above the composer and shift the chat viewport;
+    // active background tasks remain accessible via the AppBar pill.
+    expect(find.byType(BackgroundTasksBanner), findsNothing);
+    expect(find.text('1 bg'), findsOneWidget);
 
     await tester.enterText(find.byType(TextField), 'Follow up while bg runs');
     await tester.tap(find.byTooltip('Queue'));

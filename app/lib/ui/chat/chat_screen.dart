@@ -1,6 +1,7 @@
 import 'package:agy_client/agy_client.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
@@ -49,6 +50,7 @@ class ChatScreen extends ConsumerStatefulWidget {
 
 class _ChatScreenState extends ConsumerState<ChatScreen> {
   static const _voiceChannel = MethodChannel('agy/voice');
+  static const double _atBottomThreshold = 48.0;
 
   final _inputController = TextEditingController();
   final _scrollController = ScrollController();
@@ -58,7 +60,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   bool _showMentionMenu = false;
   bool _listeningVoice = false;
   bool _enterToSend = true;
-  bool _showJumpToBottom = false;
+  bool _isAtBottom = true;
+  bool _followLatest = false;
+  bool _isProgrammaticScroll = false;
+  double _lastScrollPixels = 0;
+  int _remainingOpenSnapFrames = 0;
+  String? _observedActiveSessionId;
+  String? _lastAutoScrolledSessionKey;
   String? _draftSessionId;
 
   @override
@@ -72,23 +80,88 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     if (!_scrollController.hasClients) return;
     final pos = _scrollController.position;
     final distFromBottom = pos.maxScrollExtent - pos.pixels;
-    final show = distFromBottom > 120;
-    if (show != _showJumpToBottom && mounted) {
-      setState(() => _showJumpToBottom = show);
+    final atBottom = distFromBottom <= _atBottomThreshold;
+    final userScrolledUp =
+        !_isProgrammaticScroll && pos.pixels < _lastScrollPixels - 2.0;
+    _lastScrollPixels = pos.pixels;
+
+    var nextFollow = _followLatest;
+    if (userScrolledUp && !atBottom && nextFollow) {
+      nextFollow = false;
+    }
+
+    if ((atBottom != _isAtBottom || nextFollow != _followLatest) && mounted) {
+      setState(() {
+        _isAtBottom = atBottom;
+        _followLatest = nextFollow;
+      });
     }
   }
 
-  void _jumpToBottom({bool animate = true}) {
+  void _scheduleInitialBottomSnap(String sessionKey) {
+    _lastAutoScrolledSessionKey = sessionKey;
+    _remainingOpenSnapFrames = 4;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _performOpenSnap());
+  }
+
+  void _performOpenSnap() {
+    if (!mounted || !_scrollController.hasClients) return;
+    _jumpToBottomImmediate();
+    if (_remainingOpenSnapFrames > 0) {
+      _remainingOpenSnapFrames--;
+    }
+  }
+
+  void _jumpToBottomImmediate() {
+    if (!_scrollController.hasClients) return;
+    final pos = _scrollController.position;
+    final target = pos.maxScrollExtent;
+    _isProgrammaticScroll = true;
+    try {
+      if ((pos.pixels - target).abs() > 0.5) {
+        _scrollController.jumpTo(target);
+      }
+      _lastScrollPixels = _scrollController.position.pixels;
+    } finally {
+      _isProgrammaticScroll = false;
+    }
+    if (!_isAtBottom && mounted) {
+      setState(() => _isAtBottom = true);
+    }
+  }
+
+  Future<void> _jumpToBottom({bool animate = true}) async {
     if (!_scrollController.hasClients) return;
     final target = _scrollController.position.maxScrollExtent;
-    if (animate) {
-      _scrollController.animateTo(
-        target,
-        duration: const Duration(milliseconds: 240),
-        curve: Curves.easeOutCubic,
-      );
-    } else {
-      _scrollController.jumpTo(target);
+    _isProgrammaticScroll = true;
+    try {
+      if (animate) {
+        await _scrollController.animateTo(
+          target,
+          duration: const Duration(milliseconds: 240),
+          curve: Curves.easeOutCubic,
+        );
+      } else {
+        _scrollController.jumpTo(target);
+      }
+      if (_scrollController.hasClients) {
+        _lastScrollPixels = _scrollController.position.pixels;
+      }
+    } finally {
+      _isProgrammaticScroll = false;
+    }
+    if (mounted) _onScroll();
+  }
+
+  void _toggleFollowLatest() {
+    final next = !_followLatest;
+    setState(() => _followLatest = next);
+    if (next) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _followLatest) {
+          _jumpToBottomImmediate();
+        }
+      });
     }
   }
 
@@ -404,6 +477,27 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final activeSessionId =
         ref.watch(sessionsProvider.select((s) => s.activeSessionId)) ??
             'new_session';
+    if (_observedActiveSessionId != activeSessionId) {
+      _observedActiveSessionId = activeSessionId;
+      _followLatest = false;
+      _lastAutoScrolledSessionKey = null;
+    }
+    if (chat.messages.isNotEmpty) {
+      final readyForActive = chat.loadedSessionId == null ||
+          chat.loadedSessionId == activeSessionId;
+      if (readyForActive) {
+        final sessionKey = chat.loadedSessionId ?? activeSessionId;
+        if (_lastAutoScrolledSessionKey != sessionKey) {
+          _scheduleInitialBottomSnap(sessionKey);
+        } else if (_followLatest) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && _followLatest) {
+              _jumpToBottomImmediate();
+            }
+          });
+        }
+      }
+    }
     if (_draftSessionId != activeSessionId) {
       _draftSessionId = activeSessionId;
       final savedDraft =
@@ -669,73 +763,146 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 )
               : Stack(
                   children: [
-                    NotificationListener<ScrollMetricsNotification>(
+                    NotificationListener<UserScrollNotification>(
                       onNotification: (notification) {
-                        final show = (notification.metrics.maxScrollExtent -
-                                notification.metrics.pixels) >
-                            120;
-                        if (show != _showJumpToBottom && mounted) {
-                          WidgetsBinding.instance
-                              .addPostFrameCallback((_) => _onScroll());
+                        if (notification.direction == ScrollDirection.forward) {
+                          _remainingOpenSnapFrames = 0;
+                          if (_followLatest && mounted) {
+                            setState(() => _followLatest = false);
+                          }
                         }
                         return false;
                       },
-                      child: Scrollbar(
-                        controller: _scrollController,
-                        child: ListView.builder(
+                      child: NotificationListener<ScrollMetricsNotification>(
+                        onNotification: (notification) {
+                          final dist = notification.metrics.maxScrollExtent -
+                              notification.metrics.pixels;
+                          if ((_remainingOpenSnapFrames > 0 || _followLatest) &&
+                              dist > 1.0) {
+                            WidgetsBinding.instance.addPostFrameCallback((_) {
+                              if (!mounted) return;
+                              if (_remainingOpenSnapFrames > 0) {
+                                _performOpenSnap();
+                              } else if (_followLatest) {
+                                _jumpToBottomImmediate();
+                              }
+                            });
+                          } else {
+                            final atBottom = dist <= _atBottomThreshold;
+                            if (atBottom != _isAtBottom && mounted) {
+                              WidgetsBinding.instance
+                                  .addPostFrameCallback((_) => _onScroll());
+                            }
+                          }
+                          return false;
+                        },
+                        child: Scrollbar(
                           controller: _scrollController,
-                          padding: const EdgeInsets.only(top: 8, bottom: 24),
-                          itemCount: chat.messages.length,
-                          itemBuilder: (context, index) {
-                            final m = chat.messages[index];
-                            final isLastAssistant = !chat.isStreaming &&
-                                m.role == ChatRole.assistant &&
-                                index == chat.messages.length - 1;
-                            return wrapCentered(
-                              MessageBubble(
-                                message: m,
-                                tokensPerSecond:
-                                    m.isStreaming ? chat.tokensPerSecond : null,
-                                onRegenerate: isLastAssistant
-                                    ? () => ref
-                                        .read(chatProvider.notifier)
-                                        .regenerateLastTurn()
-                                    : null,
-                                onEditResend:
-                                    !chat.isStreaming && m.role == ChatRole.user
-                                        ? (newText) => ref
-                                            .read(chatProvider.notifier)
-                                            .editAndResend(m.id, newText)
-                                        : null,
-                                onRewind:
-                                    !chat.isStreaming && m.role == ChatRole.user
-                                        ? () => _handleRewind(m.id)
-                                        : null,
-                                onOpenDiff: () =>
-                                    ref.read(sidePanelProvider.notifier).openTab(
-                                          const SidePanelTab(
-                                            id: 'review',
-                                            kind: SidePanelTabKind.review,
-                                            title: 'Review',
-                                          ),
+                          child: ListView.builder(
+                            controller: _scrollController,
+                            padding: const EdgeInsets.only(top: 8, bottom: 72),
+                            itemCount: chat.messages.length,
+                            itemBuilder: (context, index) {
+                              final m = chat.messages[index];
+                              final isLastAssistant = !chat.isStreaming &&
+                                  m.role == ChatRole.assistant &&
+                                  index == chat.messages.length - 1;
+                              return wrapCentered(
+                                MessageBubble(
+                                  message: m,
+                                  tokensPerSecond:
+                                      m.isStreaming ? chat.tokensPerSecond : null,
+                                  onRegenerate: isLastAssistant
+                                      ? () => ref
+                                          .read(chatProvider.notifier)
+                                          .regenerateLastTurn()
+                                      : null,
+                                  onEditResend: !chat.isStreaming &&
+                                          m.role == ChatRole.user
+                                      ? (newText) => ref
+                                          .read(chatProvider.notifier)
+                                          .editAndResend(m.id, newText)
+                                      : null,
+                                  onRewind: !chat.isStreaming &&
+                                          m.role == ChatRole.user
+                                      ? () => _handleRewind(m.id)
+                                      : null,
+                                  onOpenDiff: () => ref
+                                      .read(sidePanelProvider.notifier)
+                                      .openTab(
+                                        const SidePanelTab(
+                                          id: 'review',
+                                          kind: SidePanelTabKind.review,
+                                          title: 'Review',
                                         ),
-                              ),
-                            );
-                          },
+                                      ),
+                                ),
+                              );
+                            },
+                          ),
                         ),
                       ),
                     ),
-                    if (_showJumpToBottom)
-                      Positioned(
-                        right: 16,
-                        bottom: 12,
-                        child: FloatingActionButton.small(
-                          heroTag: 'jump-to-latest-chat',
-                          tooltip: 'Jump to latest',
-                          onPressed: _jumpToBottom,
-                          child: const Icon(Icons.arrow_downward_rounded),
-                        ),
-                      ),
+                    Positioned(
+                      right: 16,
+                      bottom: 12,
+                      child: !_isAtBottom
+                          ? FloatingActionButton.small(
+                              heroTag: 'jump-to-latest-chat',
+                              tooltip: 'Jump to latest',
+                              onPressed: () => _jumpToBottom(animate: true),
+                              child: const Icon(Icons.arrow_downward_rounded),
+                            )
+                          : Tooltip(
+                              message: _followLatest
+                                  ? 'Following latest messages (tap to pause)'
+                                  : 'Follow chat (always scroll to latest)',
+                              child: Material(
+                                elevation: 3,
+                                color: _followLatest
+                                    ? theme.colorScheme.primary
+                                    : theme.colorScheme.surfaceContainerHigh,
+                                borderRadius: BorderRadius.circular(20),
+                                clipBehavior: Clip.antiAlias,
+                                child: InkWell(
+                                  onTap: _toggleFollowLatest,
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 8,
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          Icons.vertical_align_bottom_rounded,
+                                          size: 16,
+                                          color: _followLatest
+                                              ? theme.colorScheme.onPrimary
+                                              : theme.colorScheme
+                                                  .onSurfaceVariant,
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Text(
+                                          _followLatest
+                                              ? 'Following'
+                                              : 'Follow',
+                                          style: theme.textTheme.labelMedium
+                                              ?.copyWith(
+                                            fontWeight: FontWeight.w600,
+                                            color: _followLatest
+                                                ? theme.colorScheme.onPrimary
+                                                : theme.colorScheme
+                                                    .onSurfaceVariant,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                    ),
                   ],
                 ),
         ),
@@ -818,7 +985,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               ),
             ),
           ),
-        wrapCentered(const BackgroundTasksBanner()),
         if (chat.pendingPermission != null)
           wrapCentered(
             ToolApprovalCard(

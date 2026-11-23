@@ -228,6 +228,7 @@ class ChatThreadState {
     this.stallWarning,
     this.loopWarning,
     this.activeBackgroundSessionIds = const {},
+    this.loadedSessionId,
   });
 
   final List<ChatMessage> messages;
@@ -239,6 +240,7 @@ class ChatThreadState {
   final String? stallWarning;
   final LoopDetectionResult? loopWarning;
   final Set<String> activeBackgroundSessionIds;
+  final String? loadedSessionId;
 
   ChatThreadState copyWith({
     List<ChatMessage>? messages,
@@ -253,6 +255,7 @@ class ChatThreadState {
     LoopDetectionResult? loopWarning,
     bool clearLoopWarning = false,
     Set<String>? activeBackgroundSessionIds,
+    String? loadedSessionId,
   }) {
     return ChatThreadState(
       messages: messages ?? this.messages,
@@ -269,6 +272,7 @@ class ChatThreadState {
           clearLoopWarning ? null : (loopWarning ?? this.loopWarning),
       activeBackgroundSessionIds:
           activeBackgroundSessionIds ?? this.activeBackgroundSessionIds,
+      loadedSessionId: loadedSessionId ?? this.loadedSessionId,
     );
   }
 }
@@ -457,6 +461,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         isStreaming: _activeStreamingSessionId == sessionId,
         clearPermission: true,
         clearStallWarning: true,
+        loadedSessionId: sessionId,
       );
       return;
     }
@@ -465,6 +470,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     if (raw == null || raw.isEmpty) {
       state = ChatThreadState(
         activeBackgroundSessionIds: state.activeBackgroundSessionIds,
+        loadedSessionId: sessionId,
       );
       return;
     }
@@ -483,10 +489,12 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       state = ChatThreadState(
         messages: list,
         activeBackgroundSessionIds: state.activeBackgroundSessionIds,
+        loadedSessionId: sessionId,
       );
     } catch (_) {
       state = ChatThreadState(
         activeBackgroundSessionIds: state.activeBackgroundSessionIds,
+        loadedSessionId: sessionId,
       );
     }
   }
@@ -623,6 +631,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       activeTurnId: turnId,
       activeBackgroundSessionIds: bgIds,
       clearPermission: true,
+      loadedSessionId: session.id,
     );
 
     // Auto-title new conversations from the first user prompt.
@@ -1435,7 +1444,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     _loopDetector.reset();
     _seenLoopCallIds.clear();
     _pendingCompactions.clear();
-    state = const ChatThreadState();
+    state = ChatThreadState(loadedSessionId: activeId);
     if (activeId != null) {
       await _persistMessages(activeId, const []);
     }
@@ -1600,6 +1609,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       clearPermission: true,
       clearStallWarning: true,
       clearLoopWarning: true,
+      loadedSessionId: resetSession.id,
     );
 
     final project = ref.read(projectsProvider).activeProject;
