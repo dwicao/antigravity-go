@@ -255,6 +255,7 @@ void main() {
     expect(container.read(chatProvider).queuedPrompts, ['Follow up while bg runs']);
     expect(find.text('Steer now'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(milliseconds: 500));
   });
 
   testWidgets(
