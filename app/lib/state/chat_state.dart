@@ -494,10 +494,24 @@ class ChatNotifier extends Notifier<ChatThreadState> {
 
     var session = targetSession ?? ref.read(sessionsProvider).activeSession;
     final targetSid = session?.id ?? _loadedSessionId;
+    final rtTasks = ref.read(runtimeProvider).backgroundTasks;
+    final hasBgTaskForTarget = rtTasks.any((t) {
+      if (targetSid != null &&
+          t.turnId == _sessionRuntimes[targetSid]?.turnId) {
+        return true;
+      }
+      final belongsToOtherSession = _sessionRuntimes.entries.any(
+        (e) =>
+            e.key != targetSid &&
+            (e.value.turnId == t.turnId || e.key == t.turnId),
+      );
+      return !belongsToOtherSession;
+    });
     final sessionBusy =
-        targetSid != null && _sessionRuntimes.containsKey(targetSid);
+        (targetSid != null && _sessionRuntimes.containsKey(targetSid)) ||
+            hasBgTaskForTarget;
     if (!force && sessionBusy) {
-      final queueSid = targetSid;
+      final queueSid = targetSid ?? 'default';
       final nextQueue = <({String prompt, List<String> attachments})>[
         ...(_queuedItemsBySession[queueSid] ?? const []),
         (prompt: prompt, attachments: List<String>.from(attachments)),
