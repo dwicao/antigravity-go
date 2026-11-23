@@ -15,6 +15,9 @@ object CommandSafetyGuard {
     private const val HEAD_PREVIEW_CHARS = 3_000
     private const val TAIL_PREVIEW_CHARS = 5_000
 
+    @Volatile
+    var enabled: Boolean = true
+
     data class GuardDecision(
         val allowed: Boolean,
         val reason: String = "",
@@ -30,7 +33,7 @@ object CommandSafetyGuard {
     private val forkBombRegex = Regex(""":\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;?\s*:""")
 
     private val rmCommandRegex = Regex(
-        """(?:^|[;&|]\s*|\n\s*)(?:sudo\s+)?rm\s+([^\n;|&]+)""",
+        """(?:^|[;&|\n(\s`]|sudo\s+|busybox\s+|command\s+|env\s+|xargs\s+|-exec\s+)(?:/usr/bin/|/bin/)?rm\s+([^\n;|&)`]+)""",
         RegexOption.IGNORE_CASE,
     )
 
@@ -40,12 +43,12 @@ object CommandSafetyGuard {
     )
 
     private val ddBlockRegex = Regex(
-        """\bdd\b[^\n]*\bof=/dev/(?!null\b|zero\b|stdout\b|stderr\b)""",
+        """\bdd\b[^\n]*\bof=["']?/dev/(?!null\b|zero\b|stdout\b|stderr\b)""",
         RegexOption.IGNORE_CASE,
     )
 
     private val rawBlockRedirectRegex = Regex(
-        """>\s*/dev/(?:sd[a-z]|nvme|mmcblk|block/)""",
+        """(?:>|tee\s+(?:-a\s+)?)["']?/dev/(?:sd[a-z]|nvme|mmcblk|block/)""",
         RegexOption.IGNORE_CASE,
     )
 
@@ -63,12 +66,16 @@ object CommandSafetyGuard {
     private val protectedFilenames = setOf(
         "oauth_creds.json",
         "antigravity-go-auth.json",
+        "google_accounts.json",
+        "credentials.json",
+        "antigravity_state.pbtxt",
     )
 
     fun evaluateCommand(
         command: String,
         args: List<String> = emptyList(),
     ): GuardDecision {
+        if (!enabled) return GuardDecision(true)
         val full = if (args.isEmpty()) {
             command.trim()
         } else {
@@ -120,29 +127,45 @@ object CommandSafetyGuard {
 
     private fun isCatastrophicRmTarget(target: String): Boolean {
         if (target.isEmpty()) return false
-        val normalized = target.trimEnd('/')
-        if (target == "/" || target == "/*" || normalized.isEmpty()) return true
-        return normalized in setOf(
+        val cleaned = target.replace("\"", "").replace("'", "").trim()
+        val normalized = cleaned.trimEnd('/')
+        if (cleaned == "/" || cleaned == "/*" || normalized.isEmpty()) return true
+        val roots = setOf(
             "/sdcard",
+            "/sdcard/.",
+            "/sdcard/*",
             "/storage",
+            "/storage/*",
             "/storage/emulated",
             "/storage/emulated/0",
+            "/storage/emulated/0/.",
+            "/storage/emulated/0/*",
             "/data",
+            "/data/*",
             "/system",
             "/vendor",
             "~",
+            "~/*",
+            "~/sdcard",
+            "~/sdcard/*",
             "\$HOME",
+            "\$HOME/*",
             "\${HOME}",
+            "\${HOME}/*",
         )
+        return normalized in roots || cleaned in roots
     }
 
-    fun evaluateWritePath(path: String): GuardDecision {
+    fun evaluateWritePath(path: String, cwd: File? = null): GuardDecision {
+        if (!enabled) return GuardDecision(true)
         val trimmed = path.trim()
         if (trimmed.isEmpty()) return GuardDecision(true)
+        val rawFile = File(trimmed)
+        val resolvedFile = if (rawFile.isAbsolute || cwd == null) rawFile else File(cwd, trimmed)
         val normalized = try {
-            File(trimmed).canonicalPath
+            resolvedFile.canonicalPath
         } catch (_: Throwable) {
-            trimmed
+            resolvedFile.absolutePath
         }
 
         for (prefix in protectedWritePrefixes) {

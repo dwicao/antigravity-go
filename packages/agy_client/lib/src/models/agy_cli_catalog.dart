@@ -107,6 +107,7 @@ class AgyCliCatalog {
       command: '/rewind',
       aliases: ['/undo'],
       description: 'Rewind / undo the last turn and changes',
+      handledLocally: true,
     ),
     AgySlashCommand(
       command: '/fork',
@@ -145,6 +146,7 @@ class AgyCliCatalog {
     AgySlashCommand(
       command: '/credits',
       description: 'Check Google AI credits balance & status',
+      handledLocally: true,
     ),
     AgySlashCommand(
       command: '/agents',
@@ -201,6 +203,11 @@ class AgyCliCatalog {
       defaultArgs: ['agent'],
     ),
     AgyCliSubcommand(
+      name: 'agents',
+      summary: 'Alias for agent subcommand',
+      defaultArgs: ['agents'],
+    ),
+    AgyCliSubcommand(
       name: 'mcp',
       summary: 'List, add, enable, or remove MCP servers',
       defaultArgs: ['mcp', 'list'],
@@ -211,6 +218,17 @@ class AgyCliCatalog {
       summary: 'Manage agy plugins and marketplace extensions',
       defaultArgs: ['plugin', 'list'],
       actions: ['list', 'install', 'uninstall', 'enable', 'disable', 'validate'],
+    ),
+    AgyCliSubcommand(
+      name: 'plugins',
+      summary: 'Alias for plugin management',
+      defaultArgs: ['plugins', 'list'],
+      actions: ['list', 'install', 'uninstall', 'enable', 'disable'],
+    ),
+    AgyCliSubcommand(
+      name: 'install',
+      summary: 'Configure environment paths and shell settings',
+      defaultArgs: ['install'],
     ),
     AgyCliSubcommand(
       name: 'remote-control',
@@ -340,10 +358,17 @@ class FileChangeEntry {
     for (final line in lines) {
       if (line.startsWith('diff --git ')) {
         flush();
-        final match = RegExp(r'^diff --git a/.+? b/(.+)$').firstMatch(line);
-        currentPath = match?.group(1)?.trim();
+        final match = RegExp(
+          r'^diff --git (?:"a/(.+?)"|a/(.+?)) (?:"b/(.+?)"|b/(.+))$',
+        ).firstMatch(line);
+        currentPath = (match?.group(3) ?? match?.group(4))?.trim();
         buf.writeln(line);
       } else if (currentPath != null) {
+        if (line.startsWith('+++ b/')) {
+          currentPath = line.substring(6).trim();
+        } else if (line.startsWith('+++ "b/') && line.endsWith('"')) {
+          currentPath = line.substring(7, line.length - 1).trim();
+        }
         buf.writeln(line);
       }
     }

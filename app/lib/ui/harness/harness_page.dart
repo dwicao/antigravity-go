@@ -48,11 +48,15 @@ class _HarnessPageState extends ConsumerState<HarnessPage> {
 
   Future<void> _compactThread() async {
     final notifier = ref.read(chatProvider.notifier);
+    final messenger = ScaffoldMessenger.of(context);
     Navigator.of(context).pop();
-    await notifier.compactThread(
+    final res = await notifier.compactThread(
       instructions:
           'Summarize decisions, touched files, open blockers, and verified checks concisely.',
     );
+    if (!res.ok) {
+      messenger.showSnackBar(SnackBar(content: Text(res.message)));
+    }
   }
 
   Future<void> _promptCustomVerify(HarnessState harness) async {
@@ -130,10 +134,11 @@ class _HarnessPageState extends ConsumerState<HarnessPage> {
     final counts = harness.progressCounts;
     final verifyCmd = harness.effectiveVerifyCommand;
 
+    final semantic = AgySemanticColors.of(context);
     final ctxColor = ctxSnap.shouldCompact
         ? theme.colorScheme.error
         : ctxSnap.needsWarning
-            ? Colors.amber.shade700
+            ? semantic.warning
             : theme.colorScheme.primary;
 
     return Scaffold(
@@ -273,6 +278,18 @@ class _HarnessPageState extends ConsumerState<HarnessPage> {
                   value: harness.autoCheckpointEnabled,
                   onChanged: (v) =>
                       ref.read(harnessProvider.notifier).setAutoCheckpoint(v),
+                ),
+                const Divider(height: 1),
+                SwitchListTile.adaptive(
+                  dense: true,
+                  secondary: const Icon(Icons.fact_check_outlined, size: 20),
+                  title: const Text('Auto-Verify After Turn'),
+                  subtitle: const Text(
+                    'Appends verification-gate instructions after feature work',
+                  ),
+                  value: harness.autoVerifyEnabled,
+                  onChanged: (v) =>
+                      ref.read(harnessProvider.notifier).setAutoVerify(v),
                 ),
                 const Divider(height: 1),
                 ListTile(

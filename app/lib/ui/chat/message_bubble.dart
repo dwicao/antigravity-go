@@ -177,7 +177,10 @@ class MessageBubble extends StatelessWidget {
                           onEditResend!(updated);
                         }
                       },
-                      icon: const Icon(Icons.edit_outlined),
+                      icon: Icon(
+                        Icons.edit_outlined,
+                        color: theme.colorScheme.onPrimaryContainer,
+                      ),
                     ),
                   ],
                   if (onRewind != null) ...[
@@ -194,9 +197,7 @@ class MessageBubble extends StatelessWidget {
                       onPressed: onRewind,
                       icon: Icon(
                         Icons.history_rounded,
-                        color: message.checkpointRef != null
-                            ? theme.colorScheme.primary
-                            : null,
+                        color: theme.colorScheme.onPrimaryContainer,
                       ),
                     ),
                   ],
@@ -242,40 +243,53 @@ class MessageBubble extends StatelessWidget {
             ),
           Row(
             children: [
-              CircleAvatar(
-                radius: 12,
-                backgroundColor: theme.colorScheme.primary.withOpacity(0.16),
-                child: Icon(
-                  Icons.auto_awesome,
-                  size: 14,
-                  color: theme.colorScheme.primary,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                'Antigravity',
-                style: theme.textTheme.labelMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              if (message.isStreaming) ...[
-                const SizedBox(width: 8),
-                const SizedBox(
-                  width: 12,
-                  height: 12,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-                if (tokensPerSecond != null && tokensPerSecond! > 0.5) ...[
-                  const SizedBox(width: 8),
-                  Text(
-                    '${tokensPerSecond!.toStringAsFixed(0)} tok/s',
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: semantic.textSecondary,
+              Expanded(
+                child: Row(
+                  children: [
+                    CircleAvatar(
+                      radius: 12,
+                      backgroundColor:
+                          theme.colorScheme.primary.withOpacity(0.16),
+                      child: Icon(
+                        Icons.auto_awesome,
+                        size: 14,
+                        color: theme.colorScheme.primary,
+                      ),
                     ),
-                  ),
-                ],
-              ],
-              const Spacer(),
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Text(
+                        'Antigravity',
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.labelMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    if (message.isStreaming) ...[
+                      const SizedBox(width: 8),
+                      const SizedBox(
+                        width: 12,
+                        height: 12,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                      if (tokensPerSecond != null &&
+                          tokensPerSecond! > 0.5) ...[
+                        const SizedBox(width: 8),
+                        Flexible(
+                          child: Text(
+                            '${tokensPerSecond!.toStringAsFixed(0)} tok/s',
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: semantic.textSecondary,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ],
+                ),
+              ),
               if (message.text.isNotEmpty)
                 IconButton(
                   iconSize: 16,
@@ -313,7 +327,7 @@ class MessageBubble extends StatelessWidget {
               _CollapsibleSection(
                 icon: Icons.psychology_outlined,
                 title: 'Reasoning & Thoughts',
-                body: message.thoughts,
+                body: AgySecretMask.mask(message.thoughts),
               ),
             ],
             if (message.tools.isNotEmpty) ...[
@@ -330,7 +344,10 @@ class MessageBubble extends StatelessWidget {
               text: message.text,
               streaming: message.isStreaming,
             ),
-          ] else if (message.isStreaming) ...[
+          ] else if (message.isStreaming &&
+              message.steps.isEmpty &&
+              message.tools.isEmpty &&
+              message.thoughts.isEmpty) ...[
             const SizedBox(height: 8),
             Text(
               'Thinking…',
@@ -821,7 +838,8 @@ class _MilestoneStackCardState extends State<_MilestoneStackCard> {
     final isOpen = _expandedSteps.contains(step.id);
 
     if (step.kind == ChatMilestoneKind.thought) {
-      final preview = _firstLine(step.text);
+      final masked = AgySecretMask.mask(step.text);
+      final preview = _firstLine(masked);
       return InkWell(
         onTap: () => setState(() {
           if (isOpen) {
@@ -865,7 +883,7 @@ class _MilestoneStackCardState extends State<_MilestoneStackCard> {
               ),
               if (isOpen) ...[
                 const SizedBox(height: 6),
-                AgyMarkdown(text: step.text.trim(), secondary: true),
+                AgyMarkdown(text: masked.trim(), secondary: true),
               ],
             ],
           ),
@@ -912,7 +930,7 @@ class _MilestoneStackCardState extends State<_MilestoneStackCard> {
                       ? semantic.danger
                       : tool.state == ToolCallState.running
                           ? theme.colorScheme.primary
-                          : Colors.green,
+                          : semantic.success,
                 ),
                 const SizedBox(width: 6),
                 Expanded(
@@ -942,9 +960,33 @@ class _MilestoneStackCardState extends State<_MilestoneStackCard> {
               ],
             ),
             if (isOpen &&
-                ((tool.output?.isNotEmpty ?? false) ||
+                (arg.isNotEmpty ||
+                    (tool.output?.isNotEmpty ?? false) ||
                     (tool.error?.isNotEmpty ?? false))) ...[
               const SizedBox(height: 6),
+              if (arg.isNotEmpty)
+                Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.only(bottom: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 5,
+                  ),
+                  decoration: BoxDecoration(
+                    color: semantic.codeWellHeader,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: SelectableText(
+                    AgySecretMask.mask(
+                      arg.length > 300 ? '${arg.substring(0, 300)}…' : arg,
+                    ),
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 11,
+                      color: semantic.textSecondary,
+                    ),
+                  ),
+                ),
               if (tool.output != null && tool.output!.isNotEmpty)
                 Container(
                   width: double.infinity,
@@ -953,7 +995,7 @@ class _MilestoneStackCardState extends State<_MilestoneStackCard> {
                     color: semantic.codeWellBg,
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: Text(
+                  child: SelectableText(
                     AgySecretMask.mask(
                       tool.output!.length > 600
                           ? '${tool.output!.substring(0, 600)}…'
@@ -967,7 +1009,7 @@ class _MilestoneStackCardState extends State<_MilestoneStackCard> {
                   ),
                 ),
               if (tool.error != null && tool.error!.isNotEmpty)
-                Text(
+                SelectableText(
                   AgySecretMask.mask(tool.error!),
                   style: TextStyle(color: semantic.danger, fontSize: 11.5),
                 ),

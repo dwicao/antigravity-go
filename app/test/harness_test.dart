@@ -1,3 +1,4 @@
+import 'package:agy_client/agy_client.dart';
 import 'package:antigravity_go/state/chat_state.dart';
 import 'package:antigravity_go/state/harness_state.dart';
 import 'package:antigravity_go/ui/chat/message_bubble.dart';
@@ -143,5 +144,32 @@ void main() {
       scrollable: listScrollable,
     );
     expect(find.text('Adversarial Diff Review'), findsOneWidget);
+  });
+
+  testWidgets('HarnessPage exposes Auto-Verify toggle and clears verifiedAt when unmarking', (tester) async {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(
+          home: HarnessPage(autoRefreshOnOpen: false),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Auto-Verify After Turn'), findsOneWidget);
+    await container.read(harnessProvider.notifier).setAutoVerify(true);
+    expect(container.read(harnessProvider).autoVerifyEnabled, isTrue);
+
+    final f = HarnessFeatureItem(
+      id: 'f1',
+      description: 'Sample feature',
+      passes: true,
+      verifiedAt: '2026-11-23T00:00:00Z',
+    );
+    expect(f.copyWith(passes: false, clearVerifiedAt: true).verifiedAt, isNull);
   });
 }

@@ -28,6 +28,7 @@ class UpdatePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChanne
     private val executor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
     private val cancelRequested = AtomicBoolean(false)
+    private val downloadActive = AtomicBoolean(false)
     @Volatile private var eventSink: EventChannel.EventSink? = null
     @Volatile private var activeConnection: HttpURLConnection? = null
 
@@ -102,11 +103,16 @@ class UpdatePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChanne
                     result.error("bad_url", "Missing APK URL", null)
                     return
                 }
+                if (!downloadActive.compareAndSet(false, true)) {
+                    result.error("update_busy", "An update download is already in progress", null)
+                    return
+                }
                 val expectedSha256 = call.argument<String>("expectedSha256")?.trim()?.lowercase()
                 cancelRequested.set(false)
                 executor.submit {
                     val apkFile = File(appContext.cacheDir, "antigravity-go-update.apk")
                     try {
+                        if (apkFile.exists()) apkFile.delete()
                         val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
                             instanceFollowRedirects = true
                             connectTimeout = 20_000
@@ -202,13 +208,17 @@ class UpdatePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChanne
                             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         }
                         mainHandler.post {
-                            appContext.startActivity(intent)
-                            result.success(
-                                mapOf(
-                                    "received" to received,
-                                    "total" to if (total > 0) total else received,
+                            try {
+                                appContext.startActivity(intent)
+                                result.success(
+                                    mapOf(
+                                        "received" to received,
+                                        "total" to if (total > 0) total else received,
+                                    )
                                 )
-                            )
+                            } catch (t: Throwable) {
+                                result.error("install_launch_failed", t.message ?: t.toString(), null)
+                            }
                         }
                     } catch (_: UpdateCancelledException) {
                         try {
@@ -228,6 +238,7 @@ class UpdatePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChanne
                             result.error("update_failed", msg, null)
                         }
                     } finally {
+                        downloadActive.set(false)
                         try {
                             activeConnection?.disconnect()
                         } catch (_: Throwable) {}

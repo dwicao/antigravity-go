@@ -44,10 +44,12 @@ class RuntimeController private constructor(private val appContext: Context) {
 
     private val executor = Executors.newCachedThreadPool()
     private val listeners = CopyOnWriteArrayList<(Map<String, Any?>) -> Unit>()
-    private val logs = CopyOnWriteArrayList<String>()
+    private val logs = ArrayDeque<String>()
     private val runTail = ArrayDeque<String>()
     private val activeTurns = ConcurrentHashMap<String, Process>()
+    private val cancelledTurns = ConcurrentHashMap.newKeySet<String>()
     private val nonAcpTurnMeta = ConcurrentHashMap<String, Pair<String, Long>>()
+    private val toolchainLock = Any()
     private val acpManager = AcpSessionManager(
         executor = executor,
         emit = { payload -> handleAcpOrProcessEvent(payload) },
@@ -150,9 +152,11 @@ class RuntimeController private constructor(private val appContext: Context) {
 
     private fun log(msg: String) {
         val clean = LogRedactor.redact(msg)
-        logs.add(clean)
-        while (logs.size > 250) {
-            logs.removeAt(0)
+        synchronized(logs) {
+            logs.addLast(clean)
+            while (logs.size > 250) {
+                logs.removeFirst()
+            }
         }
         synchronized(runTail) {
             runTail.addLast(clean)
@@ -211,17 +215,20 @@ class RuntimeController private constructor(private val appContext: Context) {
         val started = turnStartedAt.remove(turnId)
         val upMs = started?.let { System.currentTimeMillis() - it }
         val receivedOut = turnReceivedOutput.remove(turnId) ?: false
+        val wasCancelled = cancelledTurns.remove(turnId)
         activeTurns.remove(turnId)
         nonAcpTurnMeta.remove(turnId)
         emitBackgroundTasks()
         if (AgyService.running) {
             AgyService.updateTurnStatus(appContext, "On-device Antigravity CLI harness active")
         }
-        if (exitCode == 0) {
-            if (safeState == SafeState.PROBATION && (upMs == null || upMs >= SafePolicy.HEALTHY_MS || receivedOut)) {
-                safeState = SafeState.OFF
+        if (exitCode == 0 || wasCancelled) {
+            if (exitCode == 0) {
+                if (safeState == SafeState.PROBATION && (upMs == null || upMs >= SafePolicy.HEALTHY_MS || receivedOut)) {
+                    safeState = SafeState.OFF
+                }
+                consecutiveStrikes = 0
             }
-            consecutiveStrikes = 0
             return
         }
         val tailSnapshot = synchronized(runTail) { runTail.toList() }
@@ -256,7 +263,7 @@ class RuntimeController private constructor(private val appContext: Context) {
         }
     }
 
-    fun getLogs(): List<String> = logs.toList()
+    fun getLogs(): List<String> = synchronized(logs) { logs.toList() }
 
     fun listBackgroundTasks(): List<Map<String, Any?>> {
         val tasks = mutableListOf<Map<String, Any?>>()
@@ -407,6 +414,10 @@ class RuntimeController private constructor(private val appContext: Context) {
     }
 
     fun stopService() {
+        acpManager.forceStopAll()
+        runCatching { loginProcess?.destroyForcibly() }
+        loginProcess = null
+        loginWriter = null
         for ((_, proc) in activeTurns) {
             proc.destroyForcibly()
         }
@@ -460,41 +471,48 @@ class RuntimeController private constructor(private val appContext: Context) {
      * so `agy` tools always find `bash`, `sh`, `ls`, `find`, `grep`, `sed`, `awk`, etc.
      */
     fun ensureShellToolchain() {
-        try {
-            binDir.mkdirs()
-            tmpDir.mkdirs()
-            val nativeLibDir = appContext.applicationInfo?.nativeLibraryDir
-            val bundledBash = nativeLibDir?.let { File(it, "libbash.so") }?.takeIf { it.isFile }
-            val bundledBusybox = nativeLibDir?.let { File(it, "libbusybox.so") }?.takeIf { it.isFile }
+        synchronized(toolchainLock) {
+            try {
+                binDir.mkdirs()
+                tmpDir.mkdirs()
+                val nativeLibDir = appContext.applicationInfo?.nativeLibraryDir
+                val bundledBash = nativeLibDir?.let { File(it, "libbash.so") }?.takeIf { it.isFile }
+                val bundledBusybox = nativeLibDir?.let { File(it, "libbusybox.so") }?.takeIf { it.isFile }
 
-            if (bundledBash != null) {
-                ensureSymlink(bashFile, bundledBash.absolutePath)
-            } else {
-                // Fallback executable wrapper when native JNI binaries are omitted (e.g. dev debug).
-                if (!bashFile.exists() || !bashFile.canExecute()) {
-                    bashFile.writeText("#!/system/bin/sh\nexec /system/bin/sh \"\$@\"\n")
-                    bashFile.setExecutable(true, false)
+                if (bundledBash != null) {
+                    ensureSymlink(bashFile, bundledBash.absolutePath)
+                } else {
+                    // Fallback executable wrapper when native JNI binaries are omitted (e.g. dev debug).
+                    if (!bashFile.exists() || !bashFile.canExecute()) {
+                        bashFile.writeText("#!/system/bin/sh\nexec /system/bin/sh \"\$@\"\n")
+                        bashFile.setExecutable(true, false)
+                    }
                 }
-            }
 
-            if (bundledBusybox != null) {
-                ensureSymlink(File(binDir, "busybox"), bundledBusybox.absolutePath)
-                for (applet in busyboxApplets) {
-                    if (applet == "agy" || applet == "bash") continue
-                    ensureSymlink(File(binDir, applet), bundledBusybox.absolutePath)
+                if (bundledBusybox != null) {
+                    ensureSymlink(File(binDir, "busybox"), bundledBusybox.absolutePath)
+                    for (applet in busyboxApplets) {
+                        if (applet == "agy" || applet == "bash") continue
+                        ensureSymlink(File(binDir, applet), bundledBusybox.absolutePath)
+                    }
                 }
-            }
 
-            // DSH-go style storage shortcuts inside HOME & default workspace.
-            if (hasStorageAccess()) {
-                val extRoot = Environment.getExternalStorageDirectory()?.absolutePath
-                    ?: "/storage/emulated/0"
-                if (File(extRoot).canRead()) {
-                    ensureSymlink(File(homeDir, "sdcard"), extRoot)
-                    ensureSymlink(File(workspaceDir, "phone_storage"), extRoot)
+                // DSH-go style storage shortcuts inside HOME & default workspace.
+                val sdcardLink = File(homeDir, "sdcard")
+                val wsStorageLink = File(workspaceDir, "phone_storage")
+                if (hasStorageAccess()) {
+                    val extRoot = Environment.getExternalStorageDirectory()?.absolutePath
+                        ?: "/storage/emulated/0"
+                    if (File(extRoot).canRead()) {
+                        ensureSymlink(sdcardLink, extRoot)
+                        ensureSymlink(wsStorageLink, extRoot)
+                    }
+                } else {
+                    runCatching { if (sdcardLink.exists()) sdcardLink.delete() }
+                    runCatching { if (wsStorageLink.exists()) wsStorageLink.delete() }
                 }
+            } catch (_: Throwable) {
             }
-        } catch (_: Throwable) {
         }
     }
 
@@ -789,10 +807,12 @@ class RuntimeController private constructor(private val appContext: Context) {
                 writer.write(stdinCommands)
                 writer.flush()
             }
-            val out = proc.inputStream.bufferedReader().use { it.readText() }
-            proc.waitFor(timeoutSeconds.toLong(), TimeUnit.SECONDS)
-            if (proc.isAlive) proc.destroyForcibly()
-            out
+            val readFuture = executor.submit<String> {
+                proc.inputStream.bufferedReader().use { it.readText() }
+            }
+            val finished = proc.waitFor(timeoutSeconds.toLong(), TimeUnit.SECONDS)
+            if (!finished) proc.destroyForcibly()
+            runCatching { readFuture.get(2, TimeUnit.SECONDS) }.getOrDefault("")
         } catch (_: Throwable) {
             ""
         }
@@ -901,10 +921,12 @@ class RuntimeController private constructor(private val appContext: Context) {
         pb.environment().putAll(buildEnv(extraEnv))
         pb.redirectErrorStream(true)
         val proc = pb.start()
-        val out = proc.inputStream.bufferedReader().use { it.readText() }
-        proc.waitFor(timeoutSeconds.toLong(), TimeUnit.SECONDS)
-        if (proc.isAlive) proc.destroyForcibly()
-        return out
+        val readFuture = executor.submit<String> {
+            proc.inputStream.bufferedReader().use { it.readText() }
+        }
+        val finished = proc.waitFor(timeoutSeconds.toLong(), TimeUnit.SECONDS)
+        if (!finished) proc.destroyForcibly()
+        return runCatching { readFuture.get(2, TimeUnit.SECONDS) }.getOrDefault("")
     }
 
     fun runShell(command: String, cwd: String?): String {
@@ -917,10 +939,35 @@ class RuntimeController private constructor(private val appContext: Context) {
         pb.environment().putAll(env)
         pb.redirectErrorStream(true)
         val proc = pb.start()
-        val out = proc.inputStream.bufferedReader().use { it.readText() }
-        proc.waitFor(30, TimeUnit.SECONDS)
-        if (proc.isAlive) proc.destroyForcibly()
-        return out
+        val readFuture = executor.submit<String> {
+            proc.inputStream.bufferedReader().use { it.readText() }
+        }
+        val finished = proc.waitFor(30, TimeUnit.SECONDS)
+        if (!finished) proc.destroyForcibly()
+        return runCatching { readFuture.get(2, TimeUnit.SECONDS) }.getOrDefault("")
+    }
+
+    private fun runCapturedArgs(
+        args: List<String>,
+        cwd: File,
+        extraEnv: Map<String, String> = emptyMap(),
+        timeoutSeconds: Long = 30,
+    ): Pair<Int, String> {
+        val pb = ProcessBuilder(args)
+        pb.directory(cwd)
+        pb.environment().putAll(buildEnv(extraEnv))
+        pb.redirectErrorStream(true)
+        val proc = pb.start()
+        val readFuture = executor.submit<String> {
+            proc.inputStream.bufferedReader().use { it.readText() }
+        }
+        val finished = proc.waitFor(timeoutSeconds, TimeUnit.SECONDS)
+        val code = if (finished) proc.exitValue() else {
+            proc.destroyForcibly()
+            124
+        }
+        val out = runCatching { readFuture.get(2, TimeUnit.SECONDS) }.getOrDefault("")
+        return code to out
     }
 
     fun diagnoseRuntime(): Map<String, Any?> {
@@ -961,7 +1008,10 @@ class RuntimeController private constructor(private val appContext: Context) {
         return if (Build.VERSION.SDK_INT >= 30) {
             Environment.isExternalStorageManager()
         } else {
-            true
+            appContext.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED &&
+                appContext.checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
         }
     }
 
@@ -976,6 +1026,10 @@ class RuntimeController private constructor(private val appContext: Context) {
             out.add("/sdcard")
         }
         return out.toList()
+    }
+
+    fun setGuardrailsEnabled(enabled: Boolean) {
+        CommandSafetyGuard.enabled = enabled
     }
 
     fun startTurn(
@@ -1002,9 +1056,11 @@ class RuntimeController private constructor(private val appContext: Context) {
             return
         }
 
+        cancelledTurns.remove(turnId)
         turnStartedAt[turnId] = System.currentTimeMillis()
         turnReceivedOutput[turnId] = false
         synchronized(runTail) { runTail.clear() }
+        AgyService.refreshWakeLock(appContext)
         if (AgyService.running) {
             AgyService.updateTurnStatus(appContext, "Agent thinking…")
         }
@@ -1016,7 +1072,8 @@ class RuntimeController private constructor(private val appContext: Context) {
         }
 
         // Sync non-workspace & permission settings before running agy.
-        // Never allow `auto` sandbox mode to persist in settings.json on Android.
+        // Never allow `auto` sandbox mode to persist in settings.json on Android,
+        // and restore default permissions when exiting Turbo mode.
         try {
             val currentSettings = readSettings()
             val patch = mutableMapOf<String, Any?>(
@@ -1027,8 +1084,14 @@ class RuntimeController private constructor(private val appContext: Context) {
                 patch["permissions"] = mapOf(
                     "allow" to listOf("command(*)", "read_file(*)", "write_file(*)"),
                 )
-            } else if (currentSettings["toolPermission"] == "auto") {
-                patch["toolPermission"] = "default"
+            } else {
+                val curPerm = currentSettings["toolPermission"]?.toString()
+                if (curPerm == "auto" || curPerm == "always-proceed") {
+                    patch["toolPermission"] = "default"
+                }
+                if (currentSettings.containsKey("permissions")) {
+                    patch["permissions"] = null
+                }
             }
             writeSettings(patch)
         } catch (_: Throwable) {}
@@ -1050,7 +1113,6 @@ class RuntimeController private constructor(private val appContext: Context) {
         }
 
         val useAcpForTurn = useAcp &&
-            agent.isNullOrBlank() &&
             printTimeoutSeconds == null &&
             !disableSlashCommands &&
             !continueLast &&
@@ -1066,8 +1128,10 @@ class RuntimeController private constructor(private val appContext: Context) {
                 extraDirs = mergedDirs,
                 existingSessionId = conversationId,
                 modelId = model,
+                effort = effort,
                 modeCli = safeCliMode,
                 skipPermissions = skipPermissions,
+                agent = agent?.takeIf { it.isNotBlank() },
                 onAuthenticated = {
                     if (!authMarkerFile.exists()) {
                         writeAuthMarker(true)
@@ -1165,7 +1229,7 @@ class RuntimeController private constructor(private val appContext: Context) {
                     }
                 }
 
-                errFuture.get(5, TimeUnit.SECONDS)
+                runCatching { errFuture.get(5, TimeUnit.SECONDS) }
                 val code = proc.waitFor()
                 if (code == 0 && !authMarkerFile.exists()) {
                     writeAuthMarker(true)
@@ -1182,7 +1246,9 @@ class RuntimeController private constructor(private val appContext: Context) {
                 )
                 handleAcpOrProcessEvent(mapOf("kind" to "turn_exit", "turnId" to turnId, "exitCode" to 1))
             } finally {
-                activeTurns.remove(turnId)
+                activeTurns.remove(turnId)?.let { p ->
+                    if (p.isAlive) runCatching { p.destroyForcibly() }
+                }
                 nonAcpTurnMeta.remove(turnId)
                 emitBackgroundTasks()
             }
@@ -1194,6 +1260,7 @@ class RuntimeController private constructor(private val appContext: Context) {
     }
 
     fun cancelTurn(turnId: String) {
+        cancelledTurns.add(turnId)
         acpManager.cancel(turnId)
         activeTurns.remove(turnId)?.destroyForcibly()
         nonAcpTurnMeta.remove(turnId)
@@ -1319,35 +1386,30 @@ class RuntimeController private constructor(private val appContext: Context) {
     ): Map<String, Any?> {
         val dir = if (!cwd.isNullOrBlank()) File(cwd) else workspaceDir
         val safeMsg = message.trim().ifEmpty { "Update workspace changes" }
-            .replace("\"", "\\\"")
-        val branch = runShell("git rev-parse --abbrev-ref HEAD 2>/dev/null || true", dir.absolutePath).trim()
+        val (_, branchRaw) = runCapturedArgs(listOf("git", "rev-parse", "--abbrev-ref", "HEAD"), dir)
+        val branch = branchRaw.trim()
         val out = StringBuilder()
         var commitOk = true
         if (stageAll) {
-            val addOut = runShell("git add -A 2>&1", dir.absolutePath)
+            val (_, addOut) = runCapturedArgs(listOf("git", "add", "-A"), dir)
             if (addOut.isNotBlank()) out.appendLine(addOut.trim())
         }
-        val commitOut = runShell("git commit -m \"$safeMsg\" 2>&1", dir.absolutePath)
+        val (commitCode, commitOut) = runCapturedArgs(listOf("git", "commit", "-m", safeMsg), dir)
         if (commitOut.isNotBlank()) out.appendLine(commitOut.trim())
-        if (commitOut.contains("nothing to commit", ignoreCase = true) ||
-            commitOut.contains("error:", ignoreCase = true) ||
-            commitOut.contains("fatal:", ignoreCase = true)
-        ) {
-            commitOk = commitOut.contains("create mode", ignoreCase = true) ||
-                commitOut.contains("files changed", ignoreCase = true) ||
-                commitOut.contains("file changed", ignoreCase = true)
+        if (commitCode != 0) {
+            commitOk = commitOut.contains("nothing to commit", ignoreCase = true)
         }
-        val headHash = runShell("git rev-parse --short HEAD 2>/dev/null || true", dir.absolutePath).trim()
-        val numstat = runShell("git show --numstat --format=\"\" HEAD 2>/dev/null || true", dir.absolutePath)
-        val nameStatus = runShell("git show --name-status --format=\"\" HEAD 2>/dev/null || true", dir.absolutePath)
-        val commitDiff = runShell("git show --format=\"\" HEAD 2>/dev/null | head -n 800 || true", dir.absolutePath)
+        val (_, headRaw) = runCapturedArgs(listOf("git", "rev-parse", "--short", "HEAD"), dir)
+        val headHash = headRaw.trim()
+        val (_, numstat) = runCapturedArgs(listOf("git", "show", "--numstat", "--format="), dir)
+        val (_, nameStatus) = runCapturedArgs(listOf("git", "show", "--name-status", "--format="), dir)
+        val (_, commitDiffRaw) = runCapturedArgs(listOf("git", "show", "--format="), dir)
+        val commitDiff = commitDiffRaw.lineSequence().take(800).joinToString("\n")
         var pushOk = !push
         if (push && commitOk) {
-            val pushOut = runShell("git push 2>&1", dir.absolutePath)
+            val (pushCode, pushOut) = runCapturedArgs(listOf("git", "push"), dir, timeoutSeconds = 60)
             if (pushOut.isNotBlank()) out.appendLine(pushOut.trim())
-            pushOk = !pushOut.contains("fatal:", ignoreCase = true) &&
-                !pushOut.contains("error:", ignoreCase = true) &&
-                !pushOut.contains("rejected", ignoreCase = true)
+            pushOk = pushCode == 0
         }
         return mapOf(
             "ok" to (commitOk && pushOk),
@@ -1380,44 +1442,75 @@ class RuntimeController private constructor(private val appContext: Context) {
     fun readFile(path: String): String {
         val f = File(path)
         if (!f.exists() || !f.isFile) return ""
-        return f.readText()
+        val maxBytes = 2 * 1024 * 1024L
+        if (f.length() <= maxBytes) return f.readText()
+        return f.inputStream().bufferedReader().use { reader ->
+            val buf = CharArray(512 * 1024)
+            val n = reader.read(buf)
+            val head = if (n > 0) String(buf, 0, n) else ""
+            "$head\n\n...[truncated file > 2MB: ${f.length()} bytes]..."
+        }
     }
 
     /**
-     * Captures a non-disruptive Git snapshot before an agent turn so the user
-     * can deterministically rewind both workspace files and conversation state.
+     * Captures a non-disruptive Git snapshot (tracked + untracked non-ignored files)
+     * before an agent turn using a temporary index so [restoreCheckpoint] can
+     * deterministically rewind without mutating HEAD or losing merge commits.
      */
     fun createCheckpoint(cwd: String?): Map<String, Any?> {
         val dir = if (!cwd.isNullOrBlank()) File(cwd) else workspaceDir
-        val inside = runShell(
-            "git rev-parse --is-inside-work-tree 2>/dev/null || true",
-            dir.absolutePath,
-        ).trim()
-        if (inside != "true") {
+        val (insideCode, insideOut) = runCapturedArgs(
+            listOf("git", "rev-parse", "--is-inside-work-tree"),
+            dir,
+        )
+        if (insideCode != 0 || insideOut.trim() != "true") {
             return mapOf("ok" to false, "reason" to "Not a git repository")
         }
-        val headSha = runShell(
-            "git rev-parse --verify HEAD 2>/dev/null || true",
-            dir.absolutePath,
-        ).trim()
-        if (headSha.isEmpty()) {
+        val (headCode, headOut) = runCapturedArgs(
+            listOf("git", "rev-parse", "--verify", "HEAD"),
+            dir,
+        )
+        val headSha = headOut.trim()
+        if (headCode != 0 || headSha.isEmpty()) {
             return mapOf("ok" to false, "reason" to "Repository has no commits yet")
         }
-        val stashSha = runShell(
-            "git stash create \"agy-checkpoint\" 2>/dev/null || true",
-            dir.absolutePath,
-        ).trim()
-        val ref = if (stashSha.isNotEmpty()) stashSha else headSha
-        return mapOf(
-            "ok" to true,
-            "ref" to ref,
-            "head" to headSha,
-            "dirty" to stashSha.isNotEmpty(),
-        )
+        val tmpIdx = File(tmpDir, "agy-cp-${System.nanoTime()}.idx")
+        return try {
+            val env = mapOf("GIT_INDEX_FILE" to tmpIdx.absolutePath)
+            runCapturedArgs(listOf("git", "read-tree", headSha), dir, env)
+            runCapturedArgs(listOf("git", "add", "-A"), dir, env)
+            val (treeCode, treeOut) = runCapturedArgs(listOf("git", "write-tree"), dir, env)
+            val treeSha = treeOut.trim()
+            if (treeCode != 0 || treeSha.isEmpty()) {
+                return mapOf("ok" to true, "ref" to headSha, "head" to headSha, "dirty" to false)
+            }
+            val (headTreeCode, headTreeOut) = runCapturedArgs(
+                listOf("git", "rev-parse", "${headSha}^{tree}"),
+                dir,
+            )
+            if (headTreeCode == 0 && headTreeOut.trim() == treeSha) {
+                return mapOf("ok" to true, "ref" to headSha, "head" to headSha, "dirty" to false)
+            }
+            val (commitCode, commitOut) = runCapturedArgs(
+                listOf("git", "commit-tree", treeSha, "-p", headSha, "-m", "agy-checkpoint"),
+                dir,
+            )
+            val commitSha = commitOut.trim()
+            val ref = if (commitCode == 0 && commitSha.isNotEmpty()) commitSha else headSha
+            mapOf(
+                "ok" to true,
+                "ref" to ref,
+                "head" to headSha,
+                "dirty" to (ref != headSha),
+            )
+        } finally {
+            runCatching { if (tmpIdx.exists()) tmpIdx.delete() }
+        }
     }
 
     /**
-     * Rewinds tracked workspace files to the exact state captured in [ref].
+     * Rewinds workspace files (including deleting newly created untracked files)
+     * to the exact state captured in [ref].
      */
     fun restoreCheckpoint(cwd: String?, ref: String): Map<String, Any?> {
         val cleanRef = ref.trim()
@@ -1425,31 +1518,72 @@ class RuntimeController private constructor(private val appContext: Context) {
             return mapOf("ok" to false, "message" to "Invalid checkpoint ref")
         }
         val dir = if (!cwd.isNullOrBlank()) File(cwd) else workspaceDir
-        val verified = runShell(
-            "git rev-parse --verify \"$cleanRef^{commit}\" 2>/dev/null || true",
-            dir.absolutePath,
-        ).trim()
-        if (verified.isEmpty()) {
+        val (verifyCode, verifyOut) = runCapturedArgs(
+            listOf("git", "rev-parse", "--verify", "$cleanRef^{commit}"),
+            dir,
+        )
+        if (verifyCode != 0 || verifyOut.trim().isEmpty()) {
             return mapOf("ok" to false, "message" to "Checkpoint commit no longer exists")
         }
-        val parentStash = runShell(
-            "git rev-parse --verify \"${cleanRef}^2\" 2>/dev/null || true",
-            dir.absolutePath,
-        ).trim()
-        val out = if (parentStash.isNotEmpty()) {
-            runShell(
-                "git reset --hard \"${cleanRef}^1\" 2>&1 && git checkout \"$cleanRef\" -- . 2>&1",
-                dir.absolutePath,
+
+        val (_, subjectOut) = runCapturedArgs(
+            listOf("git", "log", "-1", "--format=%s", cleanRef),
+            dir,
+        )
+        val isSnapshot = subjectOut.trim() == "agy-checkpoint"
+
+        if (isSnapshot) {
+            val (parentCode, parentOut) = runCapturedArgs(
+                listOf("git", "rev-parse", "--verify", "$cleanRef^1"),
+                dir,
             )
-        } else {
-            runShell("git reset --hard \"$cleanRef\" 2>&1", dir.absolutePath)
+            val baseHead = if (parentCode == 0 && parentOut.trim().isNotEmpty()) {
+                parentOut.trim()
+            } else {
+                cleanRef
+            }
+            val (resetCode, resetOut) = runCapturedArgs(
+                listOf("git", "reset", "--hard", baseHead),
+                dir,
+            )
+            if (resetCode != 0) {
+                return mapOf("ok" to false, "ref" to cleanRef, "output" to resetOut.trim())
+            }
+            val (readTreeCode, readTreeOut) = runCapturedArgs(
+                listOf("git", "read-tree", "--reset", "-u", cleanRef),
+                dir,
+            )
+            if (readTreeCode != 0) {
+                return mapOf("ok" to false, "ref" to cleanRef, "output" to readTreeOut.trim())
+            }
+            val (_, snapFilesRaw) = runCapturedArgs(
+                listOf("git", "ls-tree", "-r", "--name-only", cleanRef),
+                dir,
+            )
+            val snapFiles = snapFilesRaw.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+            val (_, untrackedRaw) = runCapturedArgs(
+                listOf("git", "ls-files", "--others", "--exclude-standard"),
+                dir,
+            )
+            for (rel in untrackedRaw.lineSequence()) {
+                val p = rel.trim()
+                if (p.isNotEmpty() && p !in snapFiles) {
+                    runCatching { File(dir, p).delete() }
+                }
+            }
+            runCapturedArgs(listOf("git", "reset", "--mixed", baseHead), dir)
+            return mapOf("ok" to true, "ref" to cleanRef, "output" to "Restored snapshot $cleanRef")
         }
-        val failed = out.contains("fatal:", ignoreCase = true) ||
-            out.contains("error:", ignoreCase = true)
+
+        val (resetCode, resetOut) = runCapturedArgs(
+            listOf("git", "reset", "--hard", cleanRef),
+            dir,
+        )
+        runCapturedArgs(listOf("git", "clean", "-fd"), dir)
         return mapOf(
-            "ok" to !failed,
+            "ok" to (resetCode == 0),
             "ref" to cleanRef,
-            "output" to out.trim(),
+            "output" to resetOut.trim(),
         )
     }
 
@@ -1487,6 +1621,13 @@ class RuntimeController private constructor(private val appContext: Context) {
         } catch (_: Throwable) {
             false
         }
+        val rootGradlew = File(dir, "gradlew").exists()
+        val appGradlew = File(dir, "app/gradlew").exists()
+        val gradlewCommand = when {
+            rootGradlew -> "./gradlew test"
+            appGradlew -> "./app/gradlew test"
+            else -> null
+        }
         return mapOf(
             "ok" to true,
             "workspace" to dir.absolutePath,
@@ -1498,7 +1639,8 @@ class RuntimeController private constructor(private val appContext: Context) {
             "hasPackageJson" to File(dir, "package.json").exists(),
             "hasPyproject" to (File(dir, "pyproject.toml").exists() || File(dir, "pytest.ini").exists()),
             "hasCargoToml" to File(dir, "Cargo.toml").exists(),
-            "hasGradlew" to (File(dir, "gradlew").exists() || File(dir, "app/gradlew").exists()),
+            "hasGradlew" to (rootGradlew || appGradlew),
+            "gradlewCommand" to gradlewCommand,
         )
     }
 

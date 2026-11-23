@@ -34,11 +34,13 @@ class _RecordedCall {
     required this.name,
     required this.signature,
     required this.isError,
+    this.callId,
   });
 
   final String name;
   final String signature;
   final bool isError;
+  final String? callId;
 }
 
 /// Doom-loop & infinite-retry circuit breaker modeled after modern agent
@@ -68,30 +70,66 @@ class HarnessLoopDetector {
 
   void reset() => _history.clear();
 
+  static String _fnv1a64Hex(String text) {
+    // Use 32-bit FNV-1a split across two lanes so it works identically on Dart VM and JS/Web.
+    var h1 = 0x811c9dc5;
+    var h2 = 0x9e3779b9;
+    for (var i = 0; i < text.length; i++) {
+      final c = text.codeUnitAt(i);
+      h1 ^= c & 0xff;
+      h1 = (h1 * 0x01000193) & 0xffffffff;
+      h2 ^= (c >> 8) ^ (c & 0xff);
+      h2 = (h2 * 0x85ebca6b) & 0xffffffff;
+    }
+    return '${h1.toRadixString(16).padLeft(8, '0')}${h2.toRadixString(16).padLeft(8, '0')}';
+  }
+
   /// Produces a canonical signature for a tool invocation, collapsing
-  /// whitespace jitter so near-identical retries still match.
+  /// whitespace jitter and hashing long inputs without prefix collisions.
   static String canonicalSignature(String name, String input) {
     final normalizedName = name.trim().toLowerCase();
-    final collapsedInput =
-        input.trim().replaceAll(RegExp(r'\s+'), ' ');
-    final clipped = collapsedInput.length > 240
-        ? collapsedInput.substring(0, 240)
-        : collapsedInput;
-    return '$normalizedName::$clipped';
+    final collapsedInput = input.trim().replaceAll(RegExp(r'\s+'), ' ');
+    if (collapsedInput.length <= 160) {
+      return '$normalizedName::$collapsedInput';
+    }
+    return '$normalizedName::${collapsedInput.substring(0, 120)}#${_fnv1a64Hex(collapsedInput)}';
   }
 
   LoopDetectionResult recordToolCall({
     required String name,
     required String input,
     bool isError = false,
+    String? callId,
   }) {
-    final sig = canonicalSignature(name, input);
     final normalizedName = name.trim().toLowerCase();
+    final trimmedInput = input.trim();
+    final sig = canonicalSignature(name, input);
+    final cid = (callId != null && callId.isNotEmpty) ? callId : null;
+
+    if (cid != null) {
+      final existingIdx = _history.lastIndexWhere((e) => e.callId == cid);
+      if (existingIdx >= 0) {
+        final prev = _history[existingIdx];
+        final isIncomingEmpty = trimmedInput.isEmpty || trimmedInput == '{}';
+        final nextSig = isIncomingEmpty ? prev.signature : sig;
+        _history[existingIdx] = _RecordedCall(
+          name: normalizedName.isNotEmpty && normalizedName != 'tool'
+              ? normalizedName
+              : prev.name,
+          signature: nextSig,
+          isError: prev.isError || isError,
+          callId: cid,
+        );
+        return evaluate();
+      }
+    }
+
     _history.add(
       _RecordedCall(
         name: normalizedName,
         signature: sig,
         isError: isError,
+        callId: cid,
       ),
     );
     if (_history.length > windowSize) {
@@ -102,8 +140,21 @@ class HarnessLoopDetector {
 
   /// Marks the most recent recorded call as failed (used when an error arrives
   /// in a follow-up event after the tool call event).
-  LoopDetectionResult markLastFailed({String? toolName}) {
+  LoopDetectionResult markLastFailed({String? toolName, String? callId}) {
     if (_history.isEmpty) return LoopDetectionResult.none;
+    if (callId != null && callId.isNotEmpty) {
+      final idx = _history.lastIndexWhere((e) => e.callId == callId);
+      if (idx >= 0) {
+        final entry = _history[idx];
+        _history[idx] = _RecordedCall(
+          name: entry.name,
+          signature: entry.signature,
+          isError: true,
+          callId: entry.callId,
+        );
+        return evaluate();
+      }
+    }
     final targetName = toolName?.trim().toLowerCase();
     for (var i = _history.length - 1; i >= 0; i--) {
       final entry = _history[i];
@@ -114,6 +165,7 @@ class HarnessLoopDetector {
           name: entry.name,
           signature: entry.signature,
           isError: true,
+          callId: entry.callId,
         );
         return evaluate();
       }
@@ -125,7 +177,34 @@ class HarnessLoopDetector {
     if (_history.isEmpty) return LoopDetectionResult.none;
     final last = _history.last;
 
-    // 1. Consecutive identical tool call signature.
+    // 1. Consecutive errors on the same tool take precedence when the latest call failed.
+    if (last.isError) {
+      var consecutiveErrors = 0;
+      for (var i = _history.length - 1; i >= 0; i--) {
+        if (_history[i].isError && _history[i].name == last.name) {
+          consecutiveErrors++;
+        } else {
+          break;
+        }
+      }
+      if (consecutiveErrors >= failureThreshold) {
+        return LoopDetectionResult(
+          kind: HarnessLoopKind.repeatedFailure,
+          triggered: true,
+          signature: last.signature,
+          count: consecutiveErrors,
+          reason:
+              'Tool "${last.name}" failed $consecutiveErrors consecutive times.',
+          pivotPrompt: _buildPivotPrompt(
+            toolName: last.name,
+            reason:
+                'Tool "${last.name}" failed $consecutiveErrors consecutive times.',
+          ),
+        );
+      }
+    }
+
+    // 2. Consecutive identical tool call signature.
     var consecutiveSame = 0;
     for (var i = _history.length - 1; i >= 0; i--) {
       if (_history[i].signature == last.signature) {
@@ -150,7 +229,7 @@ class HarnessLoopDetector {
       );
     }
 
-    // 2. Non-consecutive identical signature spike in rolling window.
+    // 3. Non-consecutive identical signature spike in rolling window.
     final windowHits =
         _history.where((e) => e.signature == last.signature).length;
     if (windowHits >= repeatThreshold + 1) {
@@ -169,7 +248,7 @@ class HarnessLoopDetector {
       );
     }
 
-    // 3. 2-step alternating ping-pong cycle [A, B, A, B].
+    // 4. 2-step alternating ping-pong cycle [A, B, A, B].
     if (_history.length >= cycleThreshold && cycleThreshold >= 4) {
       final len = _history.length;
       final a = _history[len - 2].signature;
@@ -200,31 +279,6 @@ class HarnessLoopDetector {
           );
         }
       }
-    }
-
-    // 4. Consecutive errors on the same tool.
-    var consecutiveErrors = 0;
-    for (var i = _history.length - 1; i >= 0; i--) {
-      if (_history[i].isError && _history[i].name == last.name) {
-        consecutiveErrors++;
-      } else {
-        break;
-      }
-    }
-    if (consecutiveErrors >= failureThreshold) {
-      return LoopDetectionResult(
-        kind: HarnessLoopKind.repeatedFailure,
-        triggered: true,
-        signature: last.signature,
-        count: consecutiveErrors,
-        reason:
-            'Tool "${last.name}" failed $consecutiveErrors consecutive times.',
-        pivotPrompt: _buildPivotPrompt(
-          toolName: last.name,
-          reason:
-              'Tool "${last.name}" failed $consecutiveErrors consecutive times.',
-        ),
-      );
     }
 
     return LoopDetectionResult.none;
@@ -314,7 +368,10 @@ class HarnessContextMonitor {
     if (m.contains('claude') || m.contains('opus') || m.contains('sonnet')) {
       return 160000;
     }
-    if (m.contains('gpt-5') || m.contains('codex') || m.contains('o3')) {
+    if (m.contains('gpt-5') ||
+        m.contains('gpt-oss') ||
+        m.contains('codex') ||
+        m.contains('o3')) {
       return 160000;
     }
     return 128000;
@@ -478,20 +535,30 @@ class HarnessContextMonitor {
     }
 
     // Keep oldest anchor + as many recent turns as fit in maxChars.
+    if (blocks.length == 1) return blocks.first;
+    final anchor = blocks.first;
+    final anchorBudget = anchor.length + 2;
     final selected = <String>[];
-    var used = 0;
-    for (var i = blocks.length - 1; i >= 0; i--) {
+    var used = anchorBudget < maxChars ? anchorBudget : 0;
+    var stoppedAt = 0;
+    for (var i = blocks.length - 1; i >= 1; i--) {
       final b = blocks[i];
       if (used + b.length + 2 > maxChars && selected.isNotEmpty) {
-        if (i > 0) {
-          selected.add('… (${i + 1} earlier turns omitted for brevity) …');
-        }
+        stoppedAt = i;
         break;
       }
       selected.add(b);
       used += b.length + 2;
     }
-    return selected.reversed.join('\n\n');
+    final ordered = <String>[];
+    if (anchorBudget < maxChars) {
+      ordered.add(anchor);
+      if (stoppedAt >= 1) {
+        ordered.add('… ($stoppedAt middle turns omitted for brevity) …');
+      }
+    }
+    ordered.addAll(selected.reversed);
+    return ordered.join('\n\n');
   }
 }
 
@@ -521,6 +588,7 @@ class HarnessFeatureItem {
     List<String>? steps,
     bool? passes,
     String? verifiedAt,
+    bool clearVerifiedAt = false,
   }) {
     return HarnessFeatureItem(
       id: id ?? this.id,
@@ -528,7 +596,7 @@ class HarnessFeatureItem {
       description: description ?? this.description,
       steps: steps ?? this.steps,
       passes: passes ?? this.passes,
-      verifiedAt: verifiedAt ?? this.verifiedAt,
+      verifiedAt: clearVerifiedAt ? null : (verifiedAt ?? this.verifiedAt),
     );
   }
 
@@ -562,9 +630,12 @@ class HarnessFeatureItem {
     );
   }
 
-  static List<HarnessFeatureItem> parseFeatureList(String raw) {
+  static ({List<HarnessFeatureItem> items, bool hasParseError})
+      parseFeatureListStrict(String raw) {
     final trimmed = raw.trim();
-    if (trimmed.isEmpty) return const <HarnessFeatureItem>[];
+    if (trimmed.isEmpty) {
+      return (items: const <HarnessFeatureItem>[], hasParseError: false);
+    }
     try {
       final decoded = jsonDecode(trimmed);
       final List<dynamic> list;
@@ -574,7 +645,7 @@ class HarnessFeatureItem {
           decoded['features'] is List) {
         list = decoded['features'] as List<dynamic>;
       } else {
-        return const <HarnessFeatureItem>[];
+        return (items: const <HarnessFeatureItem>[], hasParseError: true);
       }
       final items = <HarnessFeatureItem>[];
       for (var i = 0; i < list.length; i++) {
@@ -588,11 +659,14 @@ class HarnessFeatureItem {
           );
         }
       }
-      return items;
+      return (items: items, hasParseError: false);
     } catch (_) {
-      return const <HarnessFeatureItem>[];
+      return (items: const <HarnessFeatureItem>[], hasParseError: true);
     }
   }
+
+  static List<HarnessFeatureItem> parseFeatureList(String raw) =>
+      parseFeatureListStrict(raw).items;
 
   static String encodeFeatureList(List<HarnessFeatureItem> items) {
     final payload = <String, dynamic>{
@@ -615,12 +689,16 @@ class HarnessWorkspaceTemplates {
     bool hasPyproject = false,
     bool hasCargoToml = false,
     bool hasGradlew = false,
+    String? gradlewCommand,
   }) {
     if (isFlutter) return 'flutter test';
     if (hasPubspec) return 'dart test';
     if (hasPackageJson) return 'npm test';
     if (hasPyproject) return 'pytest';
     if (hasCargoToml) return 'cargo test';
+    if (gradlewCommand != null && gradlewCommand.trim().isNotEmpty) {
+      return gradlewCommand.trim();
+    }
     if (hasGradlew) return './gradlew test';
     return null;
   }

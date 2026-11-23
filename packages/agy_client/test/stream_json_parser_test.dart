@@ -53,5 +53,33 @@ void main() {
       expect(encoded, contains('"event":"user"'));
       expect(encoded, contains('"content":"Run tests"'));
     });
+
+    test('parses standalone error, canceled tool_info call_id, glog lines, and quoted diffs', () {
+      final err = StreamJsonParser.parseLine(
+        '{"event":"error","error":{"message":"Quota exceeded"}}',
+      );
+      expect(err, isA<AgyErrorEvent>());
+      expect((err! as AgyErrorEvent).message, 'Quota exceeded');
+
+      final canceled = StreamJsonParser.parseLine(
+        '{"event":"step_update","step_update":{"state":"CANCELED","step_type":"tool","tool_info":{"call_id":"call-42","name":"run_command","error":{"message":"Aborted"}}}}',
+      );
+      expect(canceled, isA<AgyToolCallEvent>());
+      final tc = canceled! as AgyToolCallEvent;
+      expect(tc.callId, 'call-42');
+      expect(tc.state, ToolCallState.failed);
+      expect(tc.errorMessage, 'Aborted');
+
+      final quotas = UsageOutputParser.parse(
+        'I0315 10:20:30.123456 12345 main.cc:1] log noise\nGemini 3 Pro (High)\t90.0% left\tResets in 4h',
+      );
+      expect(quotas, hasLength(1));
+
+      final attached = FileChangeEntry.attachUnifiedDiffs(
+        [const FileChangeEntry(path: 'dir/with b/file name.dart', added: 1)],
+        'diff --git "a/dir/with b/file name.dart" "b/dir/with b/file name.dart"\n--- "a/dir/with b/file name.dart"\n+++ "b/dir/with b/file name.dart"\n@@ -1 +1 @@\n+hello\n',
+      );
+      expect(attached.first.diff, contains('+hello'));
+    });
   });
 }

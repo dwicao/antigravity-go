@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:agy_client/agy_client.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,6 +9,7 @@ import '../runtime/runtime_bridge.dart';
 import 'chat_state.dart';
 import 'projects_state.dart';
 import 'runtime_state.dart';
+import 'sessions_state.dart';
 import 'settings_state.dart';
 
 class HarnessState {
@@ -99,13 +101,19 @@ final harnessProvider =
 
 final contextBudgetProvider = Provider<HarnessContextSnapshot>((ref) {
   final messages = ref.watch(chatProvider.select((s) => s.messages));
-  final modelId = ref.watch(settingsProvider.select((s) => s.selectedModelId));
+  final selectedModelId =
+      ref.watch(settingsProvider.select((s) => s.selectedModelId));
   final lastCompactIdx = messages.lastIndexWhere((m) => m.isCompactionSummary);
   final activeMessages =
       lastCompactIdx >= 0 ? messages.sublist(lastCompactIdx) : messages;
   final compactedCount = lastCompactIdx >= 0 ? lastCompactIdx : 0;
+  final threadModelId = activeMessages
+          .where((m) => m.modelId != null && m.modelId!.isNotEmpty)
+          .lastOrNull
+          ?.modelId ??
+      selectedModelId;
   const monitor = HarnessContextMonitor();
-  return monitor.evaluate(
+  final estimated = monitor.evaluate(
     // Historical completed turns' internal thoughts are excluded from
     // subsequent API prompt windows; only include thoughts while streaming.
     messageTexts: activeMessages.map(
@@ -113,13 +121,54 @@ final contextBudgetProvider = Provider<HarnessContextSnapshot>((ref) {
           ? '${m.text}\n${m.thoughts}'
           : m.text,
     ),
-    toolOutputs: activeMessages
-        .expand((m) => m.tools)
-        .map((t) => '${t.toolName} ${t.output ?? ''} ${t.error ?? ''}'),
-    modelId: modelId,
+    toolOutputs: activeMessages.expand((m) => m.tools).map((t) {
+      final params = t.parameters.isEmpty ? '' : jsonEncode(t.parameters);
+      return '${t.toolName} $params ${t.output ?? ''} ${t.error ?? ''}';
+    }),
+    modelId: threadModelId,
     compactedMessages: compactedCount,
     activeMessages: activeMessages.length,
   );
+  // When the backend reported real inputTokens for an active turn, prefer the
+  // higher of real usage + post-usage delta vs text estimate so system prompts
+  // and tool schemas aren't under-counted.
+  final lastUsageIdx = activeMessages.lastIndexWhere(
+    (m) => (m.usage?.inputTokens ?? 0) > 0,
+  );
+  if (lastUsageIdx >= 0) {
+    final baseTokens = activeMessages[lastUsageIdx].usage!.inputTokens +
+        activeMessages[lastUsageIdx].usage!.outputTokens;
+    final tailSnap = monitor.evaluate(
+      messageTexts: activeMessages.skip(lastUsageIdx + 1).map((m) => m.text),
+      toolOutputs: activeMessages
+          .skip(lastUsageIdx + 1)
+          .expand((m) => m.tools)
+          .map((t) => '${t.toolName} ${t.output ?? ''} ${t.error ?? ''}'),
+      modelId: threadModelId,
+    );
+    final combinedTokens = baseTokens + tailSnap.usedTokens;
+    if (combinedTokens > estimated.usedTokens) {
+      final budget = estimated.budgetTokens;
+      final ratio = (combinedTokens / budget).clamp(0.0, 1.0);
+      final shouldCompact = ratio >= monitor.compactThreshold;
+      final needsWarning = ratio >= monitor.warningThreshold;
+      return HarnessContextSnapshot(
+        usedTokens: combinedTokens,
+        budgetTokens: budget,
+        ratio: ratio,
+        needsWarning: needsWarning,
+        shouldCompact: shouldCompact,
+        statusLabel: shouldCompact
+            ? 'High — compact recommended'
+            : needsWarning
+                ? 'Warming — watch context'
+                : 'Healthy',
+        compactedMessages: compactedCount,
+        activeMessages: activeMessages.length,
+      );
+    }
+  }
+  return estimated;
 });
 
 class HarnessNotifier extends Notifier<HarnessState> {
@@ -136,6 +185,9 @@ class HarnessNotifier extends Notifier<HarnessState> {
   }
 
   String _activeWorkspace() {
+    final sessionWs =
+        ref.read(sessionsProvider).activeSession?.workspacePath.trim() ?? '';
+    if (sessionWs.isNotEmpty) return sessionWs;
     final projectDir = ref.read(projectsProvider).activeProject.primaryFolder;
     if (projectDir.isNotEmpty) return projectDir;
     return ref.read(runtimeProvider).status.workspaceRoot ?? '';
@@ -145,13 +197,15 @@ class HarnessNotifier extends Notifier<HarnessState> {
     try {
       final prefs = await SharedPreferences.getInstance();
       if (!ref.mounted) return;
+      final guardrails = prefs.getBool(_kGuardrails) ?? true;
       state = state.copyWith(
         loopBreakerEnabled: prefs.getBool(_kLoopBreaker) ?? true,
         autoCheckpointEnabled: prefs.getBool(_kAutoCheckpoint) ?? true,
         autoVerifyEnabled: prefs.getBool(_kAutoVerify) ?? false,
-        guardrailsEnabled: prefs.getBool(_kGuardrails) ?? true,
+        guardrailsEnabled: guardrails,
         customVerifyCommand: prefs.getString(_kCustomVerify),
       );
+      unawaited(RuntimeBridge.instance.setGuardrailsEnabled(guardrails));
     } catch (_) {}
   }
 
@@ -175,6 +229,7 @@ class HarnessNotifier extends Notifier<HarnessState> {
 
   Future<void> setGuardrails(bool value) async {
     state = state.copyWith(guardrailsEnabled: value);
+    unawaited(RuntimeBridge.instance.setGuardrailsEnabled(value));
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kGuardrails, value);
   }
@@ -223,6 +278,7 @@ class HarnessNotifier extends Notifier<HarnessState> {
       hasPyproject: pre['hasPyproject'] == true,
       hasCargoToml: pre['hasCargoToml'] == true,
       hasGradlew: pre['hasGradlew'] == true,
+      gradlewCommand: pre['gradlewCommand']?.toString(),
     );
     final verify = state.customVerifyCommand?.trim().isNotEmpty == true
         ? state.customVerifyCommand!.trim()
@@ -250,6 +306,7 @@ class HarnessNotifier extends Notifier<HarnessState> {
                   passes: !f.passes,
                   verifiedAt:
                       !f.passes ? DateTime.now().toUtc().toIso8601String() : null,
+                  clearVerifiedAt: f.passes,
                 )
               : f,
         )
@@ -269,10 +326,32 @@ class HarnessNotifier extends Notifier<HarnessState> {
   }) async {
     final clean = description.trim();
     if (clean.isEmpty) return;
-    final nextNum = state.features.length + 1;
-    final id = 'F-${nextNum.toString().padLeft(3, '0')}';
+    final cwd = _activeWorkspace();
+    // Avoid overwriting corrupted feature_list.json if disk has parse errors.
+    var base = state.features;
+    try {
+      final raw = await RuntimeBridge.instance.readHarnessFiles(
+        cwd: cwd.isEmpty ? null : cwd,
+      );
+      if (!ref.mounted) return;
+      final parsed = HarnessFeatureItem.parseFeatureListStrict(
+        raw['featureList']?.toString() ?? '',
+      );
+      if (parsed.hasParseError) return;
+      if (parsed.items.isNotEmpty) base = parsed.items;
+    } catch (_) {}
+
+    var maxNum = base.length;
+    for (final f in base) {
+      final m = RegExp(r'(\d+)$').firstMatch(f.id);
+      if (m != null) {
+        final n = int.tryParse(m.group(1)!) ?? 0;
+        if (n > maxNum) maxNum = n;
+      }
+    }
+    final id = 'F-${(maxNum + 1).toString().padLeft(3, '0')}';
     final next = <HarnessFeatureItem>[
-      ...state.features,
+      ...base,
       HarnessFeatureItem(
         id: id,
         category: category,
@@ -284,7 +363,6 @@ class HarnessNotifier extends Notifier<HarnessState> {
       ),
     ];
     state = state.copyWith(initialized: true, features: next);
-    final cwd = _activeWorkspace();
     await RuntimeBridge.instance.writeHarnessFile(
       cwd: cwd.isEmpty ? null : cwd,
       name: 'feature_list.json',
@@ -303,6 +381,7 @@ class HarnessNotifier extends Notifier<HarnessState> {
       hasPyproject: raw['hasPyproject'] == true,
       hasCargoToml: raw['hasCargoToml'] == true,
       hasGradlew: raw['hasGradlew'] == true,
+      gradlewCommand: raw['gradlewCommand']?.toString(),
     );
     final featRaw = raw['featureList']?.toString() ?? '';
     final features = HarnessFeatureItem.parseFeatureList(featRaw);

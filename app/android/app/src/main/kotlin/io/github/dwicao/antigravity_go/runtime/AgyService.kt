@@ -54,8 +54,23 @@ class AgyService : Service() {
                     ?: "On-device Antigravity CLI harness active"
                 latestStatusText = statusText
                 if (running) {
+                    acquireWakeLock(refresh = true)
                     val nm = getSystemService(NotificationManager::class.java)
                     nm.notify(NOTIFICATION_ID, buildNotification(this, latestStatusText))
+                } else {
+                    val notification = buildNotification(this, statusText)
+                    if (Build.VERSION.SDK_INT >= 34) {
+                        startForeground(
+                            NOTIFICATION_ID,
+                            notification,
+                            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+                        )
+                    } else {
+                        startForeground(NOTIFICATION_ID, notification)
+                    }
+                    running = true
+                    acquireWakeLock(refresh = true)
+                    registerNetworkCallback(controller)
                 }
                 return START_STICKY
             }
@@ -98,13 +113,15 @@ class AgyService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun acquireWakeLock() {
-        if (wakeLock?.isHeld == true) return
+    private fun acquireWakeLock(refresh: Boolean = false) {
+        if (!refresh && wakeLock?.isHeld == true) return
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "antigravity-go:runtime").apply {
-            setReferenceCounted(false)
-            acquire(60 * 60 * 1000L) // 1 hour safety cap; refreshed on turn starts
+        if (wakeLock == null) {
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "antigravity-go:runtime").apply {
+                setReferenceCounted(false)
+            }
         }
+        runCatching { wakeLock?.acquire(60 * 60 * 1000L) }
     }
 
     private fun registerNetworkCallback(controller: RuntimeController) {
@@ -141,6 +158,15 @@ class AgyService : Service() {
 
         @Volatile
         private var latestStatusText: String = "On-device Antigravity CLI harness active"
+
+        fun refreshWakeLock(context: Context) {
+            if (!running) return
+            val intent = Intent(context.applicationContext, AgyService::class.java).apply {
+                action = ACTION_UPDATE_STATUS
+                putExtra(EXTRA_STATUS_TEXT, latestStatusText)
+            }
+            runCatching { context.applicationContext.startService(intent) }
+        }
 
         fun updateTurnStatus(context: Context, statusText: String) {
             latestStatusText = statusText

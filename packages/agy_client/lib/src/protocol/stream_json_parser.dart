@@ -15,6 +15,14 @@ class StreamJsonParser {
     });
   }
 
+  static Map<String, dynamic> _asMap(Object? value) {
+    if (value is Map<String, dynamic>) return value;
+    if (value is Map) {
+      return value.map((k, v) => MapEntry(k.toString(), v));
+    }
+    return const {};
+  }
+
   /// Parses a single line of NDJSON stdout. Returns `null` for blank or unrecognized lines.
   static AgyChatEvent? parseLine(String line) {
     final trimmed = line.trim();
@@ -28,34 +36,39 @@ class StreamJsonParser {
     } catch (_) {
       return null;
     }
-    if (decoded is! Map<String, dynamic>) return null;
+    if (decoded is! Map) return null;
+    final root = _asMap(decoded);
 
-    final eventName = decoded['event'] as String?;
+    final eventName = root['event']?.toString();
     switch (eventName) {
       case 'init':
-        final payload = decoded['init'] as Map<String, dynamic>? ?? const {};
+        final payload = _asMap(root['init']);
+        final rawTools = payload['tools'];
         return AgyInitEvent(
-          conversationId: decoded['conversation_id'] as String? ?? '',
-          cwd: payload['cwd'] as String? ?? '',
-          tools: (payload['tools'] as List<dynamic>? ?? const [])
-              .map((e) => e.toString())
-              .toList(),
+          conversationId: root['conversation_id']?.toString() ?? '',
+          cwd: payload['cwd']?.toString() ?? '',
+          tools: rawTools is List
+              ? rawTools.map((e) => e.toString()).toList()
+              : const [],
           permissionMode:
-              payload['permission_mode'] as String? ?? 'request-review',
-          model: payload['model'] as String?,
-          agent: payload['agent'] as String?,
+              payload['permission_mode']?.toString() ?? 'request-review',
+          model: payload['model']?.toString(),
+          agent: payload['agent']?.toString(),
         );
 
       case 'step_update':
-        final step =
-            decoded['step_update'] as Map<String, dynamic>? ?? const {};
-        final stepType = step['step_type'] as String? ?? '';
-        final state = step['state'] as String? ?? '';
-        final isDone = state.toUpperCase() == 'DONE';
+        final step = _asMap(root['step_update']);
+        final stepType = step['step_type']?.toString() ?? '';
+        final stateStr = step['state']?.toString() ?? '';
+        final stateUpper = stateStr.toUpperCase().trim();
+        final isDone = stateUpper == 'DONE' || stateUpper == 'COMPLETED';
         final stepIndex = (step['step_index'] as num?)?.toInt() ?? 0;
 
         if (stepType == 'agent_response') {
-          final delta = step['text_delta'] as String? ?? '';
+          final delta = step['text_delta']?.toString() ??
+              step['delta']?.toString() ??
+              step['text']?.toString() ??
+              '';
           return AgyTextDeltaEvent(
             delta: delta,
             stepIndex: stepIndex,
@@ -64,7 +77,10 @@ class StreamJsonParser {
         }
 
         if (stepType == 'thinking' || stepType == 'thought') {
-          final delta = step['text_delta'] as String? ?? '';
+          final delta = step['text_delta']?.toString() ??
+              step['delta']?.toString() ??
+              step['text']?.toString() ??
+              '';
           return AgyThoughtDeltaEvent(
             delta: delta,
             stepIndex: stepIndex,
@@ -73,41 +89,74 @@ class StreamJsonParser {
         }
 
         if (stepType == 'tool') {
-          final info = step['tool_info'] as Map<String, dynamic>? ?? const {};
-          final toolName = step['tool_name'] as String? ??
-              info['name'] as String? ??
+          final info = _asMap(step['tool_info']);
+          final toolName = step['tool_name']?.toString() ??
+              info['name']?.toString() ??
               'tool';
-          final err = info['error'] as Map<String, dynamic>?;
-          final callState = err != null
+          final rawErr = info['error'] ?? step['error'];
+          final errMap = _asMap(rawErr);
+          final errMsg = errMap.isNotEmpty
+              ? errMap['message']?.toString()
+              : (rawErr is String && rawErr.isNotEmpty ? rawErr : null);
+          final isFailed = errMsg != null ||
+              rawErr != null ||
+              stateUpper == 'FAILED' ||
+              stateUpper == 'ERROR' ||
+              stateUpper == 'CANCELED' ||
+              stateUpper == 'CANCELLED';
+          final callState = isFailed
               ? ToolCallState.failed
-              : (isDone ? ToolCallState.completed : ToolCallState.running);
+              : isDone
+                  ? ToolCallState.completed
+                  : stateUpper == 'PENDING'
+                      ? ToolCallState.pending
+                      : ToolCallState.running;
+          final callId = info['call_id']?.toString() ??
+              info['id']?.toString() ??
+              step['call_id']?.toString() ??
+              'step-$stepIndex-$toolName';
           return AgyToolCallEvent(
-            callId: 'step-$stepIndex-$toolName',
+            callId: callId,
             toolName: toolName,
             state: callState,
-            parameters: info['parameters'] as Map<String, dynamic>? ?? const {},
+            parameters: _asMap(info['parameters']),
             output: info['output']?.toString(),
-            errorMessage: err?['message']?.toString(),
+            errorMessage: errMsg,
             durationSeconds: (step['duration_seconds'] as num?)?.toDouble(),
             stepIndex: stepIndex,
           );
         }
         return null;
 
+      case 'error':
+        final errMap = _asMap(root['error']);
+        final msg = errMap.isNotEmpty
+            ? (errMap['message']?.toString() ?? root['error'].toString())
+            : (root['error']?.toString() ??
+                root['message']?.toString() ??
+                'Agent error');
+        return AgyErrorEvent(
+          message: msg,
+          code: (errMap['code'] as num?)?.toInt(),
+          requiresAuth: msg.toLowerCase().contains('authentication required'),
+        );
+
       case 'result':
-        final result = decoded['result'] as Map<String, dynamic>? ?? const {};
-        final usageMap =
-            result['usage'] as Map<String, dynamic>? ?? const {};
-        final status = result['status'] as String? ?? 'SUCCESS';
-        final error = result['error'] as String?;
+        final result = _asMap(root['result']);
+        final usageMap = _asMap(result['usage']);
+        final status = result['status']?.toString() ?? 'SUCCESS';
+        final rawErr = result['error'];
+        final error = rawErr is Map
+            ? _asMap(rawErr)['message']?.toString() ?? rawErr.toString()
+            : rawErr?.toString();
         if (error != null &&
             error.toLowerCase().contains('authentication required')) {
           return AgyErrorEvent(message: error, requiresAuth: true);
         }
         return AgyTurnResultEvent(
-          conversationId: result['conversation_id'] as String? ?? '',
+          conversationId: result['conversation_id']?.toString() ?? '',
           status: status,
-          response: result['response'] as String? ?? '',
+          response: result['response']?.toString() ?? '',
           durationSeconds: (result['duration_seconds'] as num?)?.toDouble() ?? 0,
           numTurns: (result['num_turns'] as num?)?.toInt() ?? 1,
           usage: TokenUsage.fromJson(usageMap),

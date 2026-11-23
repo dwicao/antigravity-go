@@ -36,12 +36,29 @@ class RuntimePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChann
     }
 
     override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+        controllerListener?.let { RuntimeController.get(appContext).removeListener(it) }
         eventSink = events
         val listener: (Map<String, Any?>) -> Unit = { payload ->
             mainHandler.post { eventSink?.success(payload) }
         }
         controllerListener = listener
         RuntimeController.get(appContext).addListener(listener)
+    }
+
+    private inline fun <T> runAsync(
+        result: MethodChannel.Result,
+        crossinline block: () -> T,
+    ) {
+        ioExecutor.submit {
+            try {
+                val res = block()
+                mainHandler.post { result.success(res) }
+            } catch (t: Throwable) {
+                mainHandler.post {
+                    result.error("runtime_error", t.message ?: t.toString(), null)
+                }
+            }
+        }
     }
 
     override fun onCancel(arguments: Any?) {
@@ -76,25 +93,21 @@ class RuntimePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChann
                 ctrl.setSafeMode(call.argument<Boolean>("enabled") ?: false)
                 result.success(null)
             }
-            "readSettings" -> result.success(ctrl.readSettings())
-            "writeSettings" -> {
-                val settings = call.argument<Map<String, Any?>>("settings") ?: emptyMap()
-                ctrl.writeSettings(settings)
+            "setGuardrailsEnabled" -> {
+                ctrl.setGuardrailsEnabled(call.argument<Boolean>("enabled") ?: true)
                 result.success(null)
             }
-            "authStatus" -> result.success(ctrl.checkAuthStatus())
-            "verifyAuth" -> {
-                ioExecutor.submit {
-                    val status = ctrl.verifyAuth()
-                    mainHandler.post { result.success(status) }
+            "readSettings" -> runAsync(result) { ctrl.readSettings() }
+            "writeSettings" -> {
+                val settings = call.argument<Map<String, Any?>>("settings") ?: emptyMap()
+                runAsync(result) {
+                    ctrl.writeSettings(settings)
+                    null
                 }
             }
-            "probeUsage" -> {
-                ioExecutor.submit {
-                    val out = ctrl.probeUsage()
-                    mainHandler.post { result.success(out) }
-                }
-            }
+            "authStatus" -> runAsync(result) { ctrl.checkAuthStatus() }
+            "verifyAuth" -> runAsync(result) { ctrl.verifyAuth() }
+            "probeUsage" -> runAsync(result) { ctrl.probeUsage() }
             "startLogin" -> {
                 ctrl.startGoogleLogin(call.argument<Boolean>("enterprise") ?: false)
                 result.success(null)
@@ -103,27 +116,21 @@ class RuntimePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChann
                 ctrl.submitLoginCode(call.argument<String>("code") ?: "")
                 result.success(null)
             }
-            "logout" -> {
+            "logout" -> runAsync(result) {
                 ctrl.logout()
-                result.success(null)
+                null
             }
             "runCapture" -> {
                 val args = call.argument<List<String>>("args") ?: emptyList()
                 val cwd = call.argument<String>("cwd")
                 val env = call.argument<Map<String, String>>("env") ?: emptyMap()
                 val timeout = call.argument<Int>("timeoutSeconds") ?: 20
-                ioExecutor.submit {
-                    val out = ctrl.runCapture(args, cwd, env, timeout)
-                    mainHandler.post { result.success(out) }
-                }
+                runAsync(result) { ctrl.runCapture(args, cwd, env, timeout) }
             }
             "runShell" -> {
                 val command = call.argument<String>("command") ?: ""
                 val cwd = call.argument<String>("cwd")
-                ioExecutor.submit {
-                    val out = ctrl.runShell(command, cwd)
-                    mainHandler.post { result.success(out) }
-                }
+                runAsync(result) { ctrl.runShell(command, cwd) }
             }
             "startTurn" -> {
                 ctrl.startTurn(
@@ -174,78 +181,58 @@ class RuntimePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChann
                 result.success(count)
             }
             "writeFile" -> {
-                val ok = ctrl.writeTextFile(
-                    call.argument<String>("path") ?: "",
-                    call.argument<String>("content") ?: "",
-                )
-                result.success(ok)
+                val path = call.argument<String>("path") ?: ""
+                val content = call.argument<String>("content") ?: ""
+                runAsync(result) { ctrl.writeTextFile(path, content) }
             }
             "listCustomizations" -> {
-                result.success(ctrl.listCustomizations(call.argument<String>("cwd")))
+                val cwd = call.argument<String>("cwd")
+                runAsync(result) { ctrl.listCustomizations(cwd) }
             }
             "gitDiff" -> {
-                ioExecutor.submit {
-                    val res = ctrl.gitDiff(call.argument<String>("cwd"))
-                    mainHandler.post { result.success(res) }
-                }
+                val cwd = call.argument<String>("cwd")
+                runAsync(result) { ctrl.gitDiff(cwd) }
             }
             "gitCommitAndPush" -> {
                 val cwd = call.argument<String>("cwd")
                 val message = call.argument<String>("message") ?: ""
                 val stageAll = call.argument<Boolean>("stageAll") ?: true
                 val push = call.argument<Boolean>("push") ?: true
-                ioExecutor.submit {
-                    val res = ctrl.gitCommitAndPush(cwd, message, stageAll, push)
-                    mainHandler.post { result.success(res) }
-                }
+                runAsync(result) { ctrl.gitCommitAndPush(cwd, message, stageAll, push) }
             }
-            "diagnoseRuntime" -> {
-                ioExecutor.submit {
-                    val res = ctrl.diagnoseRuntime()
-                    mainHandler.post { result.success(res) }
-                }
+            "diagnoseRuntime" -> runAsync(result) { ctrl.diagnoseRuntime() }
+            "listWorkspace" -> {
+                val path = call.argument<String>("path")
+                runAsync(result) { ctrl.listWorkspace(path) }
             }
-            "listWorkspace" -> result.success(ctrl.listWorkspace(call.argument<String>("path")))
-            "readFile" -> result.success(ctrl.readFile(call.argument<String>("path") ?: ""))
+            "readFile" -> {
+                val path = call.argument<String>("path") ?: ""
+                runAsync(result) { ctrl.readFile(path) }
+            }
             "createCheckpoint" -> {
                 val cwd = call.argument<String>("cwd")
-                ioExecutor.submit {
-                    val res = ctrl.createCheckpoint(cwd)
-                    mainHandler.post { result.success(res) }
-                }
+                runAsync(result) { ctrl.createCheckpoint(cwd) }
             }
             "restoreCheckpoint" -> {
                 val cwd = call.argument<String>("cwd")
                 val ref = call.argument<String>("ref") ?: ""
-                ioExecutor.submit {
-                    val res = ctrl.restoreCheckpoint(cwd, ref)
-                    mainHandler.post { result.success(res) }
-                }
+                runAsync(result) { ctrl.restoreCheckpoint(cwd, ref) }
             }
             "initHarnessFiles" -> {
                 val cwd = call.argument<String>("cwd")
                 val featureJson = call.argument<String>("featureJson") ?: ""
                 val progressTxt = call.argument<String>("progressTxt") ?: ""
-                ioExecutor.submit {
-                    val res = ctrl.initHarnessFiles(cwd, featureJson, progressTxt)
-                    mainHandler.post { result.success(res) }
-                }
+                runAsync(result) { ctrl.initHarnessFiles(cwd, featureJson, progressTxt) }
             }
             "readHarnessFiles" -> {
                 val cwd = call.argument<String>("cwd")
-                ioExecutor.submit {
-                    val res = ctrl.readHarnessFiles(cwd)
-                    mainHandler.post { result.success(res) }
-                }
+                runAsync(result) { ctrl.readHarnessFiles(cwd) }
             }
             "writeHarnessFile" -> {
                 val cwd = call.argument<String>("cwd")
                 val name = call.argument<String>("name") ?: ""
                 val content = call.argument<String>("content") ?: ""
-                ioExecutor.submit {
-                    val ok = ctrl.writeHarnessFile(cwd, name, content)
-                    mainHandler.post { result.success(ok) }
-                }
+                runAsync(result) { ctrl.writeHarnessFile(cwd, name, content) }
             }
             else -> result.notImplemented()
         }

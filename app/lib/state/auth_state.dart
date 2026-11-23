@@ -48,9 +48,14 @@ class AuthNotifier extends Notifier<AgyAuthStatus> {
   }
 
   Future<void> refresh({bool verifyWithCli = false}) async {
+    final wasTurnVerified = state.isAuthenticated;
     final loaded = await ref
         .read(authServiceProvider)
         .loadStatus(verifyWithCli: verifyWithCli);
+    if (!ref.mounted) return;
+    if (!verifyWithCli && wasTurnVerified && !loaded.isAuthenticated) {
+      return;
+    }
     state = loaded;
   }
 

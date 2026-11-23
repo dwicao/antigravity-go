@@ -23,12 +23,17 @@ class UsageNotifier extends Notifier<UsageQuotaSnapshot> {
 
   @override
   UsageQuotaSnapshot build() {
+    ref.listen<bool>(
+      settingsProvider.select((s) => s.useG1Credits),
+      (_, _) => _emit(),
+    );
     Future.microtask(_loadLedger);
     return _ledger.buildSnapshot();
   }
 
   Future<void> _loadLedger() async {
     final prefs = await SharedPreferences.getInstance();
+    if (!ref.mounted) return;
     final raw = prefs.getString(_ledgerPrefsKey);
     if (raw != null && raw.isNotEmpty) {
       try {
@@ -48,6 +53,11 @@ class UsageNotifier extends Notifier<UsageQuotaSnapshot> {
     required TokenUsage usage,
     String? sessionId,
   }) async {
+    if (usage.totalTokens <= 0 &&
+        usage.inputTokens <= 0 &&
+        usage.outputTokens <= 0) {
+      return;
+    }
     _ledger.add(
       UsageLedgerRecord(
         timestamp: DateTime.now().toUtc(),
@@ -58,6 +68,7 @@ class UsageNotifier extends Notifier<UsageQuotaSnapshot> {
     );
     _emit();
     final prefs = await SharedPreferences.getInstance();
+    if (!ref.mounted) return;
     await prefs.setString(
       _ledgerPrefsKey,
       jsonEncode(_ledger.records.map((r) => r.toJson()).toList()),
@@ -97,6 +108,7 @@ class UsageNotifier extends Notifier<UsageQuotaSnapshot> {
     } catch (e) {
       _lastProbeError = e.toString();
     }
+    if (!ref.mounted) return;
     _emit();
   }
 

@@ -86,9 +86,9 @@ class ChangeCard extends StatelessWidget {
                                 : Icons.description_outlined,
                         size: 16,
                         color: file.deleted
-                            ? theme.colorScheme.error
+                            ? semantic.danger
                             : file.created
-                                ? Colors.green
+                                ? semantic.success
                                 : semantic.textSecondary,
                       ),
                       const SizedBox(width: 8),
@@ -120,7 +120,7 @@ class ChangeCard extends StatelessWidget {
                         Text(
                           'new',
                           style: theme.textTheme.labelSmall?.copyWith(
-                            color: Colors.green,
+                            color: semantic.success,
                             fontWeight: FontWeight.w600,
                           ),
                         )
@@ -207,12 +207,20 @@ class ChangeCard extends StatelessWidget {
                 ConstrainedBox(
                   constraints: const BoxConstraints(maxHeight: 280),
                   child: SingleChildScrollView(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        for (final line in file.diff!.split('\n'))
-                          _DiffLineView(line: line),
-                      ],
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          minWidth: MediaQuery.sizeOf(ctx).width - 32,
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            for (final line in file.diff!.split('\n'))
+                              DiffLineView(line: line),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
                 )
@@ -246,27 +254,37 @@ class ChangeCard extends StatelessWidget {
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
+      isScrollControlled: true,
       builder: (ctx) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
-          children: [
-            Text(
-              'Changed Files (${files.length})',
-              style: Theme.of(ctx).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-            ),
-            const SizedBox(height: 8),
-            for (final f in files)
-              ListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                title: Text(f.fileName),
-                subtitle: f.directory.isEmpty ? null : Text(f.directory),
-                trailing: DiffCountsBadge(added: f.added, removed: f.removed),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(ctx).height * 0.72,
+          ),
+          child: ListView(
+            shrinkWrap: true,
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
+            children: [
+              Text(
+                'Changed Files (${files.length})',
+                style: Theme.of(ctx).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
               ),
-          ],
+              const SizedBox(height: 8),
+              for (final f in files)
+                ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(f.fileName),
+                  subtitle: f.directory.isEmpty ? null : Text(f.directory),
+                  trailing: DiffCountsBadge(added: f.added, removed: f.removed),
+                  onTap: () {
+                    Navigator.of(ctx).pop();
+                    _openFileSheet(context, f);
+                  },
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -285,6 +303,7 @@ class DiffCountsBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final semantic = AgySemanticColors.of(context);
     final style = Theme.of(context).textTheme.labelSmall?.copyWith(
           fontFamily: 'monospace',
           fontWeight: FontWeight.w700,
@@ -293,26 +312,26 @@ class DiffCountsBadge extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         if (added > 0)
-          Text('+$added', style: style?.copyWith(color: Colors.green)),
+          Text('+$added', style: style?.copyWith(color: semantic.success)),
         if (added > 0 && removed > 0) const SizedBox(width: 4),
         if (removed > 0)
           Text(
             '−$removed',
-            style: style?.copyWith(color: Theme.of(context).colorScheme.error),
+            style: style?.copyWith(color: semantic.danger),
           ),
       ],
     );
   }
 }
 
-class _DiffLineView extends StatelessWidget {
-  const _DiffLineView({required this.line});
+class DiffLineView extends StatelessWidget {
+  const DiffLineView({super.key, required this.line});
 
   final String line;
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final semantic = AgySemanticColors.of(context);
     final isAdd = line.startsWith('+') && !line.startsWith('+++');
     final isDel = line.startsWith('-') && !line.startsWith('---');
     final isHunk = line.startsWith('@@');
@@ -322,24 +341,21 @@ class _DiffLineView extends StatelessWidget {
         line.startsWith('---');
 
     final bg = isAdd
-        ? Colors.green.withOpacity(0.14)
+        ? semantic.diffAddBg
         : isDel
-            ? theme.colorScheme.error.withOpacity(0.14)
-            : isHunk
-                ? theme.colorScheme.primary.withOpacity(0.10)
-                : null;
+            ? semantic.diffDelBg
+            : null;
     final fg = isAdd
-        ? Colors.green
+        ? semantic.diffAddFg
         : isDel
-            ? theme.colorScheme.error
+            ? semantic.diffDelFg
             : isHunk
-                ? theme.colorScheme.primary
+                ? semantic.diffHunkFg
                 : isMeta
-                    ? theme.colorScheme.onSurfaceVariant
-                    : theme.colorScheme.onSurface;
+                    ? semantic.textSecondary
+                    : semantic.textPrimary;
 
     return Container(
-      width: double.infinity,
       color: bg,
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
       child: SelectableText(

@@ -23,7 +23,7 @@ class SidePanelTabs extends ConsumerWidget {
       child: Column(
         children: [
           Container(
-            height: 44,
+            constraints: const BoxConstraints(minHeight: 48),
             padding: const EdgeInsets.symmetric(horizontal: 6),
             decoration: BoxDecoration(
               border: Border(

@@ -21,9 +21,12 @@ class CommandSafetyGuardTest {
     fun blocksCatastrophicCommands() {
         assertFalse(CommandSafetyGuard.evaluateCommand("rm -rf /").allowed)
         assertFalse(CommandSafetyGuard.evaluateCommand("rm -fr /sdcard").allowed)
+        assertFalse(CommandSafetyGuard.evaluateCommand("rm -rf /sdcard/*").allowed)
+        assertFalse(CommandSafetyGuard.evaluateCommand("busybox rm -rf /sdcard").allowed)
+        assertFalse(CommandSafetyGuard.evaluateCommand("echo \$(rm -rf /)").allowed)
         assertFalse(CommandSafetyGuard.evaluateCommand("rm -rf /storage/emulated/0/").allowed)
         assertFalse(CommandSafetyGuard.evaluateCommand("mkfs.ext4 /dev/sda1").allowed)
-        assertFalse(CommandSafetyGuard.evaluateCommand("dd if=/dev/zero of=/dev/mmcblk0").allowed)
+        assertFalse(CommandSafetyGuard.evaluateCommand("dd if=/dev/zero of=\"/dev/mmcblk0\"").allowed)
         assertFalse(CommandSafetyGuard.evaluateCommand(":(){ :|:& };:").allowed)
     }
 
@@ -31,6 +34,7 @@ class CommandSafetyGuardTest {
     fun blocksProtectedWritesAndAllowsWorkspaceWrites() {
         assertFalse(CommandSafetyGuard.evaluateWritePath("/system/bin/sh").allowed)
         assertFalse(CommandSafetyGuard.evaluateWritePath("/home/user/.gemini/oauth_creds.json").allowed)
+        assertFalse(CommandSafetyGuard.evaluateWritePath("google_accounts.json", File("/home/user/.gemini")).allowed)
         assertTrue(CommandSafetyGuard.evaluateWritePath("/sdcard/Projects/app/lib/main.dart").allowed)
     }
 

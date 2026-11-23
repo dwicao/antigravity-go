@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
 import '../runtime/runtime_bridge.dart';
+import 'draft_store.dart';
 import 'hosts_state.dart';
 import 'projects_state.dart';
 import 'runtime_state.dart';
@@ -140,6 +141,10 @@ class SessionsNotifier extends Notifier<SessionsState> {
             .closeSessionWorker(target.remoteConversationId!),
       );
     }
+    ref.read(draftStoreProvider.notifier).clear(id);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('agy_msgs_$id');
+    if (!ref.mounted) return;
     final next = state.sessions.where((s) => s.id != id).toList();
     if (next.isEmpty) {
       final created = _createDefaultSession();

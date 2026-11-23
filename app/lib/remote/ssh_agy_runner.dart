@@ -109,20 +109,32 @@ class SshAgyRunner {
         ],
         if (request.dangerouslySkipPermissions)
           '--dangerously-skip-permissions',
+        for (final dir in request.extraDirs)
+          if (dir.trim().isNotEmpty) ...['--add-dir', _shellQuote(dir.trim())],
       ];
 
-      final cmd = 'cd ${_shellQuote(cwd)} && ${args.join(' ')}';
+      final envPrefix = (request.geminiApiKey != null &&
+              request.geminiApiKey!.trim().isNotEmpty)
+          ? 'GEMINI_API_KEY=${_shellQuote(request.geminiApiKey!.trim())} '
+          : '';
+      final cmd = cwd.trim().isNotEmpty
+          ? 'cd ${_shellQuote(cwd)} && $envPrefix${args.join(' ')}'
+          : '$envPrefix${args.join(' ')}';
       final session = await client.execute(cmd);
       _activeSession = session;
 
       final stdoutLines = session.stdout
           .cast<List<int>>()
-          .transform(utf8.decoder)
+          .transform(const Utf8Decoder(allowMalformed: true))
           .transform(const LineSplitter());
 
+      var yieldedTurnResult = false;
       await for (final line in stdoutLines) {
         final evt = StreamJsonParser.parseLine(line);
         if (evt != null) {
+          if (evt is AgyTurnResultEvent || evt is AgyErrorEvent) {
+            yieldedTurnResult = true;
+          }
           yield evt;
         }
       }
@@ -132,12 +144,19 @@ class SshAgyRunner {
         (prev, chunk) => prev..addAll(chunk),
       );
       final errText = utf8.decode(errBytes, allowMalformed: true).trim();
+      await session.done;
+      final exitCode = session.exitCode ?? 0;
+
       if (errText.isNotEmpty &&
           errText.toLowerCase().contains('authentication required')) {
         yield AgyErrorEvent(message: errText, requiresAuth: true);
+      } else if (exitCode != 0 && !yieldedTurnResult) {
+        final detail = errText.isNotEmpty ? ': $errText' : '';
+        yield AgyErrorEvent(
+          message: 'Remote agy exited with code $exitCode$detail',
+          code: exitCode,
+        );
       }
-
-      await session.done;
     } finally {
       _activeSession = null;
       client.close();
@@ -194,6 +213,10 @@ class SshAgyRunner {
 
   static String _shellQuote(String value) {
     if (value == '~') return '~';
+    if (value.startsWith('~/')) {
+      final rest = value.substring(2).replaceAll("'", "'\\''");
+      return "~/'$rest'";
+    }
     return "'${value.replaceAll("'", "'\\''")}'";
   }
 }

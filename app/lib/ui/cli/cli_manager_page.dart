@@ -21,6 +21,7 @@ class CliManagerPage extends ConsumerStatefulWidget {
 }
 
 class _CliManagerPageState extends ConsumerState<CliManagerPage> {
+  late final TextEditingController _agentCtrl;
   bool _running = false;
   String _lastCommand = '';
   String _output = '';
@@ -31,6 +32,9 @@ class _CliManagerPageState extends ConsumerState<CliManagerPage> {
   @override
   void initState() {
     super.initState();
+    _agentCtrl = TextEditingController(
+      text: ref.read(settingsProvider).activeAgent,
+    );
     Future.microtask(_loadStructuredLists);
     if (widget.initialSubcommand != null) {
       final spec = AgyCliCatalog.subcommands.where(
@@ -40,6 +44,12 @@ class _CliManagerPageState extends ConsumerState<CliManagerPage> {
         Future.microtask(() => _runAgy(spec.first.defaultArgs));
       }
     }
+  }
+
+  @override
+  void dispose() {
+    _agentCtrl.dispose();
+    super.dispose();
   }
 
   String _activeCwd() {
@@ -144,6 +154,14 @@ class _CliManagerPageState extends ConsumerState<CliManagerPage> {
   Widget build(BuildContext context) {
     final settings = ref.watch(settingsProvider);
     final notifier = ref.read(settingsProvider.notifier);
+    ref.listen<String>(
+      settingsProvider.select((s) => s.activeAgent),
+      (prev, next) {
+        if (_agentCtrl.text != next) {
+          _agentCtrl.text = next;
+        }
+      },
+    );
     final theme = Theme.of(context);
     final semantic = AgySemanticColors.of(context);
 
@@ -377,7 +395,7 @@ class _CliManagerPageState extends ConsumerState<CliManagerPage> {
                   ],
                   const SizedBox(height: 12),
                   TextFormField(
-                    initialValue: settings.activeAgent,
+                    controller: _agentCtrl,
                     decoration: const InputDecoration(
                       labelText: '--agent (named agent preset)',
                       hintText: 'Leave empty for default',

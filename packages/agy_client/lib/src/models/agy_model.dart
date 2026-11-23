@@ -3,7 +3,8 @@ enum ReasoningEffort {
   low('low', 'Low'),
   medium('medium', 'Medium'),
   high('high', 'High'),
-  extra('xhigh', 'Extra');
+  extra('xhigh', 'Extra'),
+  max('max', 'Max');
 
   const ReasoningEffort(this.cliValue, this.label);
 
@@ -15,6 +16,7 @@ enum ReasoningEffort {
       'low' => ReasoningEffort.low,
       'high' => ReasoningEffort.high,
       'xhigh' || 'extra' || 'extra_high' => ReasoningEffort.extra,
+      'max' => ReasoningEffort.max,
       _ => ReasoningEffort.medium,
     };
   }
@@ -68,6 +70,7 @@ class AgyModelInfo {
         ReasoningEffort.medium,
         ReasoningEffort.high,
         ReasoningEffort.extra,
+        ReasoningEffort.max,
       ];
     }
     return const [

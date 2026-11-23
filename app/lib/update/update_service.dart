@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
@@ -101,13 +102,17 @@ class UpdateService {
     final tag = json['tag_name'] as String? ?? '';
     final version = tag.startsWith('v') ? tag.substring(1) : tag;
     final assets = json['assets'] as List<dynamic>? ?? const [];
+    final isX64 = Platform.version.toLowerCase().contains('x64') ||
+        Platform.version.toLowerCase().contains('x86_64');
+    final preferredSuffix = isX64 ? 'x64.apk' : 'arm64.apk';
     String? apkUrl;
     String? apkName;
     int? apkSize;
     String? sumsUrl;
     for (final asset in assets.whereType<Map<String, dynamic>>()) {
       final name = asset['name'] as String? ?? '';
-      if (name.endsWith('arm64.apk')) {
+      if (name.endsWith(preferredSuffix) ||
+          (apkUrl == null && name.endsWith('.apk'))) {
         apkUrl = asset['browser_download_url'] as String?;
         apkName = name;
         apkSize = (asset['size'] as num?)?.toInt();

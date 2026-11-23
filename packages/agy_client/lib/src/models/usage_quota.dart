@@ -35,16 +35,55 @@ class TokenUsage {
   final int totalTokens;
 
   factory TokenUsage.fromJson(Map<String, dynamic> json) {
-    int readInt(String snake, String camel) {
-      final v = json[snake] ?? json[camel];
-      return (v as num?)?.toInt() ?? 0;
+    int readAny(List<String> keys) {
+      for (final k in keys) {
+        final v = json[k];
+        if (v is num) return v.toInt();
+        if (v is String) {
+          final parsed = int.tryParse(v);
+          if (parsed != null) return parsed;
+        }
+      }
+      return 0;
     }
 
-    final input = readInt('input_tokens', 'inputTokens');
-    final output = readInt('output_tokens', 'outputTokens');
-    final thinking = readInt('thinking_tokens', 'thinkingTokens');
-    final cacheRead = readInt('cache_read_tokens', 'cacheReadTokens');
-    final explicitTotal = readInt('total_tokens', 'totalTokens');
+    final input = readAny([
+      'input_tokens',
+      'inputTokens',
+      'prompt_tokens',
+      'promptTokens',
+      'promptTokenCount',
+    ]);
+    final output = readAny([
+      'output_tokens',
+      'outputTokens',
+      'candidates_tokens',
+      'candidatesTokens',
+      'candidatesTokenCount',
+      'completion_tokens',
+      'completionTokens',
+    ]);
+    final thinking = readAny([
+      'thinking_tokens',
+      'thinkingTokens',
+      'thoughts_token_count',
+      'thoughtsTokenCount',
+      'reasoning_tokens',
+      'reasoningTokens',
+    ]);
+    final cacheRead = readAny([
+      'cache_read_tokens',
+      'cacheReadTokens',
+      'cache_read_input_tokens',
+      'cacheReadInputTokens',
+      'cached_content_token_count',
+      'cachedContentTokenCount',
+    ]);
+    final explicitTotal = readAny([
+      'total_tokens',
+      'totalTokens',
+      'totalTokenCount',
+    ]);
     final total = explicitTotal > 0 ? explicitTotal : (input + output + thinking);
 
     return TokenUsage(

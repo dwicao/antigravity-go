@@ -39,9 +39,15 @@ class ToolApprovalCard extends StatelessWidget {
                     ),
                   ),
                 ),
-                Chip(
-                  visualDensity: VisualDensity.compact,
-                  label: Text(request.toolName),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Chip(
+                    visualDensity: VisualDensity.compact,
+                    label: Text(
+                      request.toolName,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -62,6 +68,30 @@ class ToolApprovalCard extends StatelessWidget {
                     fontFamily: 'monospace',
                     fontSize: 12,
                     color: semantic.codeWellFg,
+                  ),
+                ),
+              ),
+            ],
+            if (request.diffPreview != null &&
+                request.diffPreview!.trim().isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Container(
+                width: double.infinity,
+                constraints: const BoxConstraints(maxHeight: 160),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: semantic.codeWellBg,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: semantic.codeWellBorder),
+                ),
+                child: SingleChildScrollView(
+                  child: SelectableText(
+                    AgySecretMask.mask(request.diffPreview!),
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 11.5,
+                      color: semantic.codeWellFg,
+                    ),
                   ),
                 ),
               ),

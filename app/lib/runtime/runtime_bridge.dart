@@ -56,6 +56,17 @@ class RuntimeBridge {
     await _method.invokeMethod<void>('setSafeMode', {'enabled': enabled});
   }
 
+  Future<void> setGuardrailsEnabled(bool enabled) async {
+    try {
+      await _method.invokeMethod<void>(
+        'setGuardrailsEnabled',
+        {'enabled': enabled},
+      );
+    } on MissingPluginException {
+      // No-op in headless widget tests.
+    }
+  }
+
   Future<List<String>> getLogs() async {
     try {
       final raw = await _method.invokeMethod<List<Object?>>('logs');
@@ -358,8 +369,17 @@ class RuntimeBridge {
       for (final line in status.split('\n')) {
         if (line.length < 4) continue;
         final code = line.substring(0, 2);
-        final path = line.substring(3).trim();
-        if (code.contains('?') || code.contains('A')) created.add(path);
+        var path = line.substring(3).trim();
+        if (path.contains(' -> ')) {
+          path = path.split(' -> ').last.trim();
+        }
+        if (path.startsWith('"') && path.endsWith('"') && path.length >= 2) {
+          path = path.substring(1, path.length - 1);
+        }
+        if (path.isEmpty) continue;
+        if (code.contains('?') || code.contains('A') || code.contains('R')) {
+          created.add(path);
+        }
         if (code.contains('D')) deleted.add(path);
       }
       final files = FileChangeEntry.parseGitNumstat(

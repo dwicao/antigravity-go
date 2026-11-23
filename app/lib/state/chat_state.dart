@@ -249,6 +249,7 @@ class ChatThreadState {
     AgyPermissionRequestEvent? pendingPermission,
     bool clearPermission = false,
     String? activeTurnId,
+    bool clearActiveTurnId = false,
     double? tokensPerSecond,
     String? stallWarning,
     bool clearStallWarning = false,
@@ -264,7 +265,8 @@ class ChatThreadState {
       pendingPermission: clearPermission
           ? null
           : (pendingPermission ?? this.pendingPermission),
-      activeTurnId: activeTurnId ?? this.activeTurnId,
+      activeTurnId:
+          clearActiveTurnId ? null : (activeTurnId ?? this.activeTurnId),
       tokensPerSecond: tokensPerSecond ?? this.tokensPerSecond,
       stallWarning:
           clearStallWarning ? null : (stallWarning ?? this.stallWarning),
@@ -284,8 +286,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
   StreamSubscription<AgyChatEvent>? _activeSub;
   StreamSubscription<RuntimeEvent>? _wakeupSub;
   String? _loadedSessionId;
-  String? _wakeupAssistantId;
-  Timer? _wakeupFinalizeTimer;
+  final Map<String, String> _wakeupAssistantIds = {};
+  final Map<String, Timer> _wakeupFinalizeTimers = {};
   final Set<String> _completedAssistantIds = <String>{};
   final AcpCodec _wakeupCodec = AcpCodec();
   final HarnessLoopDetector _loopDetector = HarnessLoopDetector();
@@ -301,6 +303,13 @@ class ChatNotifier extends Notifier<ChatThreadState> {
   final Map<String, DateTime> _firstOutputAt = {};
   final Map<String, String> _turnModelId = {};
   final Map<String, String> _turnEffort = {};
+  final Map<String, AgyPermissionRequestEvent> _pendingPermissionsBySession =
+      {};
+  final Map<String, LoopDetectionResult> _sessionLoopWarnings = {};
+  final Map<String, int> _sessionTurnTokens = {};
+  final Map<String, List<({String prompt, List<String> attachments})>>
+      _queuedItemsBySession = {};
+  int _nextStreamToken = 0;
   final Map<
       String,
       ({
@@ -360,9 +369,15 @@ class ChatNotifier extends Notifier<ChatThreadState> {
 
   void _resetWatchdog() {
     _stallWatchdog?.cancel();
-    if (_activeStreamingSessionId == null) return;
+    final activeSid = _activeStreamingSessionId;
+    if (activeSid == null || _pendingPermissionsBySession[activeSid] != null) {
+      return;
+    }
     _stallWatchdog = Timer(const Duration(seconds: 180), () {
-      if (_activeStreamingSessionId != null && ref.mounted) {
+      final sid = _activeStreamingSessionId;
+      if (sid != null &&
+          _pendingPermissionsBySession[sid] == null &&
+          ref.mounted) {
         state = state.copyWith(
           stallWarning:
               'Agent turn has had no output for 3 minutes — check connection or tap Stop & Regenerate.',
@@ -371,13 +386,54 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     });
   }
 
+  AgySessionSummary _latestSession(AgySessionSummary fallback) {
+    final sessions = ref.read(sessionsProvider).sessions;
+    for (final s in sessions) {
+      if (s.id == fallback.id) return s;
+    }
+    return fallback;
+  }
+
+  Future<void> _syncSessionMeta(
+    String sessionId,
+    List<ChatMessage> msgs,
+  ) async {
+    if (!ref.mounted) return;
+    final sessions = ref.read(sessionsProvider).sessions;
+    AgySessionSummary? target;
+    for (final s in sessions) {
+      if (s.id == sessionId) {
+        target = s;
+        break;
+      }
+    }
+    if (target == null) return;
+    String preview = '';
+    for (var i = msgs.length - 1; i >= 0; i--) {
+      final t = msgs[i].text.trim();
+      if (t.isNotEmpty) {
+        preview = t;
+        break;
+      }
+    }
+    await ref.read(sessionsProvider.notifier).updateSession(
+          target.copyWith(
+            updatedAt: DateTime.now(),
+            messageCount: msgs.length,
+            lastPreview: preview,
+          ),
+        );
+  }
+
   @override
   ChatThreadState build() {
     ref.onDispose(() {
       _stallWatchdog?.cancel();
-      _wakeupFinalizeTimer?.cancel();
-      _wakeupFinalizeTimer = null;
-      _wakeupAssistantId = null;
+      for (final timer in _wakeupFinalizeTimers.values) {
+        timer.cancel();
+      }
+      _wakeupFinalizeTimers.clear();
+      _wakeupAssistantIds.clear();
       _activeSub?.cancel();
       _wakeupSub?.cancel();
     });
@@ -390,9 +446,16 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       ref.read(ciWatchProvider.notifier).onCompletedCallback =
           _handleCiWatchCompleted;
     });
-    final activeId = ref.watch(
+    ref.listen<String?>(
       sessionsProvider.select((s) => s.activeSessionId),
+      (prev, next) {
+        if (next != null && next != _loadedSessionId) {
+          _loadedSessionId = next;
+          Future.microtask(() => _loadMessages(next));
+        }
+      },
     );
+    final activeId = ref.read(sessionsProvider).activeSessionId;
     if (activeId != null && activeId != _loadedSessionId) {
       _loadedSessionId = activeId;
       Future.microtask(() => _loadMessages(activeId));
@@ -401,11 +464,10 @@ class ChatNotifier extends Notifier<ChatThreadState> {
   }
 
   void _finalizeWakeupMessage(String sessionId, String assistantId) {
-    _wakeupFinalizeTimer?.cancel();
-    _wakeupFinalizeTimer = null;
+    _wakeupFinalizeTimers.remove(sessionId)?.cancel();
     if (!ref.mounted) return;
-    if (_wakeupAssistantId == assistantId) {
-      _wakeupAssistantId = null;
+    if (_wakeupAssistantIds[sessionId] == assistantId) {
+      _wakeupAssistantIds.remove(sessionId);
     }
     final msgs = _messagesForSession(sessionId);
     final idx = msgs.indexWhere((m) => m.id == assistantId);
@@ -461,21 +523,24 @@ class ChatNotifier extends Notifier<ChatThreadState> {
 
     final sessionsState = ref.read(sessionsProvider);
     AgySessionSummary? target;
-    if (evt.sessionId != null && evt.sessionId!.isNotEmpty) {
+    final evtSid = evt.sessionId;
+    if (evtSid != null && evtSid.isNotEmpty) {
       for (final s in sessionsState.sessions) {
-        if (s.remoteConversationId == evt.sessionId) {
+        if (s.remoteConversationId == evtSid || s.id == evtSid) {
           target = s;
           break;
         }
       }
+      if (target == null) return;
+    } else {
+      target = sessionsState.activeSession;
     }
-    target ??= sessionsState.activeSession;
     if (target == null) return;
     // Never create a duplicate wakeup bubble if this session already has an active foreground turn.
     if (_activeStreamingSessionId == target.id) return;
 
     final msgs = _messagesForSession(target.id);
-    var assistantId = _wakeupAssistantId;
+    var assistantId = _wakeupAssistantIds[target.id];
     var idx = assistantId == null
         ? -1
         : msgs.indexWhere((m) => m.id == assistantId && m.isStreaming);
@@ -486,7 +551,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       if (parsed is AgyTextDeltaEvent && parsed.delta.trim().isEmpty) return;
       if (parsed is AgyThoughtDeltaEvent && parsed.delta.trim().isEmpty) return;
       assistantId = const Uuid().v4();
-      _wakeupAssistantId = assistantId;
+      _wakeupAssistantIds[target.id] = assistantId;
       _turnStartedAt[assistantId] = DateTime.now();
       final msg = ChatMessage(
         id: assistantId,
@@ -505,8 +570,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     } else {
       final targetId = target.id;
       final aid = assistantId;
-      _wakeupFinalizeTimer?.cancel();
-      _wakeupFinalizeTimer = Timer(
+      _wakeupFinalizeTimers.remove(targetId)?.cancel();
+      _wakeupFinalizeTimers[targetId] = Timer(
         const Duration(seconds: 2),
         () => _finalizeWakeupMessage(targetId, aid),
       );
@@ -526,22 +591,39 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     }
   }
 
+  List<String> _queuedPromptLabels(String sessionId) {
+    return (_queuedItemsBySession[sessionId] ?? const [])
+        .map((e) => e.prompt)
+        .toList();
+  }
+
   Future<void> _loadMessages(String sessionId) async {
     final inFlight = _inFlightMessages[sessionId];
     if (inFlight != null) {
+      if (!ref.mounted || _loadedSessionId != sessionId) return;
+      final isSessionStreaming = _activeStreamingSessionId == sessionId;
       state = state.copyWith(
         messages: List<ChatMessage>.from(inFlight),
-        isStreaming: _activeStreamingSessionId == sessionId,
-        clearPermission: true,
+        isStreaming: isSessionStreaming,
+        queuedPrompts: _queuedPromptLabels(sessionId),
+        pendingPermission: _pendingPermissionsBySession[sessionId],
+        clearPermission: _pendingPermissionsBySession[sessionId] == null,
         clearStallWarning: true,
+        loopWarning: _sessionLoopWarnings[sessionId],
+        clearLoopWarning: _sessionLoopWarnings[sessionId] == null,
+        clearActiveTurnId: !isSessionStreaming,
         loadedSessionId: sessionId,
       );
       return;
     }
     final prefs = await SharedPreferences.getInstance();
+    if (!ref.mounted || _loadedSessionId != sessionId) return;
     final raw = prefs.getString('agy_msgs_$sessionId');
     if (raw == null || raw.isEmpty) {
       state = ChatThreadState(
+        queuedPrompts: _queuedPromptLabels(sessionId),
+        pendingPermission: _pendingPermissionsBySession[sessionId],
+        loopWarning: _sessionLoopWarnings[sessionId],
         activeBackgroundSessionIds: state.activeBackgroundSessionIds,
         loadedSessionId: sessionId,
       );
@@ -561,11 +643,17 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           .toList();
       state = ChatThreadState(
         messages: list,
+        queuedPrompts: _queuedPromptLabels(sessionId),
+        pendingPermission: _pendingPermissionsBySession[sessionId],
+        loopWarning: _sessionLoopWarnings[sessionId],
         activeBackgroundSessionIds: state.activeBackgroundSessionIds,
         loadedSessionId: sessionId,
       );
     } catch (_) {
       state = ChatThreadState(
+        queuedPrompts: _queuedPromptLabels(sessionId),
+        pendingPermission: _pendingPermissionsBySession[sessionId],
+        loopWarning: _sessionLoopWarnings[sessionId],
         activeBackgroundSessionIds: state.activeBackgroundSessionIds,
         loadedSessionId: sessionId,
       );
@@ -642,14 +730,23 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         state.activeBackgroundSessionIds.isNotEmpty ||
         ref.read(runtimeProvider).backgroundTasks.isNotEmpty;
     if (!force && hasBackgroundWork) {
+      final queueSid = ref.read(sessionsProvider).activeSessionId ??
+          _loadedSessionId ??
+          'default';
+      final nextQueue = [
+        ...(_queuedItemsBySession[queueSid] ?? const []),
+        (prompt: prompt, attachments: List<String>.from(attachments)),
+      ];
+      _queuedItemsBySession[queueSid] = nextQueue;
       state = state.copyWith(
-        queuedPrompts: [...state.queuedPrompts, prompt],
+        queuedPrompts: nextQueue.map((e) => e.prompt).toList(),
       );
       return;
     }
 
     var session = ref.read(sessionsProvider).activeSession;
     session ??= await ref.read(sessionsProvider.notifier).createSession();
+    if (!ref.mounted) return;
 
     final settings = ref.read(settingsProvider);
     final attachmentNote = attachments.isEmpty
@@ -689,8 +786,10 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       isStreaming: true,
     );
 
-    final nextMessages = [...state.messages, userMsg, assistantMsg];
+    final nextMessages = [...priorMsgs, userMsg, assistantMsg];
     final turnId = const Uuid().v4();
+    final streamToken = ++_nextStreamToken;
+    _sessionTurnTokens[session.id] = streamToken;
     _loadedSessionId = session.id;
     _activeStreamingSessionId = session.id;
     _turnStartedAt[assistantId] = now;
@@ -719,13 +818,12 @@ class ChatNotifier extends Notifier<ChatThreadState> {
             lastPreview: prompt,
           ),
         );
+    if (!ref.mounted || _sessionTurnTokens[session.id] != streamToken) return;
 
     final hosts = ref.read(hostsProvider);
     final runtime = ref.read(runtimeProvider);
     final project = ref.read(projectsProvider).activeProject;
     final perms = ref.read(permissionsProvider);
-    final apiKey = await ref.read(authServiceProvider).readGeminiApiKey();
-
     final effectivePreset = project.permissionPreset ?? settings.permissionPreset;
     final skipPerms = effectivePreset == AntigravityPermissionPreset.turbo;
     final allowNonWorkspace = project.allowNonWorkspaceAccess ??
@@ -747,72 +845,96 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         ? '[Compacted Session Context]\n${priorMsgs[prevCompactIdx].text.trim()}\n\n[User Request]\n$effectivePrompt'
         : effectivePrompt;
 
-    final request = AgyPromptRequest(
-      prompt: requestPrompt,
-      workspacePath: effectiveWorkspace,
-      extraDirs: [
-        ...project.folders,
-        if (perms.allFilesAccess) perms.externalStorageRoot,
-        if (perms.allFilesAccess) '/sdcard',
-      ],
-      conversationId: session.remoteConversationId,
-      modelId: settings.selectedModelId,
-      effortCliValue: settings.reasoningEffort,
-      mode: effectiveMode,
-      dangerouslySkipPermissions: skipPerms,
-      allowNonWorkspaceAccess: allowNonWorkspace,
-      geminiApiKey: apiKey,
-      agentName: settings.activeAgent.isEmpty ? null : settings.activeAgent,
-      printTimeoutSeconds: settings.printTimeoutSeconds > 0
-          ? settings.printTimeoutSeconds
-          : null,
-      disableSlashCommands: settings.disableSlashCommands,
-      continueLast: settings.continueLast,
-      remoteAgent: settings.remoteAgent.isEmpty ? null : settings.remoteAgent,
-    );
+    final String? apiKey;
+    final Stream<AgyChatEvent> stream;
+    final AgyPromptRequest request;
+    try {
+      apiKey = await ref.read(authServiceProvider).readGeminiApiKey();
+      if (!ref.mounted || _sessionTurnTokens[session.id] != streamToken) return;
 
-    Stream<AgyChatEvent> stream;
-    if (sshHost != null) {
-      final (pwd, key) =
-          await ref.read(hostsProvider.notifier).readCredentials(sshHost.id);
-      stream = SshAgyRunner.instance.runPrompt(
-        host: sshHost,
-        request: request,
-        password: pwd,
-        privateKeyPem: key,
+      request = AgyPromptRequest(
+        prompt: requestPrompt,
+        workspacePath: effectiveWorkspace,
+        extraDirs: [
+          ...project.folders,
+          if (perms.allFilesAccess) perms.externalStorageRoot,
+          if (perms.allFilesAccess) '/sdcard',
+        ],
+        conversationId: session.remoteConversationId,
+        modelId: settings.selectedModelId,
+        effortCliValue: settings.reasoningEffort,
+        mode: effectiveMode,
+        dangerouslySkipPermissions: skipPerms,
+        allowNonWorkspaceAccess: allowNonWorkspace,
+        geminiApiKey: apiKey,
+        agentName: settings.activeAgent.isEmpty ? null : settings.activeAgent,
+        printTimeoutSeconds: settings.printTimeoutSeconds > 0
+            ? settings.printTimeoutSeconds
+            : null,
+        disableSlashCommands: settings.disableSlashCommands,
+        continueLast: settings.continueLast &&
+            !carryCompactContext &&
+            (session.remoteConversationId == null ||
+                session.remoteConversationId!.isEmpty),
+        remoteAgent: settings.remoteAgent.isEmpty ? null : settings.remoteAgent,
       );
-    } else {
-      if (!runtime.status.isReady) {
-        _finishAssistantMessage(
-          session: session,
-          assistantId: assistantId,
-          text:
-              'On-device Antigravity CLI (`agy`) is not installed yet.\n\nTap **Setup Runtime** in Settings or the Quick Panel to install `agy` natively on your phone, or switch to an **SSH Remote Host** in the drawer.',
+
+      if (sshHost != null) {
+        final (pwd, key) =
+            await ref.read(hostsProvider.notifier).readCredentials(sshHost.id);
+        if (!ref.mounted || _sessionTurnTokens[session.id] != streamToken) {
+          return;
+        }
+        stream = SshAgyRunner.instance.runPrompt(
+          host: sshHost,
+          request: request,
+          password: pwd,
+          privateKeyPem: key,
         );
-        return;
-      }
-      if (ref.read(harnessProvider).autoCheckpointEnabled) {
-        try {
-          final cp = await RuntimeBridge.instance.createCheckpoint(
-            cwd: effectiveWorkspace.isEmpty ? null : effectiveWorkspace,
+      } else {
+        if (!runtime.status.isReady) {
+          _finishAssistantMessage(
+            session: session,
+            assistantId: assistantId,
+            text:
+                'On-device Antigravity CLI (`agy`) is not installed yet.\n\nTap **Setup Runtime** in Settings or the Quick Panel to install `agy` natively on your phone, or switch to an **SSH Remote Host** in the drawer.',
           );
-          if (!ref.mounted) return;
-          final refHash = cp['ref']?.toString() ?? '';
-          if (cp['ok'] == true && refHash.isNotEmpty) {
-            final currentMsgs = _messagesForSession(session.id);
-            final uIdx = currentMsgs.indexWhere((m) => m.id == userMsgId);
-            if (uIdx >= 0) {
-              final updated = [...currentMsgs];
-              updated[uIdx] = updated[uIdx].copyWith(checkpointRef: refHash);
-              _updateSessionMessages(session.id, updated);
+          return;
+        }
+        if (ref.read(harnessProvider).autoCheckpointEnabled) {
+          try {
+            final cp = await RuntimeBridge.instance.createCheckpoint(
+              cwd: effectiveWorkspace.isEmpty ? null : effectiveWorkspace,
+            );
+            if (!ref.mounted || _sessionTurnTokens[session.id] != streamToken) {
+              return;
             }
-          }
-        } catch (_) {}
+            final refHash = cp['ref']?.toString() ?? '';
+            if (cp['ok'] == true && refHash.isNotEmpty) {
+              final currentMsgs = _messagesForSession(session.id);
+              final uIdx = currentMsgs.indexWhere((m) => m.id == userMsgId);
+              if (uIdx >= 0) {
+                final updated = [...currentMsgs];
+                updated[uIdx] = updated[uIdx].copyWith(checkpointRef: refHash);
+                _updateSessionMessages(session.id, updated);
+                unawaited(_persistMessages(session.id, updated));
+              }
+            }
+          } catch (_) {}
+        }
+        stream = RuntimeBridge.instance.runPrompt(request, turnId);
       }
-      stream = RuntimeBridge.instance.runPrompt(request, turnId);
+    } catch (err) {
+      if (!ref.mounted || _sessionTurnTokens[session.id] != streamToken) return;
+      _finishAssistantMessage(
+        session: session,
+        assistantId: assistantId,
+        text: 'Failed to start agent turn: $err',
+      );
+      return;
     }
 
-    final currentSession = session;
+    final currentSession = _latestSession(session);
     _receivedTurnContent = false;
     _usedFallbackForTurn = false;
     _activeLocalRequest = sshHost == null ? request : null;
@@ -820,6 +942,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     _streamBurstStart = null;
     _loopDetector.reset();
     _seenLoopCallIds.clear();
+    _sessionLoopWarnings.remove(currentSession.id);
+    _pendingPermissionsBySession.remove(currentSession.id);
     state = state.copyWith(
       tokensPerSecond: 0,
       clearStallWarning: true,
@@ -829,15 +953,31 @@ class ChatNotifier extends Notifier<ChatThreadState> {
 
     await _activeSub?.cancel();
     _activeSub = stream.listen(
-      (evt) => _handleEvent(currentSession, assistantId, evt),
+      (evt) {
+        if (!ref.mounted ||
+            _sessionTurnTokens[currentSession.id] != streamToken) {
+          return;
+        }
+        _handleEvent(currentSession, assistantId, evt);
+      },
       onError: (Object err) {
+        if (!ref.mounted ||
+            _sessionTurnTokens[currentSession.id] != streamToken) {
+          return;
+        }
         _finishAssistantMessage(
           session: currentSession,
           assistantId: assistantId,
           text: 'Agent error: $err',
         );
       },
-      onDone: () => _completeStreaming(currentSession, assistantId),
+      onDone: () {
+        if (!ref.mounted ||
+            _sessionTurnTokens[currentSession.id] != streamToken) {
+          return;
+        }
+        _completeStreaming(currentSession, assistantId);
+      },
     );
   }
 
@@ -847,7 +987,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     AgyChatEvent evt,
   ) {
     _resetWatchdog();
-    if (state.stallWarning != null) {
+    if (state.stallWarning != null && _loadedSessionId == session.id) {
       state = state.copyWith(clearStallWarning: true);
     }
     final msgs = _messagesForSession(session.id);
@@ -874,8 +1014,9 @@ class ChatNotifier extends Notifier<ChatThreadState> {
             );
           }
         } else if (evt.conversationId.isNotEmpty) {
+          final latest = _latestSession(session);
           ref.read(sessionsProvider.notifier).updateSession(
-                session.copyWith(remoteConversationId: evt.conversationId),
+                latest.copyWith(remoteConversationId: evt.conversationId),
               );
         }
       case AgyThoughtDeltaEvent():
@@ -926,15 +1067,23 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         _receivedTurnContent = true;
         final tools = [...current.tools];
         final nextSteps = [...current.steps];
-        final tIdx = tools.indexWhere((t) => t.id == evt.callId);
+        final effCallId = evt.callId.isNotEmpty
+            ? evt.callId
+            : 'tool-${evt.toolName}-${tools.length}';
+        final tIdx = tools.indexWhere((t) => t.id == effCallId);
+        final resolvedToolName = evt.toolName != 'tool' || tIdx < 0
+            ? evt.toolName
+            : tools[tIdx].toolName;
+        final mergedParams = tIdx >= 0 && evt.parameters.isEmpty
+            ? tools[tIdx].parameters
+            : evt.parameters;
         if (tIdx >= 0) {
           final prev = tools[tIdx];
           tools[tIdx] = ChatToolStep(
-            id: evt.callId,
-            toolName: evt.toolName != 'tool' ? evt.toolName : prev.toolName,
+            id: effCallId,
+            toolName: resolvedToolName,
             state: evt.state,
-            parameters:
-                evt.parameters.isNotEmpty ? evt.parameters : prev.parameters,
+            parameters: mergedParams,
             output: evt.output ?? prev.output,
             error: evt.errorMessage ?? prev.error,
             durationSeconds: evt.durationSeconds ?? prev.durationSeconds,
@@ -943,8 +1092,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         } else {
           tools.add(
             ChatToolStep(
-              id: evt.callId,
-              toolName: evt.toolName,
+              id: effCallId,
+              toolName: resolvedToolName,
               state: evt.state,
               parameters: evt.parameters,
               output: evt.output,
@@ -956,9 +1105,9 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           );
           nextSteps.add(
             ChatMilestoneStep(
-              id: 'tool-${evt.callId}',
+              id: 'tool-$effCallId',
               kind: ChatMilestoneKind.tool,
-              toolId: evt.callId,
+              toolId: effCallId,
             ),
           );
         }
@@ -967,22 +1116,29 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           idx,
           current.copyWith(tools: tools, steps: nextSteps),
         );
-        // Harness Doom-Loop Circuit Breaker check on new or failed tool steps.
+        // Harness Doom-Loop Circuit Breaker check on new or updated tool steps.
         if (ref.read(harnessProvider).loopBreakerEnabled) {
           final isFailed = evt.state == ToolCallState.failed ||
               (evt.errorMessage?.isNotEmpty ?? false);
           LoopDetectionResult loopHit = LoopDetectionResult.none;
-          if (_seenLoopCallIds.add(evt.callId)) {
+          if (_seenLoopCallIds.add(effCallId) || evt.parameters.isNotEmpty) {
             loopHit = _loopDetector.recordToolCall(
-              name: evt.toolName,
-              input: jsonEncode(evt.parameters),
+              name: resolvedToolName,
+              input: jsonEncode(mergedParams),
               isError: isFailed,
+              callId: effCallId,
             );
           } else if (isFailed) {
-            loopHit = _loopDetector.markLastFailed(toolName: evt.toolName);
+            loopHit = _loopDetector.markLastFailed(
+              toolName: resolvedToolName,
+              callId: effCallId,
+            );
           }
-          if (loopHit.triggered && _loadedSessionId == session.id) {
-            state = state.copyWith(loopWarning: loopHit);
+          if (loopHit.triggered) {
+            _sessionLoopWarnings[session.id] = loopHit;
+            if (_loadedSessionId == session.id) {
+              state = state.copyWith(loopWarning: loopHit);
+            }
           }
         }
         // Checkpoint completed tool steps mid-turn against OS process kills.
@@ -990,13 +1146,24 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           unawaited(_persistMessages(session.id, _messagesForSession(session.id)));
         }
       case AgyPermissionRequestEvent():
-        state = state.copyWith(pendingPermission: evt);
+        _pendingPermissionsBySession[session.id] = evt;
+        _stallWatchdog?.cancel();
+        if (_loadedSessionId == session.id) {
+          state = state.copyWith(pendingPermission: evt);
+        }
       case AgyTurnResultEvent():
         _receivedTurnContent = true;
-        if (evt.status.toUpperCase() == 'SUCCESS') {
+        _pendingPermissionsBySession.remove(session.id);
+        final statusUpper = evt.status.toUpperCase();
+        final errText = evt.error?.trim() ?? '';
+        final hasErrorResult = statusUpper == 'ERROR' || errText.isNotEmpty;
+        if (statusUpper == 'SUCCESS' && errText.isEmpty) {
           ref.read(authProvider.notifier).markAuthenticatedFromTurn();
         }
-        final finalText = current.text.isEmpty ? evt.response : current.text;
+        var finalText = current.text.isEmpty ? evt.response : current.text;
+        if (finalText.trim().isEmpty && errText.isNotEmpty) {
+          finalText = errText;
+        }
         final resolvedText = current.isCompactionSummary &&
                 finalText.trim().isEmpty
             ? _compactionFallbackText(assistantId)
@@ -1014,7 +1181,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           current.copyWith(
             text: resolvedText,
             usage: evt.usage,
-            tools: _finalizeTools(current.tools),
+            tools: _finalizeTools(current.tools, failed: hasErrorResult),
             durationSeconds: stats.durationSec,
             tokensPerSecond: stats.tokPerSec,
             modelId: _turnModelId[assistantId] ?? current.modelId,
@@ -1034,8 +1201,9 @@ class ChatNotifier extends Notifier<ChatThreadState> {
             );
           }
         } else if (evt.conversationId.isNotEmpty) {
+          final latest = _latestSession(session);
           ref.read(sessionsProvider.notifier).updateSession(
-                session.copyWith(
+                latest.copyWith(
                   remoteConversationId: evt.conversationId,
                   updatedAt: DateTime.now(),
                   lastPreview: resolvedText,
@@ -1052,6 +1220,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           unawaited(_completeStreaming(session, assistantId));
         }
       case AgyErrorEvent():
+        _pendingPermissionsBySession.remove(session.id);
         if (evt.requiresAuth) {
           ref.read(authProvider.notifier).refresh();
         } else if (!_receivedTurnContent &&
@@ -1063,20 +1232,45 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           _usedFallbackForTurn = true;
           final fallbackReq = _activeLocalRequest!;
           final fallbackTurnId = const Uuid().v4();
-          state = state.copyWith(activeTurnId: fallbackTurnId);
+          final fallbackToken = ++_nextStreamToken;
+          _sessionTurnTokens[session.id] = fallbackToken;
+          if (_loadedSessionId == session.id) {
+            state = state.copyWith(
+              activeTurnId: fallbackTurnId,
+              clearPermission: true,
+            );
+          }
           _activeSub?.cancel();
           _activeSub = RuntimeBridge.instance
               .runPrompt(fallbackReq, fallbackTurnId, useAcp: false)
               .listen(
-                (e) => _handleEvent(session, assistantId, e),
-                onError: (Object err) => _finishAssistantMessage(
-                  session: session,
-                  assistantId: assistantId,
-                  text: current.isCompactionSummary
-                      ? _compactionFallbackText(assistantId)
-                      : 'Agent error: $err',
-                ),
-                onDone: () => _completeStreaming(session, assistantId),
+                (e) {
+                  if (!ref.mounted ||
+                      _sessionTurnTokens[session.id] != fallbackToken) {
+                    return;
+                  }
+                  _handleEvent(session, assistantId, e);
+                },
+                onError: (Object err) {
+                  if (!ref.mounted ||
+                      _sessionTurnTokens[session.id] != fallbackToken) {
+                    return;
+                  }
+                  _finishAssistantMessage(
+                    session: session,
+                    assistantId: assistantId,
+                    text: current.isCompactionSummary
+                        ? _compactionFallbackText(assistantId)
+                        : 'Agent error: $err',
+                  );
+                },
+                onDone: () {
+                  if (!ref.mounted ||
+                      _sessionTurnTokens[session.id] != fallbackToken) {
+                    return;
+                  }
+                  _completeStreaming(session, assistantId);
+                },
               );
           return;
         }
@@ -1219,9 +1413,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     String assistantId,
   ) async {
     if (!_completedAssistantIds.add(assistantId)) return;
-    _wakeupFinalizeTimer?.cancel();
-    _wakeupFinalizeTimer = null;
-    _wakeupAssistantId = null;
+    _wakeupFinalizeTimers.remove(session.id)?.cancel();
+    _wakeupAssistantIds.remove(session.id);
     _stallWatchdog?.cancel();
     _stallWatchdog = null;
     final subToCancel = _activeSub;
@@ -1234,6 +1427,9 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     if (_activeStreamingSessionId == session.id) {
       _activeStreamingSessionId = null;
     }
+    _sessionTurnTokens.remove(session.id);
+    _pendingPermissionsBySession.remove(session.id);
+    _sessionLoopWarnings.remove(session.id);
     final msgs = _messagesForSession(session.id);
     var updatedMsgs = msgs;
     var changed = false;
@@ -1301,6 +1497,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       activeBackgroundSessionIds: nextBgIds,
       clearPermission: true,
       clearStallWarning: true,
+      clearLoopWarning: _loadedSessionId == session.id,
+      clearActiveTurnId: true,
     );
     await _persistMessages(session.id, persisted);
 
@@ -1325,7 +1523,26 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       }
     }
 
-    if (state.queuedPrompts.isNotEmpty) {
+    final sessionQueue = _queuedItemsBySession[session.id];
+    if (sessionQueue != null && sessionQueue.isNotEmpty) {
+      final nextItem = sessionQueue.first;
+      final rest = sessionQueue.sublist(1);
+      if (rest.isEmpty) {
+        _queuedItemsBySession.remove(session.id);
+      } else {
+        _queuedItemsBySession[session.id] = rest;
+      }
+      if (_loadedSessionId == session.id) {
+        state = state.copyWith(
+          queuedPrompts: rest.map((e) => e.prompt).toList(),
+        );
+      }
+      await sendPrompt(
+        nextItem.prompt,
+        attachments: nextItem.attachments,
+        force: true,
+      );
+    } else if (state.queuedPrompts.isNotEmpty) {
       final nextPrompt = state.queuedPrompts.first;
       state = state.copyWith(
         queuedPrompts: state.queuedPrompts.sublist(1),
@@ -1337,6 +1554,14 @@ class ChatNotifier extends Notifier<ChatThreadState> {
   Future<void> stopStreaming() async {
     final turnId = state.activeTurnId;
     final streamingSid = _activeStreamingSessionId;
+    final clearedSid = streamingSid ?? _loadedSessionId;
+    if (clearedSid != null) {
+      _sessionTurnTokens.remove(clearedSid);
+      _wakeupFinalizeTimers.remove(clearedSid)?.cancel();
+      _wakeupAssistantIds.remove(clearedSid);
+      _pendingPermissionsBySession.remove(clearedSid);
+      _sessionLoopWarnings.remove(clearedSid);
+    }
     await _activeSub?.cancel();
     _activeSub = null;
     if (turnId != null) {
@@ -1344,9 +1569,6 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         await RuntimeBridge.instance.cancelTurn(turnId);
       } catch (_) {}
     }
-    _wakeupFinalizeTimer?.cancel();
-    _wakeupFinalizeTimer = null;
-    _wakeupAssistantId = null;
     _stallWatchdog?.cancel();
     _stallWatchdog = null;
     _activeLocalRequest = null;
@@ -1385,6 +1607,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       activeBackgroundSessionIds: const {},
       clearPermission: true,
       clearStallWarning: true,
+      clearLoopWarning: true,
+      clearActiveTurnId: true,
     );
     final activeId = ref.read(sessionsProvider).activeSessionId;
     if (activeId != null) {
@@ -1392,11 +1616,39 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     }
   }
 
+  static String? _buildToolDiff(
+    String path,
+    String? oldText,
+    String? newText,
+  ) {
+    final oldLines = oldText == null || oldText.isEmpty
+        ? const <String>[]
+        : oldText.split('\n');
+    final newLines = newText == null || newText.isEmpty
+        ? const <String>[]
+        : newText.split('\n');
+    if (oldLines.isEmpty && newLines.isEmpty) return null;
+    final buf = StringBuffer()
+      ..writeln('--- a/$path')
+      ..writeln('+++ b/$path')
+      ..writeln('@@ -1,${oldLines.length} +1,${newLines.length} @@');
+    for (final line in oldLines.take(80)) {
+      buf.writeln('-$line');
+    }
+    if (oldLines.length > 80) buf.writeln('-... (${oldLines.length - 80} more)');
+    for (final line in newLines.take(80)) {
+      buf.writeln('+$line');
+    }
+    if (newLines.length > 80) buf.writeln('+... (${newLines.length - 80} more)');
+    return buf.toString();
+  }
+
   static List<FileChangeEntry> extractChangedFilesFromTools(
     List<ChatToolStep> tools,
   ) {
     final byPath = <String, FileChangeEntry>{};
     for (final step in tools) {
+      if (step.state == ToolCallState.failed) continue;
       final nameLower = step.toolName.toLowerCase();
       final isFileEdit = nameLower.contains('write') ||
           nameLower.contains('edit') ||
@@ -1416,19 +1668,21 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           step.parameters['CodeContent'] ??
           step.parameters['content'];
       final target = step.parameters['TargetContent'];
-      final added = replacement != null
-          ? replacement.toString().split('\n').length
-          : 0;
-      final removed = target != null ? target.toString().split('\n').length : 0;
+      final repStr = replacement?.toString();
+      final tgtStr = target?.toString();
+      final added = repStr != null ? repStr.split('\n').length : 0;
+      final removed = tgtStr != null ? tgtStr.split('\n').length : 0;
       final created = (step.parameters['Overwrite'] == false) ||
           nameLower.contains('create') ||
           (nameLower.contains('write_to_file') && removed == 0);
       final prev = byPath[path];
+      final diffSnippet = _buildToolDiff(path, tgtStr, repStr) ?? prev?.diff;
       byPath[path] = FileChangeEntry(
         path: path,
         added: (prev?.added ?? 0) + added,
         removed: (prev?.removed ?? 0) + removed,
         created: prev?.created ?? created,
+        diff: diffSnippet,
       );
     }
     return byPath.values.toList();
@@ -1519,8 +1773,34 @@ class ChatNotifier extends Notifier<ChatThreadState> {
   }
 
   Future<void> sendQueuedNow() async {
-    if (state.queuedPrompts.isEmpty) return;
-    await _cancelAllBackgroundWork();
+    final sid = ref.read(sessionsProvider).activeSessionId ?? _loadedSessionId;
+    final sessionQueue = sid == null ? null : _queuedItemsBySession[sid];
+    if ((sessionQueue == null || sessionQueue.isEmpty) &&
+        state.queuedPrompts.isEmpty) {
+      return;
+    }
+    if (state.isStreaming || _activeStreamingSessionId != null) {
+      await stopStreaming();
+      if (!ref.mounted) return;
+    }
+    if (sessionQueue != null && sessionQueue.isNotEmpty) {
+      final nextItem = sessionQueue.first;
+      final rest = sessionQueue.sublist(1);
+      if (rest.isEmpty) {
+        _queuedItemsBySession.remove(sid);
+      } else {
+        _queuedItemsBySession[sid!] = rest;
+      }
+      state = state.copyWith(
+        queuedPrompts: rest.map((e) => e.prompt).toList(),
+      );
+      await sendPrompt(
+        nextItem.prompt,
+        attachments: nextItem.attachments,
+        force: true,
+      );
+      return;
+    }
     final nextPrompt = state.queuedPrompts.first;
     state = state.copyWith(
       queuedPrompts: state.queuedPrompts.sublist(1),
@@ -1529,16 +1809,38 @@ class ChatNotifier extends Notifier<ChatThreadState> {
   }
 
   void removeQueuedPrompt(int index) {
+    final sid = ref.read(sessionsProvider).activeSessionId ?? _loadedSessionId;
+    if (sid != null && _queuedItemsBySession.containsKey(sid)) {
+      final list = [...?_queuedItemsBySession[sid]];
+      if (index >= 0 && index < list.length) {
+        list.removeAt(index);
+        if (list.isEmpty) {
+          _queuedItemsBySession.remove(sid);
+        } else {
+          _queuedItemsBySession[sid] = list;
+        }
+        state = state.copyWith(
+          queuedPrompts: list.map((e) => e.prompt).toList(),
+        );
+        return;
+      }
+    }
     if (index < 0 || index >= state.queuedPrompts.length) return;
     final updated = [...state.queuedPrompts]..removeAt(index);
     state = state.copyWith(queuedPrompts: updated);
   }
 
-  Future<void> steerNow(String prompt) async {
+  Future<void> steerNow(
+    String prompt, {
+    List<String> attachments = const [],
+  }) async {
     final trimmed = prompt.trim();
     if (trimmed.isEmpty) return;
-    await _cancelAllBackgroundWork();
-    await sendPrompt(trimmed, force: true);
+    if (state.isStreaming || _activeStreamingSessionId != null) {
+      await stopStreaming();
+      if (!ref.mounted) return;
+    }
+    await sendPrompt(trimmed, attachments: attachments, force: true);
   }
 
   Future<void> regenerateLastTurn() async {
@@ -1552,6 +1854,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     final activeId = ref.read(sessionsProvider).activeSessionId;
     if (activeId != null) {
       await _persistMessages(activeId, trimmedHistory);
+      await _syncSessionMeta(activeId, trimmedHistory);
     }
     await sendPrompt(lastUser.text, attachments: lastUser.attachments);
   }
@@ -1567,6 +1870,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     final activeId = ref.read(sessionsProvider).activeSessionId;
     if (activeId != null) {
       await _persistMessages(activeId, prefix);
+      await _syncSessionMeta(activeId, prefix);
     }
     await sendPrompt(trimmed, attachments: original.attachments);
   }
@@ -1574,7 +1878,12 @@ class ChatNotifier extends Notifier<ChatThreadState> {
   Future<void> resolvePermission(String optionId) async {
     final perm = state.pendingPermission;
     final turnId = state.activeTurnId;
+    final sid = _activeStreamingSessionId ?? _loadedSessionId;
+    if (sid != null) {
+      _pendingPermissionsBySession.remove(sid);
+    }
     state = state.copyWith(clearPermission: true);
+    _resetWatchdog();
     if (perm != null && turnId != null) {
       try {
         await RuntimeBridge.instance.respondPermission(
@@ -1582,7 +1891,16 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           requestId: perm.requestId,
           optionId: optionId,
         );
-      } catch (_) {}
+      } catch (err) {
+        if (!ref.mounted) return;
+        if (sid != null && _activeStreamingSessionId == sid) {
+          _pendingPermissionsBySession[sid] = perm;
+          if (_loadedSessionId == sid) {
+            state = state.copyWith(pendingPermission: perm);
+          }
+        }
+        await appendSystemFeedback('Permission response failed: $err');
+      }
     }
   }
 
@@ -1591,10 +1909,53 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     _loopDetector.reset();
     _seenLoopCallIds.clear();
     _pendingCompactions.clear();
+    if (activeId != null) {
+      _pendingPermissionsBySession.remove(activeId);
+      _sessionLoopWarnings.remove(activeId);
+    }
     state = ChatThreadState(loadedSessionId: activeId);
     if (activeId != null) {
       await _persistMessages(activeId, const []);
+      await _syncSessionMeta(activeId, const []);
     }
+  }
+
+  Future<AgySessionSummary> forkCurrentSession() async {
+    final prev = ref.read(sessionsProvider).activeSession;
+    final currentMsgs = state.messages
+        .map(
+          (m) => m.isStreaming
+              ? m.copyWith(
+                  isStreaming: false,
+                  tools: _finalizeTools(m.tools),
+                  completedAt: m.completedAt ?? DateTime.now(),
+                )
+              : m,
+        )
+        .toList();
+    final branched = await ref.read(sessionsProvider.notifier).createSession(
+          title: prev != null ? '${prev.title} (fork)' : 'Forked session',
+        );
+    final updatedSession = prev == null
+        ? branched
+        : branched.copyWith(
+            workspacePath: prev.workspacePath,
+            projectId: prev.projectId,
+            modelId: prev.modelId,
+            messageCount: currentMsgs.length,
+            lastPreview: prev.lastPreview,
+            clearRemoteConversationId: true,
+          );
+    _loadedSessionId = branched.id;
+    _inFlightMessages[branched.id] = currentMsgs;
+    state = ChatThreadState(
+      messages: currentMsgs,
+      activeBackgroundSessionIds: state.activeBackgroundSessionIds,
+      loadedSessionId: branched.id,
+    );
+    await _persistMessages(branched.id, currentMsgs);
+    await ref.read(sessionsProvider.notifier).updateSession(updatedSession);
+    return updatedSession;
   }
 
   String _compactionFallbackText(String assistantId) {
@@ -1622,8 +1983,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
   }) async {
     final busy = state.isStreaming ||
         _activeStreamingSessionId != null ||
-        state.activeBackgroundSessionIds.isNotEmpty ||
-        ref.read(runtimeProvider).backgroundTasks.isNotEmpty;
+        state.activeBackgroundSessionIds.isNotEmpty;
     if (busy) {
       return (
         ok: false,
@@ -1731,6 +2091,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     );
     final nextMessages = [...msgs, summaryMsg];
     final turnId = const Uuid().v4();
+    final streamToken = ++_nextStreamToken;
+    _sessionTurnTokens[resetSession.id] = streamToken;
     _loadedSessionId = resetSession.id;
     _activeStreamingSessionId = resetSession.id;
     _turnStartedAt[assistantId] = now;
@@ -1762,7 +2124,9 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     final project = ref.read(projectsProvider).activeProject;
     final perms = ref.read(permissionsProvider);
     final apiKey = await ref.read(authServiceProvider).readGeminiApiKey();
-    if (!ref.mounted) return (ok: false, message: 'Cancelled');
+    if (!ref.mounted || _sessionTurnTokens[resetSession.id] != streamToken) {
+      return (ok: false, message: 'Cancelled');
+    }
 
     final effectiveWorkspace = resetSession.workspacePath.isNotEmpty
         ? resetSession.workspacePath
@@ -1801,7 +2165,9 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     if (sshHost != null) {
       final (pwd, key) =
           await ref.read(hostsProvider.notifier).readCredentials(sshHost.id);
-      if (!ref.mounted) return (ok: false, message: 'Cancelled');
+      if (!ref.mounted || _sessionTurnTokens[resetSession.id] != streamToken) {
+        return (ok: false, message: 'Cancelled');
+      }
       stream = SshAgyRunner.instance.runPrompt(
         host: sshHost,
         request: request,
@@ -1821,15 +2187,31 @@ class ChatNotifier extends Notifier<ChatThreadState> {
 
     await _activeSub?.cancel();
     _activeSub = stream.listen(
-      (evt) => _handleEvent(resetSession, assistantId, evt),
+      (evt) {
+        if (!ref.mounted ||
+            _sessionTurnTokens[resetSession.id] != streamToken) {
+          return;
+        }
+        _handleEvent(resetSession, assistantId, evt);
+      },
       onError: (_) {
+        if (!ref.mounted ||
+            _sessionTurnTokens[resetSession.id] != streamToken) {
+          return;
+        }
         _finishAssistantMessage(
           session: resetSession,
           assistantId: assistantId,
           text: _compactionFallbackText(assistantId),
         );
       },
-      onDone: () => _completeStreaming(resetSession, assistantId),
+      onDone: () {
+        if (!ref.mounted ||
+            _sessionTurnTokens[resetSession.id] != streamToken) {
+          return;
+        }
+        _completeStreaming(resetSession, assistantId);
+      },
     );
 
     return (ok: true, message: 'Compacting $compactCount messages…');
@@ -1845,8 +2227,12 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     final pivot = hit.pivotPrompt;
     _loopDetector.reset();
     _seenLoopCallIds.clear();
+    final activeId = ref.read(sessionsProvider).activeSessionId;
+    if (activeId != null) _sessionLoopWarnings.remove(activeId);
     state = state.copyWith(clearLoopWarning: true);
-    await _cancelAllBackgroundWork();
+    if (state.isStreaming || _activeStreamingSessionId != null) {
+      await stopStreaming();
+    }
     if (!ref.mounted) return;
     await sendPrompt(pivot, force: true);
   }
@@ -1875,14 +2261,17 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       );
     }
     final targetMsg = state.messages[targetIdx];
+    final session = ref.read(sessionsProvider).activeSession;
     var gitNote = 'Conversation pruned';
     final cpRef = targetMsg.checkpointRef;
     if (cpRef != null && cpRef.isNotEmpty) {
       final project = ref.read(projectsProvider).activeProject;
       final runtime = ref.read(runtimeProvider);
-      final cwd = project.primaryFolder.isNotEmpty
-          ? project.primaryFolder
-          : (runtime.status.workspaceRoot ?? '');
+      final cwd = (session != null && session.workspacePath.isNotEmpty)
+          ? session.workspacePath
+          : (project.primaryFolder.isNotEmpty
+              ? project.primaryFolder
+              : (runtime.status.workspaceRoot ?? ''));
       final res = await RuntimeBridge.instance.restoreCheckpoint(
         cwd: cwd.isEmpty ? null : cwd,
         ref: cpRef,
@@ -1896,16 +2285,33 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         gitNote = 'Conversation rewound (${res['message'] ?? 'no git snapshot'})';
       }
     }
+    if (session?.remoteConversationId != null &&
+        session!.remoteConversationId!.isNotEmpty) {
+      unawaited(
+        RuntimeBridge.instance
+            .closeSessionWorker(session.remoteConversationId!),
+      );
+      await ref.read(sessionsProvider.notifier).updateSession(
+            session.copyWith(clearRemoteConversationId: true),
+          );
+      if (!ref.mounted) {
+        return (ok: false, message: 'Cancelled', restoredPrompt: null);
+      }
+    }
     final prefix = state.messages.sublist(0, targetIdx);
     _loopDetector.reset();
     _seenLoopCallIds.clear();
+    final activeId = ref.read(sessionsProvider).activeSessionId;
+    if (activeId != null) {
+      _sessionLoopWarnings.remove(activeId);
+    }
     state = state.copyWith(
       messages: prefix,
       clearLoopWarning: true,
     );
-    final activeId = ref.read(sessionsProvider).activeSessionId;
     if (activeId != null) {
       await _persistMessages(activeId, prefix);
+      await _syncSessionMeta(activeId, prefix);
     }
     return (
       ok: true,

@@ -68,5 +68,36 @@ void main() {
         AntigravityPermissionPreset.requestReview,
       );
     });
+
+    test('parses rich tool_call, permission diffPreview, cancellation, and max effort', () {
+      final codec = AcpCodec();
+      final toolUpdate = codec.parseNotificationOrRequest(
+        '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call_update","toolCallId":"tc-9","title":"Edit file","status":"cancelled","rawInput":"{\\"path\\":\\"lib/a.dart\\"}","locations":[{"path":"lib/a.dart","line":10}],"content":[{"type":"diff","path":"lib/a.dart","oldText":"old","newText":"new"}]}}}',
+      );
+      expect(toolUpdate, isA<AgyToolCallEvent>());
+      final tc = toolUpdate! as AgyToolCallEvent;
+      expect(tc.callId, 'tc-9');
+      expect(tc.state, ToolCallState.failed);
+      expect(tc.parameters['path'], 'lib/a.dart');
+      expect(tc.output, contains('-old'));
+      expect(tc.output, contains('+new'));
+
+      final perm = codec.parseNotificationOrRequest(
+        '{"jsonrpc":"2.0","id":7,"method":"session/request_permission","params":{"toolCall":{"kind":"edit","title":"Write file","rawInput":{"CommandLine":"rm -rf tmp"},"content":[{"type":"diff","path":"a.txt","oldText":"a","newText":"b"}]},"options":[]}}',
+      );
+      expect(perm, isA<AgyPermissionRequestEvent>());
+      final permEvt = perm! as AgyPermissionRequestEvent;
+      expect(permEvt.commandOrPath, 'rm -rf tmp');
+      expect(permEvt.diffPreview, contains('+b'));
+
+      final cancelled = codec.encodePermissionCancelled(7);
+      expect(cancelled, contains('"outcome":"cancelled"'));
+
+      final refusal = codec.parseNotificationOrRequest(
+        '{"jsonrpc":"2.0","id":8,"result":{"stopReason":"refusal"}}',
+      );
+      expect((refusal! as AgyTurnResultEvent).status, 'ERROR');
+      expect(ReasoningEffort.fromString('max'), ReasoningEffort.max);
+    });
   });
 }

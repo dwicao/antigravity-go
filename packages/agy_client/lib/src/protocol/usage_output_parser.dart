@@ -163,10 +163,9 @@ class UsageOutputParser {
     for (var i = 0; i < lines.length; i++) {
       final line = lines[i];
       final lower = line.toLowerCase();
-      // Ignore Go log prefix lines like `ERROR: logging before google.Init: ...`
+      // Ignore Go glog prefix lines like `ERROR: logging before google.Init: ...` or `I1123 15:29:56...`
       if (lower.startsWith('error: logging before') ||
-          lower.startsWith('i11') ||
-          lower.startsWith('w11')) {
+          RegExp(r'^[iwef]\d{4}\s+\d{2}:\d{2}:\d{2}').hasMatch(lower)) {
         continue;
       }
 

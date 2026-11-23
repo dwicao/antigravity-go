@@ -7,7 +7,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../../remote/ssh_agy_runner.dart';
 import '../../runtime/runtime_bridge.dart';
+import '../../theme/app_theme.dart';
 import '../../state/auth_state.dart';
 import '../../state/background_tasks_state.dart';
 import '../../state/chat_state.dart';
@@ -68,6 +70,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   String? _observedActiveSessionId;
   String? _lastAutoScrolledSessionKey;
   String? _draftSessionId;
+  bool _draftAppliedForSession = false;
+  bool _compactBannerDismissed = false;
 
   @override
   void initState() {
@@ -174,6 +178,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Future<void> _onChanged(String val) async {
+    _draftAppliedForSession = true;
     final sessionId =
         ref.read(sessionsProvider).activeSessionId ?? 'new_session';
     ref.read(draftStoreProvider.notifier).save(sessionId, val);
@@ -184,15 +189,50 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         atIndex >= 0 && !val.substring(atIndex).contains(' ') && !wantSlash;
 
     if (wantMention && !_showMentionMenu) {
+      final sessionWs =
+          ref.read(sessionsProvider).activeSession?.workspacePath ?? '';
       final projDir = ref.read(projectsProvider).activeProject.primaryFolder;
       final fallback = ref.read(runtimeProvider).status.workspaceRoot ?? '';
-      final files = await RuntimeBridge.instance.listWorkspaceEntries(
-        projDir.isNotEmpty ? projDir : fallback,
-      );
+      final targetWs = sessionWs.isNotEmpty
+          ? sessionWs
+          : (projDir.isNotEmpty ? projDir : fallback);
+      final sshHost = ref.read(hostsProvider).activeSshHost;
+      List<Map<String, String>> files = const [];
+      if (sshHost != null) {
+        try {
+          final (pwd, key) = await ref
+              .read(hostsProvider.notifier)
+              .readCredentials(sshHost.id);
+          final out = await SshAgyRunner.instance.runRemoteCommand(
+            host: sshHost,
+            cwd: targetWs,
+            password: pwd,
+            privateKeyPem: key,
+            command: 'ls -1Ap | head -n 60',
+          );
+          files = out
+              .split('\n')
+              .map((l) => l.trim())
+              .where((l) => l.isNotEmpty)
+              .map((l) {
+                final isDir = l.endsWith('/');
+                final clean = isDir ? l.substring(0, l.length - 1) : l;
+                final fullPath = targetWs.isEmpty ? clean : '$targetWs/$clean';
+                return <String, String>{
+                  'name': clean,
+                  'path': fullPath,
+                  'type': isDir ? 'dir' : 'file',
+                };
+              })
+              .toList();
+        } catch (_) {}
+      } else {
+        files = await RuntimeBridge.instance.listWorkspaceEntries(targetWs);
+      }
       if (mounted) {
         setState(() {
           _mentionFiles = files;
-          _showMentionMenu = true;
+          _showMentionMenu = files.isNotEmpty;
           _showSlashMenu = false;
         });
       }
@@ -216,7 +256,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     final firstWord = text.split(RegExp(r'\s+')).first.toLowerCase();
 
-    if (firstWord == '/usage' || firstWord == '/quota') {
+    if (firstWord == '/usage' ||
+        firstWord == '/quota' ||
+        firstWord == '/credits') {
       _clearInputMenus();
       await Navigator.of(context).push(
         MaterialPageRoute<void>(builder: (_) => const UsagePage()),
@@ -266,9 +308,25 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       return;
     }
 
-    if (firstWord == '/clear' || firstWord == '/new') {
+    if (firstWord == '/clear') {
       _clearInputMenus();
       await ref.read(chatProvider.notifier).clearCurrentThread();
+      return;
+    }
+
+    if (firstWord == '/new') {
+      _clearInputMenus();
+      await ref.read(sessionsProvider.notifier).createSession();
+      return;
+    }
+
+    if (firstWord == '/resume') {
+      _clearInputMenus();
+      if (widget.onOpenSessions != null) {
+        widget.onOpenSessions!();
+      } else {
+        await _showSessionPickerSheet();
+      }
       return;
     }
 
@@ -279,6 +337,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       await Navigator.of(context).push(
         MaterialPageRoute<void>(builder: (_) => const SettingsPage()),
       );
+      return;
+    }
+
+    if (firstWord == '/agents' && text.length > 7) {
+      final agentName = text.substring(7).trim();
+      _clearInputMenus();
+      await ref.read(settingsProvider.notifier).setActiveAgent(agentName);
+      await ref.read(chatProvider.notifier).appendSystemFeedback(
+            agentName.isEmpty
+                ? 'Cleared active CLI `--agent` preset.'
+                : 'Active CLI `--agent` set to **$agentName**.',
+          );
       return;
     }
 
@@ -311,31 +381,33 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     if (firstWord == '/fork' || firstWord == '/branch') {
       _clearInputMenus();
-      final prev = ref.read(sessionsProvider).activeSession;
-      final branched = await ref.read(sessionsProvider.notifier).createSession(
-            title: prev != null ? '${prev.title} (fork)' : 'Forked session',
-          );
+      final branched = await ref.read(chatProvider.notifier).forkCurrentSession();
       await ref.read(chatProvider.notifier).appendSystemFeedback(
-            'Branched into new conversation **${branched.title}**.',
+            'Forked conversation into **${branched.title}** with full history.',
           );
       return;
     }
 
-    if (firstWord == '/model' && text.length > 6) {
-      final arg = text.substring(6).trim();
-      final match = AgyModelCatalog.builtIn.where(
-        (m) =>
-            m.id.toLowerCase() == arg.toLowerCase() ||
-            m.displayName.toLowerCase().contains(arg.toLowerCase()),
-      );
-      if (match.isNotEmpty) {
-        _clearInputMenus();
-        await ref.read(settingsProvider.notifier).setModel(match.first.id);
-        await ref.read(chatProvider.notifier).appendSystemFeedback(
-              'Switched active model to **${match.first.displayName}**.',
-            );
-        return;
+    if (firstWord == '/model') {
+      if (text.length > 6) {
+        final arg = text.substring(6).trim();
+        final match = AgyModelCatalog.builtIn.where(
+          (m) =>
+              m.id.toLowerCase() == arg.toLowerCase() ||
+              m.displayName.toLowerCase().contains(arg.toLowerCase()),
+        );
+        if (match.isNotEmpty) {
+          _clearInputMenus();
+          await ref.read(settingsProvider.notifier).setModel(match.first.id);
+          await ref.read(chatProvider.notifier).appendSystemFeedback(
+                'Switched active model to **${match.first.displayName}**.',
+              );
+          return;
+        }
       }
+      _clearInputMenus();
+      await _showModelPickerSheet();
+      return;
     }
 
     if (firstWord == '/help' || firstWord == '/?') {
@@ -386,6 +458,87 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     );
   }
 
+  Future<void> _showModelPickerSheet() async {
+    final currentId = ref.read(settingsProvider).selectedModelId;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
+          children: [
+            Text(
+              'Select Active Model',
+              style: Theme.of(ctx).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+            ),
+            const SizedBox(height: 8),
+            for (final m in AgyModelCatalog.builtIn)
+              ListTile(
+                dense: true,
+                leading: Icon(
+                  m.id == currentId
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_unchecked,
+                ),
+                title: Text(m.displayName),
+                subtitle: Text(m.id),
+                onTap: () async {
+                  Navigator.of(ctx).pop();
+                  await ref.read(settingsProvider.notifier).setModel(m.id);
+                  await ref.read(chatProvider.notifier).appendSystemFeedback(
+                        'Switched active model to **${m.displayName}**.',
+                      );
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showSessionPickerSheet() async {
+    final sessions = ref.read(sessionsProvider).sessions;
+    final activeId = ref.read(sessionsProvider).activeSessionId;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
+          children: [
+            Text(
+              'Resume Session',
+              style: Theme.of(ctx).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+            ),
+            const SizedBox(height: 8),
+            for (final s in sessions)
+              ListTile(
+                dense: true,
+                selected: s.id == activeId,
+                leading: const Icon(Icons.chat_bubble_outline, size: 18),
+                title: Text(s.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                subtitle: Text(
+                  s.lastPreview ?? s.workspacePath,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  ref.read(sessionsProvider.notifier).selectSession(s.id);
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _steerSubmit() async {
     final text = _inputController.text.trim();
     if (text.isEmpty) {
@@ -394,6 +547,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       }
       return;
     }
+    final files = List<String>.from(_attachments);
     final sessionId =
         ref.read(sessionsProvider).activeSessionId ?? 'new_session';
     ref.read(draftStoreProvider.notifier).clear(sessionId);
@@ -404,7 +558,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       _showMentionMenu = false;
     });
     WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
-    await ref.read(chatProvider.notifier).steerNow(text);
+    await ref.read(chatProvider.notifier).steerNow(text, attachments: files);
   }
 
   Future<void> _pickFile() async {
@@ -477,10 +631,25 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final activeSessionId =
         ref.watch(sessionsProvider.select((s) => s.activeSessionId)) ??
             'new_session';
+    ref.listen<Map<String, ChatDraft>>(draftStoreProvider, (prev, next) {
+      if (!_draftAppliedForSession && _inputController.text.isEmpty) {
+        final restored = next[activeSessionId]?.text ?? '';
+        if (restored.isNotEmpty) {
+          _draftAppliedForSession = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted || _inputController.text.isNotEmpty) return;
+            _inputController.text = restored;
+            _inputController.selection =
+                TextSelection.collapsed(offset: restored.length);
+          });
+        }
+      }
+    });
     if (_observedActiveSessionId != activeSessionId) {
       _observedActiveSessionId = activeSessionId;
       _followLatest = false;
       _lastAutoScrolledSessionKey = null;
+      _compactBannerDismissed = false;
     }
     if (chat.messages.isNotEmpty) {
       final readyForActive = chat.loadedSessionId == null ||
@@ -502,6 +671,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       _draftSessionId = activeSessionId;
       final savedDraft =
           ref.read(draftStoreProvider.notifier).draftFor(activeSessionId);
+      _draftAppliedForSession = savedDraft.isNotEmpty;
       if (_inputController.text != savedDraft) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!mounted) return;
@@ -512,6 +682,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       }
     }
     final theme = Theme.of(context);
+    final semantic = AgySemanticColors.of(context);
+    final slashMatches = _showSlashMenu
+        ? AgyCliCatalog.slashCommands
+            .where((c) => c.matches(_inputController.text))
+            .toList()
+        : const <AgySlashCommand>[];
 
     final activeModel = AgyModelCatalog.resolve(settings.selectedModelId);
     final hostLabel = hosts.activeSshHost?.name ?? 'On Device';
@@ -918,12 +1094,68 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               child: Row(
                 children: [
                   Icon(Icons.hourglass_bottom,
-                      size: 16, color: theme.colorScheme.error),
+                      size: 16, color: theme.colorScheme.onErrorContainer),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       chat.stallWarning!,
-                      style: theme.textTheme.bodySmall,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onErrorContainer,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        if (ctxSnap.shouldCompact &&
+            !chat.isStreaming &&
+            !_compactBannerDismissed)
+          wrapCentered(
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: semantic.warningContainer,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.compress_rounded,
+                    size: 16,
+                    color: semantic.onWarningContainer,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Context ${ctxSnap.percentage}% full — compact soon for peak focus.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: semantic.onWarningContainer,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      final res =
+                          await ref.read(chatProvider.notifier).compactThread();
+                      if (!res.ok && mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text(res.message)),
+                        );
+                      }
+                    },
+                    child: const Text('Compact'),
+                  ),
+                  IconButton(
+                    iconSize: 16,
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () =>
+                        setState(() => _compactBannerDismissed = true),
+                    icon: Icon(
+                      Icons.close,
+                      color: semantic.onWarningContainer,
                     ),
                   ),
                 ],
@@ -966,7 +1198,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                         onPressed: () => ref
                             .read(chatProvider.notifier)
                             .dismissLoopWarning(),
-                        icon: const Icon(Icons.close),
+                        icon: Icon(
+                          Icons.close,
+                          color: theme.colorScheme.onErrorContainer,
+                        ),
                       ),
                     ],
                   ),
@@ -1030,7 +1265,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               ),
             ),
           ),
-        if (_showSlashMenu)
+        if (_showSlashMenu && slashMatches.isNotEmpty)
           Flexible(
             fit: FlexFit.loose,
             child: wrapCentered(
@@ -1043,8 +1278,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 child: Card(
                   child: ListView(
                     shrinkWrap: true,
-                    children: AgyCliCatalog.slashCommands
-                        .where((c) => c.matches(_inputController.text))
+                    children: slashMatches
                         .map(
                           (c) => ListTile(
                             dense: true,
@@ -1464,7 +1698,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                 color: ctxSnap.shouldCompact
                                     ? theme.colorScheme.errorContainer
                                     : ctxSnap.needsWarning
-                                        ? Colors.amber.withOpacity(0.18)
+                                        ? semantic.warningContainer
                                         : theme.colorScheme.surfaceContainerHighest,
                                 borderRadius: BorderRadius.circular(20),
                               ),
@@ -1475,9 +1709,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                     Icons.engineering_outlined,
                                     size: 13,
                                     color: ctxSnap.shouldCompact
-                                        ? theme.colorScheme.error
+                                        ? theme.colorScheme.onErrorContainer
                                         : ctxSnap.needsWarning
-                                            ? Colors.amber.shade800
+                                            ? semantic.onWarningContainer
                                             : theme.colorScheme.onSurfaceVariant,
                                   ),
                                   const SizedBox(width: 4),
@@ -1486,8 +1720,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                     style: theme.textTheme.labelSmall?.copyWith(
                                       fontWeight: FontWeight.w600,
                                       color: ctxSnap.shouldCompact
-                                          ? theme.colorScheme.error
-                                          : null,
+                                          ? theme.colorScheme.onErrorContainer
+                                          : ctxSnap.needsWarning
+                                              ? semantic.onWarningContainer
+                                              : null,
                                     ),
                                   ),
                                 ],

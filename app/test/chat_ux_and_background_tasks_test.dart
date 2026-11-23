@@ -364,4 +364,37 @@ void main() {
 
     await tester.pumpWidget(const SizedBox());
   });
+
+  test('ChatNotifier survives session creation and extractChangedFilesFromTools skips failed tools', () async {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final notifier = container.read(chatProvider.notifier);
+    await container.read(sessionsProvider.notifier).createSession(title: 'First');
+    await container.read(sessionsProvider.notifier).createSession(title: 'Second');
+    expect(identical(container.read(chatProvider.notifier), notifier), isTrue);
+
+    final changes = ChatNotifier.extractChangedFilesFromTools([
+      const ChatToolStep(
+        id: 't-fail',
+        toolName: 'write_to_file',
+        state: ToolCallState.failed,
+        parameters: {'TargetFile': 'bad.dart', 'CodeContent': 'nope'},
+      ),
+      const ChatToolStep(
+        id: 't-ok',
+        toolName: 'replace_file_content',
+        state: ToolCallState.completed,
+        parameters: {
+          'TargetFile': 'good.dart',
+          'TargetContent': 'oldLine',
+          'ReplacementContent': 'newLine',
+        },
+      ),
+    ]);
+    expect(changes, hasLength(1));
+    expect(changes.first.path, 'good.dart');
+    expect(changes.first.diff, contains('-oldLine'));
+    expect(changes.first.diff, contains('+newLine'));
+  });
 }
