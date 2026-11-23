@@ -996,7 +996,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                             ),
                           ),
                         ),
-                        if (chat.isStreaming) ...[
+                        if (isBusyOrBg) ...[
                           const SizedBox(width: 4),
                           IconButton.filledTonal(
                             tooltip: 'Stop (Esc)',
@@ -1005,12 +1005,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                               width: 36,
                               height: 36,
                             ),
-                            onPressed: () =>
-                                ref.read(chatProvider.notifier).stopStreaming(),
+                            onPressed: () {
+                              if (chat.isStreaming) {
+                                ref.read(chatProvider.notifier).stopStreaming();
+                              } else {
+                                ref
+                                    .read(chatProvider.notifier)
+                                    .forceStopAllTasks();
+                              }
+                            },
                             icon: const Icon(Icons.stop_rounded, size: 19),
                           ),
-                        ],
-                        if (isBusyOrBg) ...[
                           const SizedBox(width: 4),
                           IconButton.filledTonal(
                             tooltip: 'Steer (force send now)',
@@ -1272,7 +1277,7 @@ class _OnboardingBanner extends StatelessWidget {
                 icon,
                 const SizedBox(width: 10),
                 Expanded(child: msg),
-                if (action != null) action,
+                ?action,
               ],
             ),
     );

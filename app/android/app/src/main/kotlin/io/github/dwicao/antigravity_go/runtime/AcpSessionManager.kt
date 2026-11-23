@@ -35,14 +35,18 @@ class AcpSessionManager(
         val writer: OutputStreamWriter,
         val env: Map<String, String>,
         val defaultCwd: File,
-        val promptSummary: String,
+        @Volatile var promptSummary: String,
         val startedAtMs: Long = System.currentTimeMillis(),
         val nextId: AtomicInteger = AtomicInteger(1),
         @Volatile var sessionId: String? = null,
+        @Volatile var currentTurnId: String? = null,
+        @Volatile var promptReqId: Int = -1,
+        @Volatile var promptSent: Boolean = false,
         val terminals: ConcurrentHashMap<String, TerminalProc> = ConcurrentHashMap(),
     )
 
     private val sessions = ConcurrentHashMap<String, ActiveAcp>()
+    private val liveWorkers = ConcurrentHashMap<String, ActiveAcp>()
 
     companion object {
         /**
@@ -65,6 +69,7 @@ class AcpSessionManager(
 
     fun listBackgroundTasks(): List<Map<String, Any?>> {
         val out = mutableListOf<Map<String, Any?>>()
+        val seenTermIds = HashSet<String>()
         for ((turnId, active) in sessions) {
             out.add(
                 mapOf(
@@ -77,11 +82,27 @@ class AcpSessionManager(
                 )
             )
             for ((termId, tp) in active.terminals) {
-                if (tp.exitCode == null && tp.process.isAlive) {
+                if (tp.exitCode == null && tp.process.isAlive && seenTermIds.add(termId)) {
                     out.add(
                         mapOf(
                             "id" to termId,
                             "turnId" to turnId,
+                            "kind" to "terminal",
+                            "title" to tp.command,
+                            "status" to "running",
+                            "startedAtMs" to tp.startedAtMs,
+                        )
+                    )
+                }
+            }
+        }
+        for ((sid, active) in liveWorkers) {
+            for ((termId, tp) in active.terminals) {
+                if (tp.exitCode == null && tp.process.isAlive && seenTermIds.add(termId)) {
+                    out.add(
+                        mapOf(
+                            "id" to termId,
+                            "turnId" to sid,
                             "kind" to "terminal",
                             "title" to tp.command,
                             "status" to "running",
@@ -96,7 +117,7 @@ class AcpSessionManager(
     }
 
     fun cancelTerminal(termId: String): Boolean {
-        for (active in sessions.values) {
+        for (active in (sessions.values + liveWorkers.values)) {
             val tp = active.terminals[termId] ?: continue
             try {
                 tp.process.destroyForcibly()
@@ -122,7 +143,100 @@ class AcpSessionManager(
         onAuthenticated: () -> Unit,
     ) {
         executor.submit {
+            // Fast path: reuse an already-live ACP worker for this conversation!
+            // Zero respawn, zero session/load replay, 100% incremental turns.
+            val reused = if (!existingSessionId.isNullOrBlank()) {
+                liveWorkers.remove(existingSessionId)
+            } else {
+                null
+            }
+            if (reused != null && reused.process.isAlive) {
+                try {
+                    reused.promptSummary = summarizeCommand(prompt, maxLen = 64)
+                    reused.currentTurnId = turnId
+                    reused.promptSent = true
+                    sessions[turnId] = reused
+                    onTasksChanged()
+                    emit(
+                        mapOf(
+                            "kind" to "turn_acp_line",
+                            "turnId" to turnId,
+                            "stdoutLine" to JSONObject()
+                                .put("jsonrpc", "2.0")
+                                .put("result", JSONObject().put("sessionId", existingSessionId))
+                                .toString(),
+                        )
+                    )
+                    if (!modelId.isNullOrBlank()) {
+                        sendJson(
+                            reused.writer,
+                            JSONObject()
+                                .put("jsonrpc", "2.0")
+                                .put("id", reused.nextId.getAndIncrement())
+                                .put("method", "session/set_config_option")
+                                .put(
+                                    "params",
+                                    JSONObject()
+                                        .put("sessionId", existingSessionId)
+                                        .put("configId", "model")
+                                        .put("value", modelId)
+                                )
+                        )
+                    }
+                    val safeModeCli = when (modeCli?.lowercase()?.trim()) {
+                        null, "", "auto" -> if (skipPermissions) null else "default"
+                        else -> modeCli
+                    }
+                    if (!safeModeCli.isNullOrBlank()) {
+                        sendJson(
+                            reused.writer,
+                            JSONObject()
+                                .put("jsonrpc", "2.0")
+                                .put("id", reused.nextId.getAndIncrement())
+                                .put("method", "session/set_config_option")
+                                .put(
+                                    "params",
+                                    JSONObject()
+                                        .put("sessionId", existingSessionId)
+                                        .put("configId", "mode")
+                                        .put("value", safeModeCli)
+                                )
+                        )
+                    }
+                    val nextPromptId = reused.nextId.getAndIncrement()
+                    reused.promptReqId = nextPromptId
+                    sendJson(
+                        reused.writer,
+                        JSONObject()
+                            .put("jsonrpc", "2.0")
+                            .put("id", nextPromptId)
+                            .put("method", "session/prompt")
+                            .put(
+                                "params",
+                                JSONObject()
+                                    .put("sessionId", existingSessionId)
+                                    .put(
+                                        "prompt",
+                                        JSONArray().put(
+                                            JSONObject()
+                                                .put("type", "text")
+                                                .put("text", prompt)
+                                        )
+                                    )
+                            )
+                    )
+                    return@submit
+                } catch (t: Throwable) {
+                    log("Reused ACP worker failed, falling back to fresh spawn: ${t.message}")
+                    sessions.remove(turnId)
+                    try {
+                        reused.process.destroyForcibly()
+                    } catch (_: Throwable) {}
+                }
+            }
+
             var proc: Process? = null
+            var activeRef: ActiveAcp? = null
             try {
                 val cmd = mutableListOf(binaryPath, "acp")
                 for (dir in extraDirs) {
@@ -146,7 +260,9 @@ class AcpSessionManager(
                     env = env,
                     defaultCwd = cwd,
                     promptSummary = summarizeCommand(prompt, maxLen = 64),
+                    currentTurnId = turnId,
                 )
+                activeRef = active
                 sessions[turnId] = active
                 onTasksChanged()
 
@@ -156,10 +272,11 @@ class AcpSessionManager(
                         while (err.readLine().also { line = it } != null) {
                             val l = line ?: continue
                             log("[acp-err] $l")
+                            val targetTid = active.currentTurnId ?: turnId
                             emit(
                                 mapOf(
                                     "kind" to "turn_stderr",
-                                    "turnId" to turnId,
+                                    "turnId" to targetTid,
                                     "stderrLine" to l,
                                 )
                             )
@@ -207,7 +324,6 @@ class AcpSessionManager(
                 var triedLoadFallback = false
                 var triedNewFallback = false
                 val pendingConfigReqIds = mutableSetOf<Int>()
-                var gotTurnResult = false
 
                 BufferedReader(InputStreamReader(proc.inputStream)).use { reader ->
                     var line: String?
@@ -323,13 +439,16 @@ class AcpSessionManager(
                             acpSessionId = res?.optString("sessionId")
                                 ?.takeIf { it.isNotBlank() } ?: if (res != null) existingSessionId else null
 
-                            emit(
-                                mapOf(
-                                    "kind" to "turn_acp_line",
-                                    "turnId" to turnId,
-                                    "stdoutLine" to raw,
+                            val activeTid = active.currentTurnId
+                            if (activeTid != null) {
+                                emit(
+                                    mapOf(
+                                        "kind" to "turn_acp_line",
+                                        "turnId" to activeTid,
+                                        "stdoutLine" to raw,
+                                    )
                                 )
-                            )
+                            }
 
                             if (acpSessionId != null) {
                                 active.sessionId = acpSessionId
@@ -377,7 +496,9 @@ class AcpSessionManager(
 
                                 if (pendingConfigReqIds.isEmpty()) {
                                     promptReqId = active.nextId.getAndIncrement()
+                                    active.promptReqId = promptReqId
                                     promptSent = true
+                                    active.promptSent = true
                                     sendJson(
                                         writer,
                                         JSONObject()
@@ -409,7 +530,9 @@ class AcpSessionManager(
                         if (msgId is Number && pendingConfigReqIds.remove(msgId.toInt())) {
                             if (pendingConfigReqIds.isEmpty() && !promptSent && acpSessionId != null) {
                                 promptReqId = active.nextId.getAndIncrement()
+                                active.promptReqId = promptReqId
                                 promptSent = true
+                                active.promptSent = true
                                 sendJson(
                                     writer,
                                     JSONObject()
@@ -448,8 +571,23 @@ class AcpSessionManager(
                             continue
                         }
 
+                        val activeTid = active.currentTurnId
+                        if (activeTid == null) {
+                            // Worker is idle between turns: forward reactive background wakeups without replaying history.
+                            if (method == "session/update" || method == "session/request_permission") {
+                                emit(
+                                    mapOf(
+                                        "kind" to "acp_wakeup",
+                                        "sessionId" to (active.sessionId ?: ""),
+                                        "stdoutLine" to raw,
+                                    )
+                                )
+                            }
+                            continue
+                        }
+
                         // Ignore historical replay notifications from session/load until session/prompt is sent.
-                        if (!shouldForwardAcpNotification(method, promptSent)) {
+                        if (!shouldForwardAcpNotification(method, active.promptSent)) {
                             continue
                         }
 
@@ -457,69 +595,85 @@ class AcpSessionManager(
                         emit(
                             mapOf(
                                 "kind" to "turn_acp_line",
-                                "turnId" to turnId,
+                                "turnId" to activeTid,
                                 "stdoutLine" to raw,
                             )
                         )
 
-                        if (msgId is Number && msgId.toInt() == promptReqId) {
-                            gotTurnResult = true
-                            val finished = sessions.remove(turnId)
-                            finished?.terminals?.values?.forEach { term ->
-                                try {
-                                    term.process.destroyForcibly()
-                                } catch (_: Throwable) {}
-                            }
-                            if (finished != null) {
+                        if (msgId is Number && msgId.toInt() == active.promptReqId) {
+                            sessions.remove(activeTid)
+                            active.currentTurnId = null
+                            active.promptReqId = -1
+                            emit(
+                                mapOf(
+                                    "kind" to "turn_exit",
+                                    "turnId" to activeTid,
+                                    "exitCode" to 0,
+                                )
+                            )
+                            val sid = active.sessionId
+                            if (sid != null && proc.isAlive) {
+                                // Keep worker alive for incremental follow-ups & background tasks/terminals!
+                                while (liveWorkers.size >= 3) {
+                                    val oldestKey = liveWorkers.keys.firstOrNull() ?: break
+                                    liveWorkers.remove(oldestKey)?.let { evict ->
+                                        evict.terminals.values.forEach { t -> runCatching { t.process.destroyForcibly() } }
+                                        runCatching { evict.writer.close() }
+                                        runCatching { evict.process.destroyForcibly() }
+                                    }
+                                }
+                                liveWorkers[sid] = active
                                 onTasksChanged()
+                                continue
                             }
                             break
                         }
                     }
                 }
 
-                try {
-                    writer.close()
-                } catch (_: Throwable) {}
-                try {
-                    errFuture.get(2, TimeUnit.SECONDS)
-                } catch (_: Throwable) {}
-                val exitCode = if (gotTurnResult) {
-                    if (!proc.waitFor(2, TimeUnit.SECONDS)) {
+                val danglingTurnId = active.currentTurnId
+                if (danglingTurnId != null) {
+                    try {
+                        errFuture.get(2, TimeUnit.SECONDS)
+                    } catch (_: Throwable) {}
+                    val exitCode = if (proc.waitFor(2, TimeUnit.SECONDS)) proc.exitValue() else {
                         proc.destroyForcibly()
-                        0
-                    } else {
-                        proc.exitValue()
+                        1
                     }
-                } else {
-                    proc.waitFor()
-                }
-                emit(
-                    mapOf(
-                        "kind" to "turn_exit",
-                        "turnId" to turnId,
-                        "exitCode" to if (gotTurnResult) 0 else exitCode,
+                    emit(
+                        mapOf(
+                            "kind" to "turn_exit",
+                            "turnId" to danglingTurnId,
+                            "exitCode" to exitCode,
+                        )
                     )
-                )
+                }
             } catch (t: Throwable) {
+                val activeTid = activeRef?.currentTurnId ?: turnId
                 emit(
                     mapOf(
                         "kind" to "turn_stderr",
-                        "turnId" to turnId,
+                        "turnId" to activeTid,
                         "stderrLine" to (t.message ?: t.toString()),
                     )
                 )
-                emit(mapOf("kind" to "turn_exit", "turnId" to turnId, "exitCode" to 1))
+                emit(mapOf("kind" to "turn_exit", "turnId" to activeTid, "exitCode" to 1))
             } finally {
-                val removed = sessions.remove(turnId)
-                removed?.terminals?.values?.forEach { term ->
+                val tid = activeRef?.currentTurnId
+                val removed = if (tid != null) sessions.remove(tid) else sessions.remove(turnId)
+                val sid = activeRef?.sessionId
+                if (sid != null) {
+                    liveWorkers.remove(sid, activeRef)
+                }
+                (removed ?: activeRef)?.terminals?.values?.forEach { term ->
                     try {
                         term.process.destroyForcibly()
                     } catch (_: Throwable) {}
                 }
-                if (removed != null) {
-                    onTasksChanged()
-                }
+                onTasksChanged()
+                try {
+                    activeRef?.writer?.close()
+                } catch (_: Throwable) {}
                 try {
                     proc?.destroy()
                 } catch (_: Throwable) {}
@@ -552,13 +706,17 @@ class AcpSessionManager(
 
     fun cancel(turnId: String) {
         val active = sessions.remove(turnId) ?: return
+        active.currentTurnId = null
+        val sid = active.sessionId
+        if (!sid.isNullOrBlank()) {
+            liveWorkers.remove(sid, active)
+        }
         active.terminals.values.forEach { term ->
             try {
                 term.process.destroyForcibly()
             } catch (_: Throwable) {}
         }
         onTasksChanged()
-        val sid = active.sessionId
         if (!sid.isNullOrBlank()) {
             try {
                 sendJson(
@@ -582,6 +740,7 @@ class AcpSessionManager(
         var count = 0
         for (turnId in keys) {
             val active = sessions.remove(turnId) ?: continue
+            active.currentTurnId = null
             count++
             active.terminals.values.forEach { term ->
                 try {
@@ -595,6 +754,22 @@ class AcpSessionManager(
                 active.process.destroyForcibly()
             } catch (_: Throwable) {}
             emit(mapOf("kind" to "turn_exit", "turnId" to turnId, "exitCode" to 137))
+        }
+        val workerKeys = liveWorkers.keys.toList()
+        for (sid in workerKeys) {
+            val worker = liveWorkers.remove(sid) ?: continue
+            count++
+            worker.terminals.values.forEach { term ->
+                try {
+                    term.process.destroyForcibly()
+                } catch (_: Throwable) {}
+            }
+            try {
+                worker.writer.close()
+            } catch (_: Throwable) {}
+            try {
+                worker.process.destroyForcibly()
+            } catch (_: Throwable) {}
         }
         if (count > 0) onTasksChanged()
         return count

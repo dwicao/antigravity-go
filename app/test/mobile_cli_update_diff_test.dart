@@ -1,6 +1,7 @@
 import 'package:agy_client/agy_client.dart';
 import 'package:antigravity_go/runtime/runtime_models.dart';
 import 'package:antigravity_go/state/chat_state.dart';
+import 'package:antigravity_go/state/ci_watch_state.dart';
 import 'package:antigravity_go/state/runtime_state.dart';
 import 'package:antigravity_go/state/sessions_state.dart';
 import 'package:antigravity_go/state/update_state.dart';
@@ -359,5 +360,83 @@ void main() {
     expect(fakeUpdate.cancelledCalled, isTrue);
 
     await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets(
+      'ChatScreen shows Stop button and Background task pill whenever a background CI or shell task runs',
+      (tester) async {
+    final container = ProviderContainer(
+      overrides: [
+        sessionsProvider.overrideWith(
+          () => _FakeSessionsNotifier(const SessionsState(activeSessionId: 's1')),
+        ),
+        runtimeProvider.overrideWith(
+          () => _FakeRuntimeNotifier(
+            RuntimeUiState(
+              backgroundTasks: [
+                NativeBackgroundTask(
+                  id: 'term-bg-2',
+                  turnId: 'turn-bg-2',
+                  kind: 'terminal',
+                  title: 'gh run watch 123',
+                  status: 'running',
+                  startedAt: DateTime.now(),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(
+          home: Scaffold(body: ChatScreen()),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byTooltip('Stop (Esc)'), findsOneWidget);
+    expect(find.text('1 bg'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(milliseconds: 500));
+  });
+
+  test('CiWatchNotifier detects CI failure and produces autoFixPrompt', () async {
+    String? receivedPrompt;
+    final notifier = CiWatchNotifier()
+      ..shellRunnerOverride = ((cmd, cwd) async {
+        if (cmd.contains('gh run list')) {
+          return '[{"databaseId": 999, "workflowName": "CI", "status": "completed", "conclusion": "failure", "url": "https://github.com/o/r/runs/999", "headBranch": "main"}]';
+        }
+        return 'flutter analyze failed: 1 issue';
+      })
+      ..onCompletedCallback = ({
+        required watch,
+        required passed,
+        required summaryMarkdown,
+        autoFixPrompt,
+      }) async {
+        receivedPrompt = autoFixPrompt;
+      };
+
+    final container = ProviderContainer(
+      overrides: [ciWatchProvider.overrideWith(() => notifier)],
+    );
+    addTearDown(container.dispose);
+
+    await container.read(ciWatchProvider.notifier).watchLatestRun(
+          cwd: '/tmp/repo',
+          sessionId: 's1',
+        );
+
+    expect(container.read(ciWatchProvider), isEmpty);
+    expect(receivedPrompt, contains('999'));
+    expect(receivedPrompt, contains('flutter analyze failed'));
   });
 }

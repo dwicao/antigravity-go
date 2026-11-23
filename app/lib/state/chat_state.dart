@@ -9,6 +9,7 @@ import 'package:uuid/uuid.dart';
 import '../remote/ssh_agy_runner.dart';
 import '../runtime/runtime_bridge.dart';
 import 'auth_state.dart';
+import 'ci_watch_state.dart';
 import 'hosts_state.dart';
 import 'permissions_state.dart';
 import 'projects_state.dart';
@@ -337,6 +338,11 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       _stallWatchdog?.cancel();
       _activeSub?.cancel();
     });
+    Future.microtask(() {
+      if (!ref.mounted) return;
+      ref.read(ciWatchProvider.notifier).onCompletedCallback =
+          _handleCiWatchCompleted;
+    });
     final activeId = ref.watch(
       sessionsProvider.select((s) => s.activeSessionId),
     );
@@ -345,6 +351,19 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       Future.microtask(() => _loadMessages(activeId));
     }
     return const ChatThreadState();
+  }
+
+  Future<void> _handleCiWatchCompleted({
+    required CiWatchItem watch,
+    required bool passed,
+    required String summaryMarkdown,
+    String? autoFixPrompt,
+  }) async {
+    if (!ref.mounted) return;
+    await appendSystemFeedback(summaryMarkdown);
+    if (!passed && autoFixPrompt != null && ref.mounted) {
+      await sendPrompt(autoFixPrompt, force: false);
+    }
   }
 
   Future<void> _loadMessages(String sessionId) async {
@@ -630,6 +649,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     final idx = msgs.indexWhere((m) => m.id == assistantId);
     if (idx < 0) return;
     final current = msgs[idx];
+    // Completed turns are strictly immutable: ignore any late/replayed events.
+    if (!current.isStreaming || current.completedAt != null) return;
 
     switch (evt) {
       case AgyInitEvent():
@@ -937,6 +958,35 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     );
     await _persistMessages(session.id, persisted);
 
+    // If this turn ran a `git push` command on a local repo, automatically watch CI.
+    if (_activeLocalRequest != null ||
+        persisted.any((m) => m.id == assistantId)) {
+      final completedMsg =
+          persisted.where((m) => m.id == assistantId).firstOrNull;
+      final ranGitPush = completedMsg?.tools.any((t) {
+            final cmd = (t.parameters['CommandLine'] ??
+                    t.parameters['command'] ??
+                    '')
+                .toString()
+                .toLowerCase();
+            return cmd.contains('git push');
+          }) ??
+          false;
+      if (ranGitPush && ref.mounted) {
+        final cwd = session.workspacePath.isNotEmpty
+            ? session.workspacePath
+            : ref.read(projectsProvider).activeProject.primaryFolder;
+        if (cwd.isNotEmpty) {
+          unawaited(
+            ref.read(ciWatchProvider.notifier).watchLatestRun(
+                  cwd: cwd,
+                  sessionId: session.id,
+                ),
+          );
+        }
+      }
+    }
+
     if (state.queuedPrompts.isNotEmpty) {
       final nextPrompt = state.queuedPrompts.first;
       state = state.copyWith(
@@ -1060,6 +1110,10 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       removeQueuedPrompt(queuedIndex);
       return;
     }
+    if (kindName == 'ci' && nativeTaskId != null) {
+      ref.read(ciWatchProvider.notifier).cancelWatch(nativeTaskId);
+      return;
+    }
     if (nativeTaskId != null &&
         !nativeTaskId.startsWith('session:') &&
         !nativeTaskId.startsWith('tool:')) {
@@ -1088,6 +1142,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
   }
 
   Future<int> forceStopAllTasks() async {
+    ref.read(ciWatchProvider.notifier).cancelAll();
     if (state.isStreaming || _activeStreamingSessionId != null) {
       await stopStreaming();
     }

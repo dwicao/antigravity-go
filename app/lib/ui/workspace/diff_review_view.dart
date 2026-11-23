@@ -4,8 +4,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../runtime/runtime_bridge.dart';
 import '../../state/chat_state.dart';
+import '../../state/ci_watch_state.dart';
 import '../../state/projects_state.dart';
 import '../../state/runtime_state.dart';
+import '../../state/sessions_state.dart';
 import '../chat/change_card.dart';
 
 class DiffReviewView extends ConsumerStatefulWidget {
@@ -115,6 +117,14 @@ class _DiffReviewViewState extends ConsumerState<DiffReviewView> {
             feedbackText,
             changedFiles: res.files,
           );
+      if (res.pushed) {
+        final sid = ref.read(sessionsProvider).activeSessionId ?? 'default';
+        await ref.read(ciWatchProvider.notifier).watchLatestRun(
+              cwd: _activeCwd(),
+              sessionId: sid,
+              branch: branchLabel,
+            );
+      }
       await _load();
     } finally {
       if (mounted) setState(() => _pushing = false);

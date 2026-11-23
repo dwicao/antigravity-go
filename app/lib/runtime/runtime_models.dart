@@ -98,6 +98,7 @@ class RuntimeEvent {
     this.status,
     this.logLine,
     this.turnId,
+    this.sessionId,
     this.stdoutLine,
     this.stderrLine,
     this.exitCode,
@@ -108,6 +109,7 @@ class RuntimeEvent {
   final RuntimeStatus? status;
   final String? logLine;
   final String? turnId;
+  final String? sessionId;
   final String? stdoutLine;
   final String? stderrLine;
   final int? exitCode;
@@ -130,6 +132,7 @@ class RuntimeEvent {
           : null,
       logLine: map['logLine']?.toString(),
       turnId: map['turnId']?.toString(),
+      sessionId: map['sessionId']?.toString(),
       stdoutLine: map['stdoutLine']?.toString(),
       stderrLine: map['stderrLine']?.toString(),
       exitCode: (map['exitCode'] as num?)?.toInt(),

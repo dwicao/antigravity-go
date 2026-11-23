@@ -27,6 +27,7 @@ IconData iconForBackgroundTask(BackgroundTaskKind kind) {
     BackgroundTaskKind.tool => Icons.build_circle_outlined,
     BackgroundTaskKind.session => Icons.forum_outlined,
     BackgroundTaskKind.queued => Icons.schedule_send_outlined,
+    BackgroundTaskKind.ci => Icons.rocket_launch_outlined,
   };
 }
 

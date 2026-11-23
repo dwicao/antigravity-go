@@ -2,6 +2,7 @@ import 'package:agy_client/agy_client.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'chat_state.dart';
+import 'ci_watch_state.dart';
 import 'runtime_state.dart';
 import 'sessions_state.dart';
 
@@ -11,6 +12,7 @@ enum BackgroundTaskKind {
   tool,
   session,
   queued,
+  ci,
 }
 
 class BackgroundTaskItem {
@@ -60,10 +62,28 @@ final backgroundTasksProvider = Provider<List<BackgroundTaskItem>>((ref) {
   final runtime = ref.watch(runtimeProvider);
   final chat = ref.watch(chatProvider);
   final sessions = ref.watch(sessionsProvider);
+  final ciWatches = ref.watch(ciWatchProvider);
 
   final items = <BackgroundTaskItem>[];
   final seenNativeIds = <String>{};
   final nativeTerminalTitles = <String>{};
+
+  for (final ci in ciWatches) {
+    items.add(
+      BackgroundTaskItem(
+        id: ci.id,
+        kind: BackgroundTaskKind.ci,
+        title: _summarizeTitle('CI: ${ci.workflowName} (${ci.status})'),
+        subtitle: ci.branch != null && ci.branch!.isNotEmpty
+            ? 'Watching GitHub Actions · ${ci.branch}'
+            : 'Watching GitHub Actions',
+        startedAt: ci.startedAt,
+        sessionId: ci.sessionId,
+        nativeTaskId: ci.id,
+        canCancel: true,
+      ),
+    );
+  }
 
   // 1. Native background shell processes (from AcpSessionManager terminal/create).
   for (final t in runtime.backgroundTasks) {
