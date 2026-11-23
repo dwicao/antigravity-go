@@ -91,6 +91,22 @@ class SshAgyRunner {
           '--conversation',
           _shellQuote(request.conversationId!),
         ],
+        if (request.agentName != null && request.agentName!.isNotEmpty) ...[
+          '--agent',
+          _shellQuote(request.agentName!),
+        ],
+        if (request.printTimeoutSeconds != null &&
+            request.printTimeoutSeconds! > 0) ...[
+          '--print-timeout',
+          request.printTimeoutSeconds!.toString(),
+        ],
+        if (request.disableSlashCommands) '--disable-slash-commands',
+        if (request.continueLast) '--continue',
+        if (request.remoteAgent != null &&
+            request.remoteAgent!.isNotEmpty) ...[
+          '--remote-agent',
+          _shellQuote(request.remoteAgent!),
+        ],
         if (request.dangerouslySkipPermissions)
           '--dangerously-skip-permissions',
       ];

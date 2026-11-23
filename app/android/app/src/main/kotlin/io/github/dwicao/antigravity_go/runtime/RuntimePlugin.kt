@@ -139,6 +139,11 @@ class RuntimePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChann
                     allowNonWorkspaceAccess = call.argument<Boolean>("allowNonWorkspaceAccess") ?: true,
                     useAcp = call.argument<Boolean>("useAcp") ?: true,
                     geminiApiKey = call.argument<String>("geminiApiKey"),
+                    agent = call.argument<String>("agent"),
+                    printTimeoutSeconds = call.argument<Int>("printTimeoutSeconds"),
+                    disableSlashCommands = call.argument<Boolean>("disableSlashCommands") ?: false,
+                    continueLast = call.argument<Boolean>("continueLast") ?: false,
+                    remoteAgent = call.argument<String>("remoteAgent"),
                 )
                 result.success(null)
             }
@@ -160,6 +165,10 @@ class RuntimePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChann
                 val ok = ctrl.cancelBackgroundTask(call.argument<String>("taskId") ?: "")
                 result.success(ok)
             }
+            "forceStopAllBackgroundTasks" -> {
+                val count = ctrl.forceStopAllBackgroundTasks()
+                result.success(count)
+            }
             "writeFile" -> {
                 val ok = ctrl.writeTextFile(
                     call.argument<String>("path") ?: "",
@@ -173,6 +182,16 @@ class RuntimePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChann
             "gitDiff" -> {
                 ioExecutor.submit {
                     val res = ctrl.gitDiff(call.argument<String>("cwd"))
+                    mainHandler.post { result.success(res) }
+                }
+            }
+            "gitCommitAndPush" -> {
+                val cwd = call.argument<String>("cwd")
+                val message = call.argument<String>("message") ?: ""
+                val stageAll = call.argument<Boolean>("stageAll") ?: true
+                val push = call.argument<Boolean>("push") ?: true
+                ioExecutor.submit {
+                    val res = ctrl.gitCommitAndPush(cwd, message, stageAll, push)
                     mainHandler.post { result.success(res) }
                 }
             }

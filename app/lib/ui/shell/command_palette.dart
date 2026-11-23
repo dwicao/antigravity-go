@@ -5,10 +5,12 @@ import '../../state/projects_state.dart';
 import '../../state/sessions_state.dart';
 import '../../state/side_panel_state.dart';
 import '../automations/automations_page.dart';
+import '../cli/cli_manager_page.dart';
 import '../customizations/customizations_page.dart';
 import '../phone/phone_control_page.dart';
 import '../remote/ssh_hosts_page.dart';
 import '../settings/settings_page.dart';
+import '../update/update_sheet.dart';
 import '../usage/usage_page.dart';
 
 /// Antigravity Desktop `Ctrl+K` Search & Command Palette.
@@ -55,6 +57,26 @@ class _CommandPaletteDialogState extends ConsumerState<CommandPaletteDialog> {
           Navigator.of(context).push(
             MaterialPageRoute<void>(builder: (_) => const UsagePage()),
           );
+        },
+      ),
+      (
+        'Antigravity CLI & Subcommands',
+        'Run agy mcp, plugin, agent, remote-control, models & flags',
+        Icons.terminal,
+        () {
+          Navigator.of(context).pop();
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(builder: (_) => const CliManagerPage()),
+          );
+        },
+      ),
+      (
+        'Check for App Updates',
+        'Download APK update with live progress, data usage & cancel',
+        Icons.system_update_alt,
+        () {
+          Navigator.of(context).pop();
+          UpdateSheet.show(context);
         },
       ),
       (

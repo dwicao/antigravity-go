@@ -2,6 +2,7 @@
 /// quota/usage ledger for Google Antigravity CLI (`agy`).
 library;
 
+export 'src/models/agy_cli_catalog.dart';
 export 'src/models/agy_model.dart';
 export 'src/models/auth_status.dart';
 export 'src/models/automation_task.dart';

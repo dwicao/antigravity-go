@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import '../../state/chat_state.dart';
 import '../../theme/app_theme.dart';
 import '../auth/google_login_sheet.dart';
+import 'change_card.dart';
 import 'render/agy_markdown.dart';
 import 'secret_mask.dart';
 
@@ -285,6 +286,8 @@ class MessageBubble extends StatelessWidget {
               label: const Text('Sign in with Google Account'),
             ),
           ],
+          if (!message.isStreaming && message.changedFiles.isNotEmpty)
+            ChangeCard(files: message.changedFiles),
           if (!message.isStreaming) ...[
             const SizedBox(height: 8),
             _MessageMetricsFooter(message: message),

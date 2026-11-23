@@ -18,6 +18,11 @@ class AppSettings {
     this.selectedModelId = 'Orchestrator (Neon)',
     this.reasoningEffort = 'medium',
     this.executionMode = 'default',
+    this.activeAgent = '',
+    this.printTimeoutSeconds = 0,
+    this.disableSlashCommands = false,
+    this.continueLast = false,
+    this.remoteAgent = '',
   });
 
   final ThemeMode themeMode;
@@ -30,6 +35,11 @@ class AppSettings {
   final String selectedModelId;
   final String reasoningEffort;
   final String executionMode;
+  final String activeAgent;
+  final int printTimeoutSeconds;
+  final bool disableSlashCommands;
+  final bool continueLast;
+  final String remoteAgent;
 
   bool get dangerouslySkipPermissions =>
       permissionPreset == AntigravityPermissionPreset.turbo;
@@ -45,6 +55,11 @@ class AppSettings {
     String? selectedModelId,
     String? reasoningEffort,
     String? executionMode,
+    String? activeAgent,
+    int? printTimeoutSeconds,
+    bool? disableSlashCommands,
+    bool? continueLast,
+    String? remoteAgent,
   }) {
     return AppSettings(
       themeMode: themeMode ?? this.themeMode,
@@ -58,6 +73,12 @@ class AppSettings {
       selectedModelId: selectedModelId ?? this.selectedModelId,
       reasoningEffort: reasoningEffort ?? this.reasoningEffort,
       executionMode: executionMode ?? this.executionMode,
+      activeAgent: activeAgent ?? this.activeAgent,
+      printTimeoutSeconds: printTimeoutSeconds ?? this.printTimeoutSeconds,
+      disableSlashCommands:
+          disableSlashCommands ?? this.disableSlashCommands,
+      continueLast: continueLast ?? this.continueLast,
+      remoteAgent: remoteAgent ?? this.remoteAgent,
     );
   }
 }
@@ -123,6 +144,12 @@ class SettingsNotifier extends Notifier<AppSettings> {
           prefs.getString('agy_selected_model') ?? 'Orchestrator (Neon)',
       reasoningEffort: prefs.getString('agy_effort') ?? 'medium',
       executionMode: savedExecMode,
+      activeAgent: prefs.getString('agy_active_agent') ?? '',
+      printTimeoutSeconds: prefs.getInt('agy_print_timeout') ?? 0,
+      disableSlashCommands:
+          prefs.getBool('agy_disable_slash_commands') ?? false,
+      continueLast: prefs.getBool('agy_continue_last') ?? false,
+      remoteAgent: prefs.getString('agy_remote_agent') ?? '',
     );
   }
 
@@ -206,5 +233,36 @@ class SettingsNotifier extends Notifier<AppSettings> {
     state = state.copyWith(executionMode: mode);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('agy_exec_mode', mode);
+  }
+
+  Future<void> setActiveAgent(String agent) async {
+    state = state.copyWith(activeAgent: agent);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('agy_active_agent', agent);
+  }
+
+  Future<void> setPrintTimeoutSeconds(int seconds) async {
+    final safe = seconds < 0 ? 0 : seconds;
+    state = state.copyWith(printTimeoutSeconds: safe);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('agy_print_timeout', safe);
+  }
+
+  Future<void> setDisableSlashCommands(bool disabled) async {
+    state = state.copyWith(disableSlashCommands: disabled);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('agy_disable_slash_commands', disabled);
+  }
+
+  Future<void> setContinueLast(bool enabled) async {
+    state = state.copyWith(continueLast: enabled);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('agy_continue_last', enabled);
+  }
+
+  Future<void> setRemoteAgent(String remoteAgent) async {
+    state = state.copyWith(remoteAgent: remoteAgent);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('agy_remote_agent', remoteAgent);
   }
 }

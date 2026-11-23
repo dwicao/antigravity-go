@@ -309,7 +309,26 @@ class RuntimeController private constructor(private val appContext: Context) {
             cancelTurn(taskId)
             return true
         }
-        return false
+        // Fallback: clear all active tasks if native id couldn't be matched cleanly
+        return forceStopAllBackgroundTasks() > 0
+    }
+
+    fun forceStopAllBackgroundTasks(): Int {
+        var count = acpManager.forceStopAll()
+        val turnIds = activeTurns.keys.toList()
+        for (tid in turnIds) {
+            val proc = activeTurns.remove(tid)
+            nonAcpTurnMeta.remove(tid)
+            if (proc != null) {
+                count++
+                try {
+                    proc.destroyForcibly()
+                } catch (_: Throwable) {}
+                emit(mapOf("kind" to "turn_exit", "turnId" to tid, "exitCode" to 137))
+            }
+        }
+        emitBackgroundTasks()
+        return count
     }
 
     fun statusMap(): Map<String, Any?> {
@@ -971,6 +990,11 @@ class RuntimeController private constructor(private val appContext: Context) {
         allowNonWorkspaceAccess: Boolean,
         useAcp: Boolean,
         geminiApiKey: String?,
+        agent: String? = null,
+        printTimeoutSeconds: Int? = null,
+        disableSlashCommands: Boolean = false,
+        continueLast: Boolean = false,
+        remoteAgent: String? = null,
     ) {
         if (!binaryFile.exists()) {
             emit(mapOf("kind" to "turn_exit", "turnId" to turnId, "exitCode" to 127))
@@ -1024,7 +1048,14 @@ class RuntimeController private constructor(private val appContext: Context) {
             extraEnv["GEMINI_API_KEY"] = geminiApiKey
         }
 
-        if (useAcp) {
+        val useAcpForTurn = useAcp &&
+            agent.isNullOrBlank() &&
+            printTimeoutSeconds == null &&
+            !disableSlashCommands &&
+            !continueLast &&
+            remoteAgent.isNullOrBlank()
+
+        if (useAcpForTurn) {
             acpManager.startTurn(
                 turnId = turnId,
                 binaryPath = binaryFile.absolutePath,
@@ -1073,6 +1104,21 @@ class RuntimeController private constructor(private val appContext: Context) {
                 }
                 if (!conversationId.isNullOrBlank()) {
                     cmd.addAll(listOf("--conversation", conversationId))
+                }
+                if (!agent.isNullOrBlank()) {
+                    cmd.addAll(listOf("--agent", agent))
+                }
+                if (printTimeoutSeconds != null && printTimeoutSeconds > 0) {
+                    cmd.addAll(listOf("--print-timeout", printTimeoutSeconds.toString()))
+                }
+                if (disableSlashCommands) {
+                    cmd.add("--disable-slash-commands")
+                }
+                if (continueLast) {
+                    cmd.add("--continue")
+                }
+                if (!remoteAgent.isNullOrBlank()) {
+                    cmd.addAll(listOf("--remote-agent", remoteAgent))
                 }
                 if (skipPermissions) {
                     cmd.add("--dangerously-skip-permissions")
@@ -1246,9 +1292,65 @@ class RuntimeController private constructor(private val appContext: Context) {
         val dir = if (!cwd.isNullOrBlank()) File(cwd) else workspaceDir
         val status = runShell("git status --short 2>&1 || true", dir.absolutePath)
         val diff = runShell("git diff 2>&1 || true", dir.absolutePath)
+        val numstat = runShell("git diff --numstat 2>&1 || true", dir.absolutePath)
+        val stagedNumstat = runShell("git diff --cached --numstat 2>&1 || true", dir.absolutePath)
+        val branch = runShell("git rev-parse --abbrev-ref HEAD 2>/dev/null || true", dir.absolutePath).trim()
+        val combinedNumstat = listOf(numstat.trim(), stagedNumstat.trim())
+            .filter { it.isNotEmpty() }
+            .joinToString("\n")
         return mapOf(
             "status" to status,
             "diff" to diff,
+            "numstat" to combinedNumstat,
+            "branch" to branch,
+        )
+    }
+
+    fun gitCommitAndPush(
+        cwd: String?,
+        message: String,
+        stageAll: Boolean,
+        push: Boolean,
+    ): Map<String, Any?> {
+        val dir = if (!cwd.isNullOrBlank()) File(cwd) else workspaceDir
+        val safeMsg = message.trim().ifEmpty { "Update workspace changes" }
+            .replace("\"", "\\\"")
+        val branch = runShell("git rev-parse --abbrev-ref HEAD 2>/dev/null || true", dir.absolutePath).trim()
+        val out = StringBuilder()
+        var commitOk = true
+        if (stageAll) {
+            val addOut = runShell("git add -A 2>&1", dir.absolutePath)
+            if (addOut.isNotBlank()) out.appendLine(addOut.trim())
+        }
+        val commitOut = runShell("git commit -m \"$safeMsg\" 2>&1", dir.absolutePath)
+        if (commitOut.isNotBlank()) out.appendLine(commitOut.trim())
+        if (commitOut.contains("nothing to commit", ignoreCase = true) ||
+            commitOut.contains("error:", ignoreCase = true) ||
+            commitOut.contains("fatal:", ignoreCase = true)
+        ) {
+            commitOk = commitOut.contains("create mode", ignoreCase = true) ||
+                commitOut.contains("files changed", ignoreCase = true) ||
+                commitOut.contains("file changed", ignoreCase = true)
+        }
+        val headHash = runShell("git rev-parse --short HEAD 2>/dev/null || true", dir.absolutePath).trim()
+        val numstat = runShell("git show --numstat --format=\"\" HEAD 2>/dev/null || true", dir.absolutePath)
+        val nameStatus = runShell("git show --name-status --format=\"\" HEAD 2>/dev/null || true", dir.absolutePath)
+        var pushOk = !push
+        if (push && commitOk) {
+            val pushOut = runShell("git push 2>&1", dir.absolutePath)
+            if (pushOut.isNotBlank()) out.appendLine(pushOut.trim())
+            pushOk = !pushOut.contains("fatal:", ignoreCase = true) &&
+                !pushOut.contains("error:", ignoreCase = true) &&
+                !pushOut.contains("rejected", ignoreCase = true)
+        }
+        return mapOf(
+            "ok" to (commitOk && pushOk),
+            "pushed" to (push && pushOk),
+            "branch" to branch,
+            "commitHash" to headHash,
+            "output" to out.toString().trim(),
+            "numstat" to numstat,
+            "nameStatus" to nameStatus,
         )
     }
 

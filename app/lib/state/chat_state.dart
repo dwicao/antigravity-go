@@ -86,6 +86,7 @@ class ChatMessage {
     this.modelId,
     this.reasoningEffort,
     this.completedAt,
+    this.changedFiles = const [],
   });
 
   final String id;
@@ -103,6 +104,7 @@ class ChatMessage {
   final String? modelId;
   final String? reasoningEffort;
   final DateTime? completedAt;
+  final List<FileChangeEntry> changedFiles;
 
   ChatMessage copyWith({
     String? text,
@@ -116,6 +118,7 @@ class ChatMessage {
     String? modelId,
     String? reasoningEffort,
     DateTime? completedAt,
+    List<FileChangeEntry>? changedFiles,
   }) {
     return ChatMessage(
       id: id,
@@ -133,6 +136,7 @@ class ChatMessage {
       modelId: modelId ?? this.modelId,
       reasoningEffort: reasoningEffort ?? this.reasoningEffort,
       completedAt: completedAt ?? this.completedAt,
+      changedFiles: changedFiles ?? this.changedFiles,
     );
   }
 
@@ -150,6 +154,8 @@ class ChatMessage {
         if (modelId != null) 'modelId': modelId,
         if (reasoningEffort != null) 'reasoningEffort': reasoningEffort,
         if (completedAt != null) 'completedAt': completedAt!.toIso8601String(),
+        if (changedFiles.isNotEmpty)
+          'changedFiles': changedFiles.map((f) => f.toJson()).toList(),
       };
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) {
@@ -179,6 +185,10 @@ class ChatMessage {
       modelId: json['modelId'] as String?,
       reasoningEffort: json['reasoningEffort'] as String?,
       completedAt: DateTime.tryParse(json['completedAt'] as String? ?? ''),
+      changedFiles: (json['changedFiles'] as List<dynamic>? ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(FileChangeEntry.fromJson)
+          .toList(),
     );
   }
 }
@@ -543,6 +553,13 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       dangerouslySkipPermissions: skipPerms,
       allowNonWorkspaceAccess: allowNonWorkspace,
       geminiApiKey: apiKey,
+      agentName: settings.activeAgent.isEmpty ? null : settings.activeAgent,
+      printTimeoutSeconds: settings.printTimeoutSeconds > 0
+          ? settings.printTimeoutSeconds
+          : null,
+      disableSlashCommands: settings.disableSlashCommands,
+      continueLast: settings.continueLast,
+      remoteAgent: settings.remoteAgent.isEmpty ? null : settings.remoteAgent,
     );
 
     Stream<AgyChatEvent> stream;
@@ -859,6 +876,9 @@ class ChatNotifier extends Notifier<ChatThreadState> {
             modelId: _turnModelId[assistantId] ?? cur.modelId,
             reasoningEffort: _turnEffort[assistantId] ?? cur.reasoningEffort,
             completedAt: cur.completedAt ?? DateTime.now(),
+            changedFiles: cur.changedFiles.isNotEmpty
+                ? cur.changedFiles
+                : extractChangedFilesFromTools(finalizedTools),
           ),
         );
       }
@@ -944,16 +964,125 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     }
   }
 
+  static List<FileChangeEntry> extractChangedFilesFromTools(
+    List<ChatToolStep> tools,
+  ) {
+    final byPath = <String, FileChangeEntry>{};
+    for (final step in tools) {
+      final nameLower = step.toolName.toLowerCase();
+      final isFileEdit = nameLower.contains('write') ||
+          nameLower.contains('edit') ||
+          nameLower.contains('replace') ||
+          nameLower.contains('patch') ||
+          nameLower.contains('create_file');
+      if (!isFileEdit) continue;
+      final rawPath = step.parameters['TargetFile'] ??
+          step.parameters['AbsolutePath'] ??
+          step.parameters['path'] ??
+          step.parameters['file'];
+      final path = rawPath?.toString().trim() ?? '';
+      if (path.isEmpty) continue;
+
+      final replacement = step.parameters['Replacement'] ??
+          step.parameters['ReplacementContent'] ??
+          step.parameters['CodeContent'] ??
+          step.parameters['content'];
+      final target = step.parameters['TargetContent'];
+      final added = replacement != null
+          ? replacement.toString().split('\n').length
+          : 0;
+      final removed = target != null ? target.toString().split('\n').length : 0;
+      final created = (step.parameters['Overwrite'] == false) ||
+          nameLower.contains('create') ||
+          (nameLower.contains('write_to_file') && removed == 0);
+      final prev = byPath[path];
+      byPath[path] = FileChangeEntry(
+        path: path,
+        added: (prev?.added ?? 0) + added,
+        removed: (prev?.removed ?? 0) + removed,
+        created: prev?.created ?? created,
+      );
+    }
+    return byPath.values.toList();
+  }
+
   Future<void> _cancelAllBackgroundWork() async {
     if (state.isStreaming || _activeStreamingSessionId != null) {
       await stopStreaming();
     }
-    final nativeTasks = ref.read(runtimeProvider).backgroundTasks;
-    for (final task in nativeTasks) {
-      try {
-        await ref.read(runtimeProvider.notifier).cancelBackgroundTask(task.id);
-      } catch (_) {}
+    await ref.read(runtimeProvider.notifier).forceStopAllBackgroundTasks();
+  }
+
+  Future<void> forceStopTask({
+    required String kindName,
+    String? nativeTaskId,
+    String? sessionId,
+    int? queuedIndex,
+  }) async {
+    if (kindName == 'queued' && queuedIndex != null) {
+      removeQueuedPrompt(queuedIndex);
+      return;
     }
+    if (nativeTaskId != null &&
+        !nativeTaskId.startsWith('session:') &&
+        !nativeTaskId.startsWith('tool:')) {
+      await ref.read(runtimeProvider.notifier).cancelBackgroundTask(nativeTaskId);
+      return;
+    }
+    if (kindName == 'session' && sessionId != null) {
+      if (_activeStreamingSessionId == sessionId ||
+          ref.read(sessionsProvider).activeSessionId == sessionId) {
+        await stopStreaming();
+      } else {
+        _inFlightMessages.remove(sessionId);
+        final nextBg = {...state.activeBackgroundSessionIds}..remove(sessionId);
+        state = state.copyWith(activeBackgroundSessionIds: nextBg);
+      }
+      if (state.activeTurnId != null) {
+        await ref
+            .read(runtimeProvider.notifier)
+            .cancelBackgroundTask('turn:${state.activeTurnId}');
+      }
+      return;
+    }
+    // Active tool / subagent step or fallback
+    await stopStreaming();
+    await ref.read(runtimeProvider.notifier).refresh();
+  }
+
+  Future<int> forceStopAllTasks() async {
+    if (state.isStreaming || _activeStreamingSessionId != null) {
+      await stopStreaming();
+    }
+    _inFlightMessages.clear();
+    final stoppedNative =
+        await ref.read(runtimeProvider.notifier).forceStopAllBackgroundTasks();
+    state = state.copyWith(
+      activeBackgroundSessionIds: const {},
+      isStreaming: false,
+      clearPermission: true,
+      clearStallWarning: true,
+    );
+    return stoppedNative;
+  }
+
+  Future<void> appendSystemFeedback(
+    String text, {
+    List<FileChangeEntry> changedFiles = const [],
+  }) async {
+    var session = ref.read(sessionsProvider).activeSession;
+    session ??= await ref.read(sessionsProvider.notifier).createSession();
+    final msg = ChatMessage(
+      id: const Uuid().v4(),
+      role: ChatRole.assistant,
+      text: text,
+      createdAt: DateTime.now(),
+      completedAt: DateTime.now(),
+      changedFiles: changedFiles,
+    );
+    final updated = [..._messagesForSession(session.id), msg];
+    _updateSessionMessages(session.id, updated);
+    await _persistMessages(session.id, updated);
   }
 
   Future<void> sendQueuedNow() async {

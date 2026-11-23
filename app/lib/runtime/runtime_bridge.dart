@@ -212,6 +212,11 @@ class RuntimeBridge {
         'allowNonWorkspaceAccess': request.allowNonWorkspaceAccess,
         'useAcp': useAcp,
         'geminiApiKey': ?request.geminiApiKey,
+        'agent': ?request.agentName,
+        'printTimeoutSeconds': ?request.printTimeoutSeconds,
+        'disableSlashCommands': request.disableSlashCommands,
+        'continueLast': request.continueLast,
+        'remoteAgent': ?request.remoteAgent,
       });
 
       await for (final evt in controller.stream) {
@@ -266,6 +271,15 @@ class RuntimeBridge {
     }
   }
 
+  Future<int> forceStopAllBackgroundTasks() async {
+    try {
+      return await _method.invokeMethod<int>('forceStopAllBackgroundTasks') ??
+          0;
+    } on MissingPluginException {
+      return 0;
+    }
+  }
+
   Future<bool> writeWorkspaceFile(String path, String content) async {
     try {
       return await _method.invokeMethod<bool>('writeFile', {
@@ -307,17 +321,113 @@ class RuntimeBridge {
   }
 
   Future<(String status, String diff)> gitDiff(String cwd) async {
+    final detailed = await gitDiffDetailed(cwd);
+    return (detailed.status, detailed.diff);
+  }
+
+  Future<
+      ({
+        String status,
+        String diff,
+        String branch,
+        List<FileChangeEntry> files,
+      })> gitDiffDetailed(String cwd) async {
     try {
       final raw = await _method.invokeMethod<Map<Object?, Object?>>(
         'gitDiff',
         {'cwd': cwd},
       );
+      final status = raw?['status']?.toString() ?? '';
+      final diff = raw?['diff']?.toString() ?? '';
+      final branch = raw?['branch']?.toString() ?? '';
+      final numstat = raw?['numstat']?.toString() ?? '';
+      final created = <String>{};
+      final deleted = <String>{};
+      for (final line in status.split('\n')) {
+        if (line.length < 4) continue;
+        final code = line.substring(0, 2);
+        final path = line.substring(3).trim();
+        if (code.contains('?') || code.contains('A')) created.add(path);
+        if (code.contains('D')) deleted.add(path);
+      }
+      final files = FileChangeEntry.parseGitNumstat(
+        numstat,
+        createdPaths: created,
+        deletedPaths: deleted,
+      );
+      // Include untracked files that `git diff --numstat` doesn't list yet
+      final seen = files.map((f) => f.path).toSet();
+      for (final path in created) {
+        if (!seen.contains(path)) {
+          files.add(FileChangeEntry(path: path, created: true));
+        }
+      }
+      return (status: status, diff: diff, branch: branch, files: files);
+    } on MissingPluginException {
       return (
-        raw?['status']?.toString() ?? '',
-        raw?['diff']?.toString() ?? '',
+        status: '',
+        diff: '',
+        branch: '',
+        files: const <FileChangeEntry>[],
+      );
+    }
+  }
+
+  Future<
+      ({
+        bool ok,
+        bool pushed,
+        String branch,
+        String commitHash,
+        String output,
+        List<FileChangeEntry> files,
+      })> gitCommitAndPush({
+    required String cwd,
+    required String message,
+    bool stageAll = true,
+    bool push = true,
+  }) async {
+    try {
+      final raw = await _method.invokeMethod<Map<Object?, Object?>>(
+        'gitCommitAndPush',
+        {
+          'cwd': cwd,
+          'message': message,
+          'stageAll': stageAll,
+          'push': push,
+        },
+      );
+      final numstat = raw?['numstat']?.toString() ?? '';
+      final nameStatus = raw?['nameStatus']?.toString() ?? '';
+      final created = <String>{};
+      final deleted = <String>{};
+      for (final line in nameStatus.split('\n')) {
+        final parts = line.trim().split(RegExp(r'\s+'));
+        if (parts.length < 2) continue;
+        if (parts.first.startsWith('A')) created.add(parts.sublist(1).join(' '));
+        if (parts.first.startsWith('D')) deleted.add(parts.sublist(1).join(' '));
+      }
+      return (
+        ok: raw?['ok'] as bool? ?? false,
+        pushed: raw?['pushed'] as bool? ?? false,
+        branch: raw?['branch']?.toString() ?? '',
+        commitHash: raw?['commitHash']?.toString() ?? '',
+        output: raw?['output']?.toString() ?? '',
+        files: FileChangeEntry.parseGitNumstat(
+          numstat,
+          createdPaths: created,
+          deletedPaths: deleted,
+        ),
       );
     } on MissingPluginException {
-      return ('', '');
+      return (
+        ok: false,
+        pushed: false,
+        branch: '',
+        commitHash: '',
+        output: 'Native runtime unavailable',
+        files: const <FileChangeEntry>[],
+      );
     }
   }
 

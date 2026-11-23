@@ -7,47 +7,25 @@ import '../../state/auth_state.dart';
 import '../../state/permissions_state.dart';
 import '../../state/phone_state.dart';
 import '../../state/settings_state.dart';
+import '../../state/update_state.dart';
 import '../../theme/app_theme.dart';
-import '../../update/update_service.dart';
 import '../auth/google_login_sheet.dart';
+import '../cli/cli_manager_page.dart';
 import '../phone/phone_control_page.dart';
 import '../remote/ssh_hosts_page.dart';
+import '../update/update_sheet.dart';
 import '../usage/usage_page.dart';
 import 'runtime_setup_page.dart';
 
-class SettingsPage extends ConsumerStatefulWidget {
+class SettingsPage extends ConsumerWidget {
   const SettingsPage({super.key});
 
   @override
-  ConsumerState<SettingsPage> createState() => _SettingsPageState();
-}
-
-class _SettingsPageState extends ConsumerState<SettingsPage> {
-  bool _checkingUpdate = false;
-  AppReleaseInfo? _latest;
-
-  Future<void> _checkUpdates() async {
-    setState(() => _checkingUpdate = true);
-    try {
-      final info = await UpdateService.instance.fetchLatestRelease();
-      if (mounted) {
-        setState(() => _latest = info);
-        if (info == null) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('No published GitHub releases yet')),
-          );
-        }
-      }
-    } finally {
-      if (mounted) setState(() => _checkingUpdate = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final settings = ref.watch(settingsProvider);
     final auth = ref.watch(authProvider);
     final perms = ref.watch(permissionsProvider);
+    final update = ref.watch(appUpdateProvider);
     final theme = Theme.of(context);
 
     return Scaffold(
@@ -372,41 +350,104 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             ),
             const SizedBox(height: 12),
             Card(
+              child: ListTile(
+                leading: const Icon(Icons.terminal),
+                title: const Text('Antigravity CLI & Flags'),
+                subtitle: Text(
+                  settings.activeAgent.isNotEmpty
+                      ? 'Agent: ${settings.activeAgent} · Manage mcp, plugin, remote-control'
+                      : 'Manage mcp, plugin, agent, remote-control, & CLI flags',
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const CliManagerPage(),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Card(
               child: Column(
                 children: [
                   ListTile(
                     leading: const Icon(Icons.system_update_alt),
                     title: const Text('Check for Updates'),
                     subtitle: Text(
-                      _latest != null
-                          ? 'Latest release: ${_latest!.tagName}'
-                          : 'dwicao/antigravity-go on GitHub Releases',
+                      update.isDownloading
+                          ? '${formatUpdateBytes(update.receivedBytes)} / ${update.effectiveTotalBytes != null ? formatUpdateBytes(update.effectiveTotalBytes!) : "…"} · Data used: ${formatUpdateBytes(update.totalDataUsedBytes)}'
+                          : update.latest != null
+                              ? 'Latest release: ${update.latest!.tagName} · Data used: ${formatUpdateBytes(update.totalDataUsedBytes)}'
+                              : 'dwicao/antigravity-go on GitHub Releases',
                     ),
-                    trailing: _checkingUpdate
+                    trailing: update.checking
                         ? const SizedBox(
                             width: 18,
                             height: 18,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
                         : const Icon(Icons.refresh),
-                    onTap: _checkingUpdate ? null : _checkUpdates,
+                    onTap: update.checking
+                        ? null
+                        : () async {
+                            final info = await ref
+                                .read(appUpdateProvider.notifier)
+                                .checkForUpdates();
+                            if (!context.mounted) return;
+                            if (info != null) {
+                              await UpdateSheet.show(context);
+                            } else {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content:
+                                      Text('No published GitHub releases yet'),
+                                ),
+                              );
+                            }
+                          },
                   ),
-                  if (_latest?.arm64ApkUrl != null)
+                  if (update.isDownloading)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          LinearProgressIndicator(value: update.progress),
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  '${formatUpdateBytes(update.receivedBytes)} / ${update.effectiveTotalBytes != null ? formatUpdateBytes(update.effectiveTotalBytes!) : "…"}${update.progress != null ? " (${(update.progress! * 100).round()}%)" : ""}',
+                                  style: theme.textTheme.labelSmall,
+                                ),
+                              ),
+                              OutlinedButton(
+                                onPressed: () => ref
+                                    .read(appUpdateProvider.notifier)
+                                    .cancelUpdate(),
+                                child: const Text('Cancel'),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    )
+                  else if (update.latest?.arm64ApkUrl != null)
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                       child: Row(
                         children: [
                           Expanded(
                             child: FilledButton(
-                              onPressed: () => UpdateService.instance
-                                  .downloadAndInstall(_latest!.arm64ApkUrl!),
-                              child: Text('Install ${_latest!.tagName}'),
+                              onPressed: () => UpdateSheet.show(context),
+                              child: Text('Install ${update.latest!.tagName}'),
                             ),
                           ),
                           const SizedBox(width: 8),
                           OutlinedButton(
                             onPressed: () =>
-                                launchUrl(Uri.parse(_latest!.htmlUrl)),
+                                launchUrl(Uri.parse(update.latest!.htmlUrl)),
                             child: const Text('Release Notes'),
                           ),
                         ],

@@ -503,7 +503,34 @@ class AcpSessionManager(
                 )
             } catch (_: Throwable) {}
         }
+        try {
+            active.writer.close()
+        } catch (_: Throwable) {}
         active.process.destroyForcibly()
+        emit(mapOf("kind" to "turn_exit", "turnId" to turnId, "exitCode" to 130))
+    }
+
+    fun forceStopAll(): Int {
+        val keys = sessions.keys.toList()
+        var count = 0
+        for (turnId in keys) {
+            val active = sessions.remove(turnId) ?: continue
+            count++
+            active.terminals.values.forEach { term ->
+                try {
+                    term.process.destroyForcibly()
+                } catch (_: Throwable) {}
+            }
+            try {
+                active.writer.close()
+            } catch (_: Throwable) {}
+            try {
+                active.process.destroyForcibly()
+            } catch (_: Throwable) {}
+            emit(mapOf("kind" to "turn_exit", "turnId" to turnId, "exitCode" to 137))
+        }
+        if (count > 0) onTasksChanged()
+        return count
     }
 
     private fun handleTerminalRpc(

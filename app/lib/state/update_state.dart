@@ -1,0 +1,233 @@
+import 'dart:async';
+
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../update/update_service.dart';
+
+String formatUpdateBytes(int bytes) {
+  if (bytes <= 0) return '0 B';
+  if (bytes < 1024) return '$bytes B';
+  if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(0)} KB';
+  if (bytes < 1024 * 1024 * 1024) {
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+  return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
+}
+
+class AppUpdateState {
+  const AppUpdateState({
+    this.checking = false,
+    this.latest,
+    this.phase = UpdateTransferPhase.idle,
+    this.receivedBytes = 0,
+    this.totalBytes,
+    this.speedBps = 0,
+    this.persistedDataUsedBytes = 0,
+    this.errorMessage,
+    this.lastCheckedAt,
+  });
+
+  final bool checking;
+  final AppReleaseInfo? latest;
+  final UpdateTransferPhase phase;
+  final int receivedBytes;
+  final int? totalBytes;
+  final int speedBps;
+  final int persistedDataUsedBytes;
+  final String? errorMessage;
+  final DateTime? lastCheckedAt;
+
+  bool get isDownloading =>
+      phase == UpdateTransferPhase.downloading ||
+      phase == UpdateTransferPhase.verifying ||
+      phase == UpdateTransferPhase.installing;
+
+  int? get effectiveTotalBytes => totalBytes ?? latest?.arm64SizeBytes;
+
+  double? get progress {
+    final total = effectiveTotalBytes;
+    if (total == null || total <= 0) return null;
+    return (receivedBytes / total).clamp(0.0, 1.0);
+  }
+
+  /// Cumulative bytes transferred across update attempts including the active stream.
+  int get totalDataUsedBytes => persistedDataUsedBytes + receivedBytes;
+
+  AppUpdateState copyWith({
+    bool? checking,
+    AppReleaseInfo? latest,
+    bool clearLatest = false,
+    UpdateTransferPhase? phase,
+    int? receivedBytes,
+    int? totalBytes,
+    bool clearTotal = false,
+    int? speedBps,
+    int? persistedDataUsedBytes,
+    String? errorMessage,
+    bool clearError = false,
+    DateTime? lastCheckedAt,
+  }) {
+    return AppUpdateState(
+      checking: checking ?? this.checking,
+      latest: clearLatest ? null : (latest ?? this.latest),
+      phase: phase ?? this.phase,
+      receivedBytes: receivedBytes ?? this.receivedBytes,
+      totalBytes: clearTotal ? null : (totalBytes ?? this.totalBytes),
+      speedBps: speedBps ?? this.speedBps,
+      persistedDataUsedBytes:
+          persistedDataUsedBytes ?? this.persistedDataUsedBytes,
+      errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
+      lastCheckedAt: lastCheckedAt ?? this.lastCheckedAt,
+    );
+  }
+}
+
+final appUpdateProvider =
+    NotifierProvider<AppUpdateNotifier, AppUpdateState>(AppUpdateNotifier.new);
+
+class AppUpdateNotifier extends Notifier<AppUpdateState> {
+  static const _kDataUsedKey = 'agy_update_total_data_bytes';
+  StreamSubscription<UpdateProgressEvent>? _sub;
+  int _lastRecordedReceived = 0;
+
+  @override
+  AppUpdateState build() {
+    _sub?.cancel();
+    _sub = UpdateService.instance.progressEvents.listen(handleProgressEvent);
+    ref.onDispose(() => _sub?.cancel());
+    Future.microtask(_loadPersisted);
+    return const AppUpdateState();
+  }
+
+  Future<void> _loadPersisted() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!ref.mounted) return;
+    final used = prefs.getInt(_kDataUsedKey) ?? 0;
+    state = state.copyWith(persistedDataUsedBytes: used);
+  }
+
+  Future<void> _commitReceivedBytes() async {
+    if (_lastRecordedReceived <= 0) return;
+    final delta = _lastRecordedReceived;
+    _lastRecordedReceived = 0;
+    final nextPersisted = state.persistedDataUsedBytes + delta;
+    if (ref.mounted) {
+      state = state.copyWith(
+        persistedDataUsedBytes: nextPersisted,
+        receivedBytes: 0,
+      );
+    }
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_kDataUsedKey, nextPersisted);
+  }
+
+  void handleProgressEvent(UpdateProgressEvent evt) {
+    if (!ref.mounted) return;
+    if (evt.received > _lastRecordedReceived) {
+      _lastRecordedReceived = evt.received;
+    }
+    state = state.copyWith(
+      phase: evt.phase,
+      receivedBytes: evt.received > 0 ? evt.received : state.receivedBytes,
+      totalBytes: evt.total ?? state.totalBytes,
+      speedBps: evt.speedBps,
+      errorMessage: evt.error,
+      clearError: evt.phase != UpdateTransferPhase.failed,
+    );
+    if (evt.phase == UpdateTransferPhase.cancelled ||
+        evt.phase == UpdateTransferPhase.failed) {
+      unawaited(_commitReceivedBytes());
+    }
+  }
+
+  Future<AppReleaseInfo?> checkForUpdates() async {
+    state = state.copyWith(checking: true, clearError: true);
+    try {
+      final info = await UpdateService.instance.fetchLatestRelease();
+      if (!ref.mounted) return info;
+      state = state.copyWith(
+        checking: false,
+        latest: info,
+        lastCheckedAt: DateTime.now(),
+      );
+      return info;
+    } catch (e) {
+      if (!ref.mounted) return null;
+      state = state.copyWith(
+        checking: false,
+        errorMessage: 'Failed checking updates: $e',
+      );
+      return null;
+    }
+  }
+
+  Future<void> startUpdate() async {
+    final release = state.latest;
+    final url = release?.arm64ApkUrl;
+    if (url == null || url.isEmpty) return;
+
+    _lastRecordedReceived = 0;
+    state = state.copyWith(
+      phase: UpdateTransferPhase.downloading,
+      receivedBytes: 0,
+      totalBytes: release?.arm64SizeBytes,
+      speedBps: 0,
+      clearError: true,
+    );
+
+    try {
+      final result = await UpdateService.instance.downloadAndInstall(
+        url,
+        expectedSha256: release?.arm64Sha256,
+      );
+      final finalReceived = result['received'] ?? state.receivedBytes;
+      if (finalReceived > _lastRecordedReceived) {
+        _lastRecordedReceived = finalReceived;
+      }
+      await _commitReceivedBytes();
+      if (ref.mounted) {
+        state = state.copyWith(
+          phase: UpdateTransferPhase.idle,
+          speedBps: 0,
+        );
+      }
+    } on PlatformException catch (e) {
+      await _commitReceivedBytes();
+      if (!ref.mounted) return;
+      if (e.code == 'update_cancelled') {
+        state = state.copyWith(
+          phase: UpdateTransferPhase.cancelled,
+          speedBps: 0,
+          clearError: true,
+        );
+      } else {
+        state = state.copyWith(
+          phase: UpdateTransferPhase.failed,
+          speedBps: 0,
+          errorMessage: e.message ?? e.code,
+        );
+      }
+    } catch (e) {
+      await _commitReceivedBytes();
+      if (!ref.mounted) return;
+      state = state.copyWith(
+        phase: UpdateTransferPhase.failed,
+        speedBps: 0,
+        errorMessage: e.toString(),
+      );
+    }
+  }
+
+  Future<void> cancelUpdate() async {
+    await UpdateService.instance.cancelUpdate();
+    await _commitReceivedBytes();
+    if (!ref.mounted) return;
+    state = state.copyWith(
+      phase: UpdateTransferPhase.cancelled,
+      speedBps: 0,
+      clearError: true,
+    );
+  }
+}

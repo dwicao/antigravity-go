@@ -177,7 +177,21 @@ class _BackgroundTasksBannerState extends ConsumerState<BackgroundTasksBanner> {
                 ),
               ),
             ),
-            const SizedBox(width: 6),
+            const SizedBox(width: 4),
+            IconButton(
+              iconSize: 18,
+              visualDensity: VisualDensity.compact,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+              tooltip: 'Force stop all background tasks',
+              onPressed: () =>
+                  ref.read(chatProvider.notifier).forceStopAllTasks(),
+              icon: Icon(
+                Icons.stop_circle_outlined,
+                color: theme.colorScheme.error,
+              ),
+            ),
+            const SizedBox(width: 4),
             Text(
               'View',
               style: theme.textTheme.labelSmall?.copyWith(
@@ -249,13 +263,28 @@ class _BackgroundTasksSheetState extends ConsumerState<BackgroundTasksSheet> {
                 Icon(Icons.layers_outlined,
                     size: 20, color: theme.colorScheme.primary),
                 const SizedBox(width: 8),
-                Text(
-                  'Background Tasks (${tasks.length})',
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
+                Expanded(
+                  child: Text(
+                    'Background Tasks (${tasks.length})',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
-                const Spacer(),
+                if (tasks.isNotEmpty)
+                  TextButton.icon(
+                    onPressed: () =>
+                        ref.read(chatProvider.notifier).forceStopAllTasks(),
+                    icon: Icon(
+                      Icons.stop_circle_outlined,
+                      size: 16,
+                      color: theme.colorScheme.error,
+                    ),
+                    label: Text(
+                      'Force Stop All',
+                      style: TextStyle(color: theme.colorScheme.error),
+                    ),
+                  ),
                 IconButton(
                   tooltip: 'Refresh',
                   icon: const Icon(Icons.refresh, size: 18),
@@ -329,13 +358,33 @@ class _BackgroundTasksSheetState extends ConsumerState<BackgroundTasksSheet> {
     WidgetRef ref,
     BackgroundTaskItem task,
   ) {
+    final forceStopBtn = IconButton(
+      tooltip: 'Force stop task',
+      icon: Icon(
+        Icons.stop_circle_outlined,
+        size: 20,
+        color: Theme.of(context).colorScheme.error,
+      ),
+      onPressed: () => ref.read(chatProvider.notifier).forceStopTask(
+            kindName: task.kind.name,
+            nativeTaskId: task.nativeTaskId,
+            sessionId: task.sessionId,
+            queuedIndex: task.queuedIndex,
+          ),
+    );
     if (task.kind == BackgroundTaskKind.session && task.sessionId != null) {
-      return TextButton(
-        onPressed: () {
-          ref.read(sessionsProvider.notifier).selectSession(task.sessionId!);
-          Navigator.of(context).pop();
-        },
-        child: const Text('Open'),
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextButton(
+            onPressed: () {
+              ref.read(sessionsProvider.notifier).selectSession(task.sessionId!);
+              Navigator.of(context).pop();
+            },
+            child: const Text('Open'),
+          ),
+          forceStopBtn,
+        ],
       );
     }
     if (task.kind == BackgroundTaskKind.queued && task.queuedIndex != null) {
@@ -347,15 +396,8 @@ class _BackgroundTasksSheetState extends ConsumerState<BackgroundTasksSheet> {
             .removeQueuedPrompt(task.queuedIndex!),
       );
     }
-    if (task.canCancel && task.nativeTaskId != null) {
-      return IconButton(
-        tooltip: 'Stop task',
-        icon: Icon(Icons.stop_circle_outlined,
-            size: 20, color: Theme.of(context).colorScheme.error),
-        onPressed: () => ref
-            .read(runtimeProvider.notifier)
-            .cancelBackgroundTask(task.nativeTaskId!),
-      );
+    if (task.canCancel) {
+      return forceStopBtn;
     }
     return null;
   }

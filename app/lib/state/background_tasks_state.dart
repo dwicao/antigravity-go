@@ -104,7 +104,8 @@ final backgroundTasksProvider = Provider<List<BackgroundTaskItem>>((ref) {
         subtitle: 'Agent running in another session',
         startedAt: match?.updatedAt ?? DateTime.now(),
         sessionId: sid,
-        canCancel: false,
+        nativeTaskId: 'session:$sid',
+        canCancel: true,
       ),
     );
   }
@@ -133,7 +134,8 @@ final backgroundTasksProvider = Provider<List<BackgroundTaskItem>>((ref) {
           subtitle: isSubagent ? 'Subagent / workflow running' : 'Tool step running',
           startedAt: tool.startedAt ?? m.createdAt,
           sessionId: activeSessionId,
-          canCancel: false,
+          nativeTaskId: 'tool:${tool.id}',
+          canCancel: true,
         ),
       );
     }

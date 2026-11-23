@@ -231,8 +231,7 @@ class OverviewPanel extends ConsumerWidget {
                                           style: theme.textTheme.bodySmall,
                                         ),
                                       ),
-                                      if (task.canCancel &&
-                                          task.nativeTaskId != null)
+                                      if (task.canCancel)
                                         IconButton(
                                           iconSize: 16,
                                           padding: EdgeInsets.zero,
@@ -240,18 +239,21 @@ class OverviewPanel extends ConsumerWidget {
                                             minWidth: 24,
                                             minHeight: 24,
                                           ),
-                                          tooltip: 'Stop task',
+                                          tooltip: 'Force stop task',
                                           onPressed: () => ref
-                                              .read(runtimeProvider.notifier)
-                                              .cancelBackgroundTask(
-                                                task.nativeTaskId!,
+                                              .read(chatProvider.notifier)
+                                              .forceStopTask(
+                                                kindName: task.kind.name,
+                                                nativeTaskId: task.nativeTaskId,
+                                                sessionId: task.sessionId,
+                                                queuedIndex: task.queuedIndex,
                                               ),
                                           icon: Icon(
                                             Icons.stop_circle_outlined,
                                             color: theme.colorScheme.error,
                                           ),
-                                        )
-                                      else if (task.kind ==
+                                        ),
+                                      if (task.kind ==
                                               BackgroundTaskKind.session &&
                                           task.sessionId != null)
                                         TextButton(

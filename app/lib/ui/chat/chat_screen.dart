@@ -19,24 +19,13 @@ import '../../state/sessions_state.dart';
 import '../../state/settings_state.dart';
 import '../../state/side_panel_state.dart';
 import '../auth/google_login_sheet.dart';
+import '../cli/cli_manager_page.dart';
+import '../settings/settings_page.dart';
 import '../shell/background_tasks_sheet.dart';
 import '../shell/command_palette.dart';
 import '../usage/usage_page.dart';
 import 'message_bubble.dart';
 import 'tool_approval_card.dart';
-
-const _slashCommands = <(String cmd, String desc)>[
-  ('/plan', 'Explore codebase and draft an implementation plan'),
-  ('/goal', 'Run autonomously until objective is verified complete'),
-  ('/boost', 'Multi-agent deep reasoning loop'),
-  ('/swarm', 'Coordinate a swarm of named workers'),
-  ('/teamwork', 'Launch collaborative multi-agent team'),
-  ('/compact', 'Summarize conversation to free context'),
-  ('/usage', 'Inspect 5-hour & weekly model quotas'),
-  ('/model', 'Switch active reasoning model'),
-  ('/diff', 'Review code changes and diffs'),
-  ('/clear', 'Clear current conversation'),
-];
 
 class ChatScreen extends ConsumerStatefulWidget {
   const ChatScreen({
@@ -145,21 +134,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final text = _inputController.text.trim();
     if (text.isEmpty) return;
 
-    if (text == '/usage' || text == '/quota') {
-      _inputController.clear();
-      setState(() {
-        _showSlashMenu = false;
-        _showMentionMenu = false;
-      });
+    final firstWord = text.split(RegExp(r'\s+')).first.toLowerCase();
+
+    if (firstWord == '/usage' || firstWord == '/quota') {
+      _clearInputMenus();
       await Navigator.of(context).push(
         MaterialPageRoute<void>(builder: (_) => const UsagePage()),
       );
       return;
     }
 
-    if (text == '/diff') {
-      _inputController.clear();
-      setState(() => _showSlashMenu = false);
+    if (firstWord == '/diff') {
+      _clearInputMenus();
       ref.read(sidePanelProvider.notifier).openTab(
             const SidePanelTab(
               id: 'review',
@@ -170,25 +156,109 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       return;
     }
 
-    if (text == '/clear') {
-      _inputController.clear();
-      setState(() => _showSlashMenu = false);
+    if (firstWord == '/clear' || firstWord == '/new') {
+      _clearInputMenus();
       await ref.read(chatProvider.notifier).clearCurrentThread();
       return;
     }
 
+    if (firstWord == '/config' ||
+        firstWord == '/settings' ||
+        firstWord == '/permissions') {
+      _clearInputMenus();
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => const SettingsPage()),
+      );
+      return;
+    }
+
+    if (firstWord == '/mcp' ||
+        firstWord == '/plugin' ||
+        firstWord == '/agents' ||
+        firstWord == '/changelog') {
+      _clearInputMenus();
+      final sub = switch (firstWord) {
+        '/mcp' => 'mcp',
+        '/plugin' => 'plugin',
+        '/agents' => 'agent',
+        '/changelog' => 'changelog',
+        _ => null,
+      };
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => CliManagerPage(initialSubcommand: sub),
+        ),
+      );
+      return;
+    }
+
+    if (firstWord == '/export') {
+      _clearInputMenus();
+      final md = ref.read(chatProvider.notifier).exportMarkdown();
+      await SharePlus.instance.share(ShareParams(text: md));
+      return;
+    }
+
+    if (firstWord == '/fork' || firstWord == '/branch') {
+      _clearInputMenus();
+      final prev = ref.read(sessionsProvider).activeSession;
+      final branched = await ref.read(sessionsProvider.notifier).createSession(
+            title: prev != null ? '${prev.title} (fork)' : 'Forked session',
+          );
+      await ref.read(chatProvider.notifier).appendSystemFeedback(
+            'Branched into new conversation **${branched.title}**.',
+          );
+      return;
+    }
+
+    if (firstWord == '/model' && text.length > 6) {
+      final arg = text.substring(6).trim();
+      final match = AgyModelCatalog.builtIn.where(
+        (m) =>
+            m.id.toLowerCase() == arg.toLowerCase() ||
+            m.displayName.toLowerCase().contains(arg.toLowerCase()),
+      );
+      if (match.isNotEmpty) {
+        _clearInputMenus();
+        await ref.read(settingsProvider.notifier).setModel(match.first.id);
+        await ref.read(chatProvider.notifier).appendSystemFeedback(
+              'Switched active model to **${match.first.displayName}**.',
+            );
+        return;
+      }
+    }
+
+    if (firstWord == '/help' || firstWord == '/?') {
+      _clearInputMenus();
+      final buf = StringBuffer('### Antigravity CLI Slash Commands\n');
+      for (final cmd in AgyCliCatalog.slashCommands) {
+        final hint = cmd.argHint != null ? ' `${cmd.argHint}`' : '';
+        buf.writeln('- `${cmd.command}`$hint — ${cmd.description}');
+      }
+      buf.writeln('\n### Supported CLI Subcommands');
+      for (final sub in AgyCliCatalog.subcommands) {
+        buf.writeln('- `agy ${sub.name}` — ${sub.summary}');
+      }
+      await ref.read(chatProvider.notifier).appendSystemFeedback(buf.toString());
+      return;
+    }
+
     final files = List<String>.from(_attachments);
+    _clearInputMenus(clearAttachments: true);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
+    await ref.read(chatProvider.notifier).sendPrompt(text, attachments: files);
+  }
+
+  void _clearInputMenus({bool clearAttachments = false}) {
     final sessionId =
         ref.read(sessionsProvider).activeSessionId ?? 'new_session';
     ref.read(draftStoreProvider.notifier).clear(sessionId);
     _inputController.clear();
     setState(() {
-      _attachments.clear();
+      if (clearAttachments) _attachments.clear();
       _showSlashMenu = false;
       _showMentionMenu = false;
     });
-    WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
-    await ref.read(chatProvider.notifier).sendPrompt(text, attachments: files);
   }
 
   Future<void> _steerSubmit() async {
@@ -298,6 +368,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     final activeModel = AgyModelCatalog.resolve(settings.selectedModelId);
     final hostLabel = hosts.activeSshHost?.name ?? 'On Device';
+    final isNarrow = MediaQuery.sizeOf(context).width < 520;
 
     Widget wrapCentered(Widget child) {
       if (!widget.isDesktopMode) return child;
@@ -357,58 +428,157 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ),
           actions: [
             const BackgroundTasksAppBarPill(),
-            IconButton(
-              tooltip: 'Command Palette (Ctrl+K)',
-              onPressed: () => CommandPaletteDialog.show(context),
-              icon: const Icon(Icons.search),
-            ),
-            IconButton(
-              tooltip: 'Toggle Side Panel (Ctrl+Shift+B)',
-              onPressed: () =>
-                  ref.read(sidePanelProvider.notifier).toggleSidePanel(),
-              icon: Icon(
-                sidePanel.showSidePanel
-                    ? Icons.vertical_split
-                    : Icons.vertical_split_outlined,
-                color: sidePanel.showSidePanel
-                    ? theme.colorScheme.primary
-                    : null,
-              ),
-            ),
-            IconButton(
-              tooltip: 'Usage Limits (Ctrl+U)',
-              onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(builder: (_) => const UsagePage()),
-              ),
-              icon: const Icon(Icons.speed_rounded),
-            ),
-            IconButton(
-              tooltip: auth.isAuthenticated
-                  ? (auth.email ?? 'Google Account')
-                  : 'Sign in with Google',
-              onPressed: () => GoogleLoginSheet.show(context),
-              icon: Icon(
-                auth.isAuthenticated
-                    ? Icons.verified_user
-                    : Icons.account_circle_outlined,
-                color: auth.isAuthenticated ? Colors.green : null,
-              ),
-            ),
-            if (chat.messages.isNotEmpty)
+            if (!isNarrow) ...[
               IconButton(
-                tooltip: 'Share transcript',
-                onPressed: () {
-                  final md = ref.read(chatProvider.notifier).exportMarkdown();
-                  SharePlus.instance.share(ShareParams(text: md));
+                tooltip: 'Command Palette (Ctrl+K)',
+                onPressed: () => CommandPaletteDialog.show(context),
+                icon: const Icon(Icons.search),
+              ),
+              IconButton(
+                tooltip: 'Toggle Side Panel (Ctrl+Shift+B)',
+                onPressed: () =>
+                    ref.read(sidePanelProvider.notifier).toggleSidePanel(),
+                icon: Icon(
+                  sidePanel.showSidePanel
+                      ? Icons.vertical_split
+                      : Icons.vertical_split_outlined,
+                  color: sidePanel.showSidePanel
+                      ? theme.colorScheme.primary
+                      : null,
+                ),
+              ),
+              IconButton(
+                tooltip: 'Usage Limits (Ctrl+U)',
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(builder: (_) => const UsagePage()),
+                ),
+                icon: const Icon(Icons.speed_rounded),
+              ),
+              IconButton(
+                tooltip: auth.isAuthenticated
+                    ? (auth.email ?? 'Google Account')
+                    : 'Sign in with Google',
+                onPressed: () => GoogleLoginSheet.show(context),
+                icon: Icon(
+                  auth.isAuthenticated
+                      ? Icons.verified_user
+                      : Icons.account_circle_outlined,
+                  color: auth.isAuthenticated ? Colors.green : null,
+                ),
+              ),
+              if (chat.messages.isNotEmpty)
+                IconButton(
+                  tooltip: 'Share transcript',
+                  onPressed: () {
+                    final md = ref.read(chatProvider.notifier).exportMarkdown();
+                    SharePlus.instance.share(ShareParams(text: md));
+                  },
+                  icon: const Icon(Icons.ios_share),
+                ),
+              if (widget.onOpenQuickPanel != null)
+                IconButton(
+                  tooltip: 'Toggle Overview Panel (Ctrl+Alt+O)',
+                  onPressed: widget.onOpenQuickPanel,
+                  icon: const Icon(Icons.dashboard_outlined),
+                ),
+            ] else ...[
+              PopupMenuButton<String>(
+                tooltip: 'More actions',
+                icon: const Icon(Icons.more_vert),
+                onSelected: (action) {
+                  switch (action) {
+                    case 'palette':
+                      CommandPaletteDialog.show(context);
+                    case 'usage':
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                            builder: (_) => const UsagePage()),
+                      );
+                    case 'account':
+                      GoogleLoginSheet.show(context);
+                    case 'cli':
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                            builder: (_) => const CliManagerPage()),
+                      );
+                    case 'overview':
+                      widget.onOpenQuickPanel?.call();
+                    case 'side':
+                      ref.read(sidePanelProvider.notifier).toggleSidePanel();
+                    case 'share':
+                      final md =
+                          ref.read(chatProvider.notifier).exportMarkdown();
+                      SharePlus.instance.share(ShareParams(text: md));
+                  }
                 },
-                icon: const Icon(Icons.ios_share),
+                itemBuilder: (_) => [
+                  const PopupMenuItem(
+                    value: 'palette',
+                    child: ListTile(
+                      dense: true,
+                      leading: Icon(Icons.search),
+                      title: Text('Command Palette'),
+                    ),
+                  ),
+                  const PopupMenuItem(
+                    value: 'usage',
+                    child: ListTile(
+                      dense: true,
+                      leading: Icon(Icons.speed_rounded),
+                      title: Text('Usage Limits'),
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: 'account',
+                    child: ListTile(
+                      dense: true,
+                      leading: Icon(
+                        auth.isAuthenticated
+                            ? Icons.verified_user
+                            : Icons.account_circle_outlined,
+                      ),
+                      title: Text(
+                        auth.isAuthenticated ? 'Google Account' : 'Sign in',
+                      ),
+                    ),
+                  ),
+                  const PopupMenuItem(
+                    value: 'cli',
+                    child: ListTile(
+                      dense: true,
+                      leading: Icon(Icons.terminal),
+                      title: Text('Antigravity CLI & Flags'),
+                    ),
+                  ),
+                  if (widget.onOpenQuickPanel != null)
+                    const PopupMenuItem(
+                      value: 'overview',
+                      child: ListTile(
+                        dense: true,
+                        leading: Icon(Icons.dashboard_outlined),
+                        title: Text('Overview Panel'),
+                      ),
+                    ),
+                  const PopupMenuItem(
+                    value: 'side',
+                    child: ListTile(
+                      dense: true,
+                      leading: Icon(Icons.vertical_split_outlined),
+                      title: Text('Toggle Side Panel'),
+                    ),
+                  ),
+                  if (chat.messages.isNotEmpty)
+                    const PopupMenuItem(
+                      value: 'share',
+                      child: ListTile(
+                        dense: true,
+                        leading: Icon(Icons.ios_share),
+                        title: Text('Share Transcript'),
+                      ),
+                    ),
+                ],
               ),
-            if (widget.onOpenQuickPanel != null)
-              IconButton(
-                tooltip: 'Toggle Overview Panel (Ctrl+Alt+O)',
-                onPressed: widget.onOpenQuickPanel,
-                icon: const Icon(Icons.dashboard_outlined),
-              ),
+            ],
           ],
         ),
         if (!auth.isAuthenticated ||
@@ -564,27 +734,52 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         if (_showSlashMenu)
           wrapCentered(
             Container(
-              constraints: const BoxConstraints(maxHeight: 220),
+              constraints: const BoxConstraints(maxHeight: 240),
               margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
               child: Card(
                 child: ListView(
                   shrinkWrap: true,
-                  children: _slashCommands
-                      .where((c) => c.$1.startsWith(_inputController.text))
+                  children: AgyCliCatalog.slashCommands
+                      .where((c) => c.matches(_inputController.text))
                       .map(
                         (c) => ListTile(
                           dense: true,
-                          title: Text(
-                            c.$1,
-                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          title: Row(
+                            children: [
+                              Text(
+                                c.command,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              if (c.argHint != null) ...[
+                                const SizedBox(width: 6),
+                                Text(
+                                  c.argHint!,
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              ],
+                            ],
                           ),
-                          subtitle: Text(c.$2),
+                          subtitle: Text(
+                            c.description,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                           onTap: () {
-                            _inputController.text = '${c.$1} ';
+                            final next = c.argHint != null
+                                ? '${c.command} '
+                                : c.command;
+                            _inputController.text = next;
                             _inputController.selection = TextSelection.collapsed(
-                              offset: _inputController.text.length,
+                              offset: next.length,
                             );
                             setState(() => _showSlashMenu = false);
+                            if (c.handledLocally && c.argHint == null) {
+                              _submit();
+                            }
                           },
                         ),
                       )
@@ -660,76 +855,179 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      IconButton(
-                        tooltip: 'Attach file',
-                        onPressed: _pickFile,
-                        icon: const Icon(Icons.attach_file),
+                  // dsh-Go style rounded pill composer so narrow mobile widths
+                  // give maximum unobstructed horizontal space to the TextField.
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(6, 5, 6, 5),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.surfaceContainerHigh
+                          .withOpacity(0.85),
+                      borderRadius: BorderRadius.circular(26),
+                      border: Border.all(
+                        color: theme.colorScheme.outlineVariant.withOpacity(0.45),
                       ),
-                      IconButton(
-                        tooltip: 'Attach image',
-                        onPressed: _pickImage,
-                        icon: const Icon(Icons.image_outlined),
-                      ),
-                      Expanded(
-                        child: Focus(
-                          onKeyEvent: _handleComposerKey,
-                          child: TextField(
-                            controller: _inputController,
-                            onChanged: _onChanged,
-                            minLines: 1,
-                            maxLines: widget.isDesktopMode ? 8 : 5,
-                            textInputAction: TextInputAction.newline,
-                            decoration: InputDecoration(
-                              hintText: isBusyOrBg
-                                  ? 'Queue message (or Steer to force send)…'
-                                  : widget.isDesktopMode && _enterToSend
-                                      ? 'Ask anything, @ to mention, / for commands (Enter sends)'
-                                      : 'Ask anything, @ to mention, / for commands…',
-                              suffixIcon: IconButton(
-                                tooltip: 'Voice input',
-                                onPressed:
-                                    _listeningVoice ? null : _dictateVoice,
-                                icon: Icon(
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        PopupMenuButton<String>(
+                          tooltip: 'Attach or CLI tools',
+                          padding: EdgeInsets.zero,
+                          onSelected: (action) {
+                            switch (action) {
+                              case 'file':
+                                _pickFile();
+                              case 'image':
+                                _pickImage();
+                              case 'voice':
+                                if (!_listeningVoice) _dictateVoice();
+                              case 'slash':
+                                _inputController.text = '/';
+                                _inputController.selection =
+                                    const TextSelection.collapsed(offset: 1);
+                                _onChanged('/');
+                              case 'cli':
+                                Navigator.of(context).push(
+                                  MaterialPageRoute<void>(
+                                    builder: (_) => const CliManagerPage(),
+                                  ),
+                                );
+                            }
+                          },
+                          itemBuilder: (_) => [
+                            const PopupMenuItem(
+                              value: 'file',
+                              child: ListTile(
+                                dense: true,
+                                leading: Icon(Icons.attach_file),
+                                title: Text('Attach file'),
+                              ),
+                            ),
+                            const PopupMenuItem(
+                              value: 'image',
+                              child: ListTile(
+                                dense: true,
+                                leading: Icon(Icons.image_outlined),
+                                title: Text('Attach image'),
+                              ),
+                            ),
+                            PopupMenuItem(
+                              value: 'voice',
+                              child: ListTile(
+                                dense: true,
+                                leading: Icon(
                                   _listeningVoice ? Icons.mic : Icons.mic_none,
-                                  color: _listeningVoice
-                                      ? theme.colorScheme.primary
-                                      : null,
                                 ),
+                                title: const Text('Voice input'),
+                              ),
+                            ),
+                            const PopupMenuItem(
+                              value: 'slash',
+                              child: ListTile(
+                                dense: true,
+                                leading: Icon(Icons.code),
+                                title: Text('Slash commands (/)'),
+                              ),
+                            ),
+                            const PopupMenuItem(
+                              value: 'cli',
+                              child: ListTile(
+                                dense: true,
+                                leading: Icon(Icons.terminal),
+                                title: Text('Antigravity CLI & Flags'),
+                              ),
+                            ),
+                          ],
+                          child: Container(
+                            width: 36,
+                            height: 36,
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.surfaceContainerHighest,
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              _listeningVoice ? Icons.mic : Icons.add_rounded,
+                              size: 20,
+                              color: _listeningVoice
+                                  ? theme.colorScheme.primary
+                                  : theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Focus(
+                            onKeyEvent: _handleComposerKey,
+                            child: TextField(
+                              controller: _inputController,
+                              onChanged: _onChanged,
+                              minLines: 1,
+                              maxLines: widget.isDesktopMode ? 8 : 5,
+                              textInputAction: TextInputAction.newline,
+                              decoration: InputDecoration(
+                                isDense: true,
+                                border: InputBorder.none,
+                                enabledBorder: InputBorder.none,
+                                focusedBorder: InputBorder.none,
+                                filled: false,
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 2,
+                                  vertical: 8,
+                                ),
+                                hintText: isBusyOrBg
+                                    ? 'Queue message (or Steer)…'
+                                    : widget.isDesktopMode && _enterToSend
+                                        ? 'Ask anything, @ file, / command (Enter sends)'
+                                        : 'Ask anything, @ file, / command…',
                               ),
                             ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 8),
-                      if (chat.isStreaming)
-                        IconButton.filledTonal(
-                          tooltip: 'Stop (Esc)',
-                          onPressed: () =>
-                              ref.read(chatProvider.notifier).stopStreaming(),
-                          icon: const Icon(Icons.stop_rounded),
-                        ),
-                      if (isBusyOrBg) ...[
+                        if (chat.isStreaming) ...[
+                          const SizedBox(width: 4),
+                          IconButton.filledTonal(
+                            tooltip: 'Stop (Esc)',
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints.tightFor(
+                              width: 36,
+                              height: 36,
+                            ),
+                            onPressed: () =>
+                                ref.read(chatProvider.notifier).stopStreaming(),
+                            icon: const Icon(Icons.stop_rounded, size: 19),
+                          ),
+                        ],
+                        if (isBusyOrBg) ...[
+                          const SizedBox(width: 4),
+                          IconButton.filledTonal(
+                            tooltip: 'Steer (force send now)',
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints.tightFor(
+                              width: 36,
+                              height: 36,
+                            ),
+                            onPressed: _steerSubmit,
+                            icon: const Icon(Icons.bolt_rounded, size: 19),
+                          ),
+                        ],
                         const SizedBox(width: 4),
-                        IconButton.filledTonal(
-                          tooltip: 'Steer (force send now)',
-                          onPressed: _steerSubmit,
-                          icon: const Icon(Icons.bolt_rounded),
+                        IconButton.filled(
+                          tooltip: isBusyOrBg ? 'Queue' : 'Send',
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints.tightFor(
+                            width: 36,
+                            height: 36,
+                          ),
+                          onPressed: _submit,
+                          icon: Icon(
+                            isBusyOrBg
+                                ? Icons.schedule_send_rounded
+                                : Icons.arrow_upward_rounded,
+                            size: 19,
+                          ),
                         ),
                       ],
-                      const SizedBox(width: 4),
-                      IconButton.filled(
-                        tooltip: isBusyOrBg ? 'Queue' : 'Send',
-                        onPressed: _submit,
-                        icon: Icon(
-                          isBusyOrBg
-                              ? Icons.schedule_send_rounded
-                              : Icons.arrow_upward_rounded,
-                        ),
-                      ),
-                    ],
+                    ),
                   ),
                   const SizedBox(height: 6),
                   // 1:1 Antigravity Desktop Inline Composer Bar (Model, Effort, Permission Preset, Mode)

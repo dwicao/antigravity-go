@@ -14,6 +14,11 @@ class AgyPromptRequest {
     this.dangerouslySkipPermissions = false,
     this.allowNonWorkspaceAccess = true,
     this.geminiApiKey,
+    this.agentName,
+    this.printTimeoutSeconds,
+    this.disableSlashCommands = false,
+    this.continueLast = false,
+    this.remoteAgent,
   });
 
   final String prompt;
@@ -26,6 +31,11 @@ class AgyPromptRequest {
   final bool dangerouslySkipPermissions;
   final bool allowNonWorkspaceAccess;
   final String? geminiApiKey;
+  final String? agentName;
+  final int? printTimeoutSeconds;
+  final bool disableSlashCommands;
+  final bool continueLast;
+  final String? remoteAgent;
 }
 
 /// Abstract transport implemented by both on-device Android `agy` and remote SSH `agy`.

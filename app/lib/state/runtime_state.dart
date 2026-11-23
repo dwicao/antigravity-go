@@ -79,6 +79,12 @@ class RuntimeNotifier extends Notifier<RuntimeUiState> {
     return ok;
   }
 
+  Future<int> forceStopAllBackgroundTasks() async {
+    final count = await RuntimeBridge.instance.forceStopAllBackgroundTasks();
+    await refresh();
+    return count;
+  }
+
   Future<void> installAndStart() async {
     state = state.copyWith(busy: true);
     try {
