@@ -164,6 +164,30 @@ class UpdateSheet extends ConsumerWidget {
                       ),
                     ],
                   ),
+                  if (update.needsInstallPermission) ...[
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Allow "Install unknown apps" permission before installing APK.',
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: theme.colorScheme.tertiary,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        TextButton(
+                          onPressed: () async {
+                            await UpdateService.instance
+                                .openInstallUnknownAppsSettings();
+                            await notifier.refreshInstallPermission();
+                          },
+                          child: const Text('Grant'),
+                        ),
+                      ],
+                    ),
+                  ],
                   if (update.errorMessage != null) ...[
                     const SizedBox(height: 6),
                     Text(

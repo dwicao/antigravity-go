@@ -2,8 +2,11 @@ package io.github.dwicao.antigravity_go.update
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import androidx.core.content.FileProvider
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.EventChannel
@@ -65,6 +68,30 @@ class UpdatePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChanne
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
+            "canRequestPackageInstalls" -> {
+                val allowed = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    appContext.packageManager.canRequestPackageInstalls()
+                } else {
+                    true
+                }
+                result.success(allowed)
+            }
+            "openInstallUnknownAppsSettings" -> {
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        val intent = Intent(
+                            Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                            Uri.parse("package:${appContext.packageName}"),
+                        ).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        appContext.startActivity(intent)
+                    }
+                    result.success(true)
+                } catch (_: Throwable) {
+                    result.success(false)
+                }
+            }
             "cancelUpdate" -> {
                 cancelActiveDownload()
                 result.success(true)

@@ -258,7 +258,10 @@ final chatProvider =
 
 class ChatNotifier extends Notifier<ChatThreadState> {
   StreamSubscription<AgyChatEvent>? _activeSub;
+  StreamSubscription<RuntimeEvent>? _wakeupSub;
   String? _loadedSessionId;
+  String? _wakeupAssistantId;
+  final AcpCodec _wakeupCodec = AcpCodec();
   Timer? _stallWatchdog;
   bool _receivedTurnContent = false;
   bool _usedFallbackForTurn = false;
@@ -337,7 +340,12 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     ref.onDispose(() {
       _stallWatchdog?.cancel();
       _activeSub?.cancel();
+      _wakeupSub?.cancel();
     });
+    _wakeupSub?.cancel();
+    _wakeupSub = RuntimeBridge.instance.events
+        .where((e) => e.kind == 'acp_wakeup' && e.stdoutLine != null)
+        .listen(_handleAcpWakeup);
     Future.microtask(() {
       if (!ref.mounted) return;
       ref.read(ciWatchProvider.notifier).onCompletedCallback =
@@ -351,6 +359,51 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       Future.microtask(() => _loadMessages(activeId));
     }
     return const ChatThreadState();
+  }
+
+  void _handleAcpWakeup(RuntimeEvent evt) {
+    if (!ref.mounted || evt.stdoutLine == null) return;
+    final parsed = _wakeupCodec.parseNotificationOrRequest(evt.stdoutLine!);
+    if (parsed == null) return;
+
+    final sessionsState = ref.read(sessionsProvider);
+    AgySessionSummary? target;
+    if (evt.sessionId != null && evt.sessionId!.isNotEmpty) {
+      for (final s in sessionsState.sessions) {
+        if (s.remoteConversationId == evt.sessionId) {
+          target = s;
+          break;
+        }
+      }
+    }
+    target ??= sessionsState.activeSession;
+    if (target == null) return;
+
+    final msgs = _messagesForSession(target.id);
+    var assistantId = _wakeupAssistantId;
+    var idx = assistantId == null
+        ? -1
+        : msgs.indexWhere((m) => m.id == assistantId && m.isStreaming);
+    if (idx < 0) {
+      assistantId = const Uuid().v4();
+      _wakeupAssistantId = assistantId;
+      _turnStartedAt[assistantId] = DateTime.now();
+      final msg = ChatMessage(
+        id: assistantId,
+        role: ChatRole.assistant,
+        text: '',
+        createdAt: DateTime.now(),
+        modelId: ref.read(settingsProvider).selectedModelId,
+        reasoningEffort: ref.read(settingsProvider).reasoningEffort,
+        isStreaming: true,
+      );
+      _updateSessionMessages(target.id, [...msgs, msg]);
+    }
+    _handleEvent(target, assistantId!, parsed);
+    if (parsed is AgyTurnResultEvent || parsed is AgyErrorEvent) {
+      _wakeupAssistantId = null;
+      unawaited(_persistMessages(target.id, _messagesForSession(target.id)));
+    }
   }
 
   Future<void> _handleCiWatchCompleted({

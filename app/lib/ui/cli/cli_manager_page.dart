@@ -9,7 +9,8 @@ import '../../state/settings_state.dart';
 import '../../theme/app_theme.dart';
 
 /// Full Antigravity CLI (`agy`) subcommands & startup flags manager,
-/// implementing all commands documented at antigravity.google/docs/cli/reference.
+/// with structured cards for `agy agent`, `agy mcp list`, and `agy plugin list`
+/// plus full raw subcommand execution (`remote-control`, `models`, `changelog`, `update`).
 class CliManagerPage extends ConsumerStatefulWidget {
   const CliManagerPage({super.key, this.initialSubcommand});
 
@@ -23,10 +24,14 @@ class _CliManagerPageState extends ConsumerState<CliManagerPage> {
   bool _running = false;
   String _lastCommand = '';
   String _output = '';
+  List<AgyCliManagedItem> _agents = const [];
+  List<AgyCliManagedItem> _mcpServers = const [];
+  List<AgyCliManagedItem> _plugins = const [];
 
   @override
   void initState() {
     super.initState();
+    Future.microtask(_loadStructuredLists);
     if (widget.initialSubcommand != null) {
       final spec = AgyCliCatalog.subcommands.where(
         (s) => s.name == widget.initialSubcommand,
@@ -37,24 +42,63 @@ class _CliManagerPageState extends ConsumerState<CliManagerPage> {
     }
   }
 
-  Future<void> _runAgy(List<String> args, {int timeout = 30}) async {
+  String _activeCwd() {
+    final projDir = ref.read(projectsProvider).activeProject.primaryFolder;
+    final fallback = ref.read(runtimeProvider).status.workspaceRoot ?? '';
+    return projDir.isNotEmpty ? projDir : fallback;
+  }
+
+  Future<void> _loadStructuredLists() async {
+    final cwd = _activeCwd();
+    try {
+      final agentOut = await RuntimeBridge.instance.runCommandCapture(
+        args: const ['agent'],
+        cwd: cwd,
+        timeoutSeconds: 12,
+      );
+      final mcpOut = await RuntimeBridge.instance.runCommandCapture(
+        args: const ['mcp', 'list'],
+        cwd: cwd,
+        timeoutSeconds: 12,
+      );
+      final pluginOut = await RuntimeBridge.instance.runCommandCapture(
+        args: const ['plugin', 'list'],
+        cwd: cwd,
+        timeoutSeconds: 12,
+      );
+      if (!mounted) return;
+      setState(() {
+        _agents = AgyCliManagedItem.parseListOutput(agentOut);
+        _mcpServers = AgyCliManagedItem.parseListOutput(mcpOut);
+        _plugins = AgyCliManagedItem.parseListOutput(pluginOut);
+      });
+    } catch (_) {
+      // Runtime may be uninstalled or running in tests.
+    }
+  }
+
+  Future<void> _runAgy(
+    List<String> args, {
+    int timeout = 30,
+    bool refreshLists = false,
+  }) async {
     setState(() {
       _running = true;
       _lastCommand = 'agy ${args.join(' ')}';
     });
     try {
-      final projDir = ref.read(projectsProvider).activeProject.primaryFolder;
-      final fallback = ref.read(runtimeProvider).status.workspaceRoot ?? '';
-      final cwd = projDir.isNotEmpty ? projDir : fallback;
       final out = await RuntimeBridge.instance.runCommandCapture(
         args: args,
-        cwd: cwd,
+        cwd: _activeCwd(),
         timeoutSeconds: timeout,
       );
       if (!mounted) return;
       setState(() {
         _output = out.trim().isEmpty ? '(completed with no output)' : out.trim();
       });
+      if (refreshLists) {
+        await _loadStructuredLists();
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() => _output = 'Error: $e');
@@ -66,8 +110,9 @@ class _CliManagerPageState extends ConsumerState<CliManagerPage> {
   Future<void> _promptAndRun(
     String title,
     String hint,
-    List<String> Function(String value) buildArgs,
-  ) async {
+    List<String> Function(String value) buildArgs, {
+    bool refreshLists = false,
+  }) async {
     final ctrl = TextEditingController();
     final val = await showDialog<String>(
       context: context,
@@ -92,7 +137,7 @@ class _CliManagerPageState extends ConsumerState<CliManagerPage> {
     );
     ctrl.dispose();
     if (val == null || val.isEmpty) return;
-    await _runAgy(buildArgs(val));
+    await _runAgy(buildArgs(val), refreshLists: refreshLists);
   }
 
   @override
@@ -105,10 +150,49 @@ class _CliManagerPageState extends ConsumerState<CliManagerPage> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Antigravity CLI & Flags'),
+        actions: [
+          IconButton(
+            tooltip: 'Refresh agents, MCP, & plugins',
+            onPressed: _running ? null : _loadStructuredLists,
+            icon: const Icon(Icons.refresh),
+          ),
+        ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          if (_mcpServers.isNotEmpty) ...[
+            _ManagedListCard(
+              title: 'MCP Servers (${_mcpServers.length})',
+              items: _mcpServers,
+              busy: _running,
+              onToggle: (item, enabled) => _runAgy(
+                ['mcp', enabled ? 'enable' : 'disable', item.name],
+                refreshLists: true,
+              ),
+              onRemove: (item) => _runAgy(
+                ['mcp', 'remove', item.name],
+                refreshLists: true,
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
+          if (_plugins.isNotEmpty) ...[
+            _ManagedListCard(
+              title: 'Plugins (${_plugins.length})',
+              items: _plugins,
+              busy: _running,
+              onToggle: (item, enabled) => _runAgy(
+                ['plugin', enabled ? 'enable' : 'disable', item.name],
+                refreshLists: true,
+              ),
+              onRemove: (item) => _runAgy(
+                ['plugin', 'uninstall', item.name],
+                refreshLists: true,
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
           Card(
             child: Padding(
               padding: const EdgeInsets.all(14),
@@ -133,7 +217,12 @@ class _CliManagerPageState extends ConsumerState<CliManagerPage> {
                           tooltip: sub.summary,
                           onPressed: _running
                               ? null
-                              : () => _runAgy(sub.defaultArgs),
+                              : () => _runAgy(
+                                    sub.defaultArgs,
+                                    refreshLists: sub.name == 'mcp' ||
+                                        sub.name == 'plugin' ||
+                                        sub.name == 'agent',
+                                  ),
                         ),
                     ],
                   ),
@@ -149,6 +238,7 @@ class _CliManagerPageState extends ConsumerState<CliManagerPage> {
                                   'Add MCP Server',
                                   'name command-or-url (e.g. fs npx -y ...)',
                                   (v) => ['mcp', 'add', ...v.split(RegExp(r'\s+'))],
+                                  refreshLists: true,
                                 ),
                         icon: const Icon(Icons.add, size: 16),
                         label: const Text('mcp add'),
@@ -160,6 +250,7 @@ class _CliManagerPageState extends ConsumerState<CliManagerPage> {
                                   'Install Plugin',
                                   'plugin name or path',
                                   (v) => ['plugin', 'install', v],
+                                  refreshLists: true,
                                 ),
                         icon: const Icon(Icons.extension_outlined, size: 16),
                         label: const Text('plugin install'),
@@ -253,6 +344,37 @@ class _CliManagerPageState extends ConsumerState<CliManagerPage> {
                       color: semantic.textSecondary,
                     ),
                   ),
+                  if (_agents.isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    DropdownButtonFormField<String>(
+                      value: _agents.any((a) => a.name == settings.activeAgent)
+                          ? settings.activeAgent
+                          : '',
+                      isExpanded: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Select Discovered Agent (--agent)',
+                      ),
+                      items: [
+                        const DropdownMenuItem(
+                          value: '',
+                          child: Text('Default agent'),
+                        ),
+                        for (final agent in _agents)
+                          DropdownMenuItem(
+                            value: agent.name,
+                            child: Text(
+                              agent.detail.isNotEmpty
+                                  ? '${agent.name} — ${agent.detail}'
+                                  : agent.name,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                      ],
+                      onChanged: (v) {
+                        if (v != null) notifier.setActiveAgent(v);
+                      },
+                    ),
+                  ],
                   const SizedBox(height: 12),
                   TextFormField(
                     initialValue: settings.activeAgent,
@@ -309,6 +431,74 @@ class _CliManagerPageState extends ConsumerState<CliManagerPage> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _ManagedListCard extends StatelessWidget {
+  const _ManagedListCard({
+    required this.title,
+    required this.items,
+    required this.busy,
+    required this.onToggle,
+    required this.onRemove,
+  });
+
+  final String title;
+  final List<AgyCliManagedItem> items;
+  final bool busy;
+  final void Function(AgyCliManagedItem item, bool enabled) onToggle;
+  final void Function(AgyCliManagedItem item) onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 12, 8, 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 4),
+            for (final item in items)
+              ListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                title: Text(
+                  item.name,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                subtitle: item.detail.isNotEmpty
+                    ? Text(
+                        item.detail,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      )
+                    : null,
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Switch.adaptive(
+                      value: item.enabled,
+                      onChanged: busy ? null : (v) => onToggle(item, v),
+                    ),
+                    IconButton(
+                      tooltip: 'Remove ${item.name}',
+                      icon: const Icon(Icons.delete_outline, size: 18),
+                      onPressed: busy ? null : () => onRemove(item),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }

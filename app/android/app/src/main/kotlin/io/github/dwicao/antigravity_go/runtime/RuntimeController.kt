@@ -1199,6 +1199,10 @@ class RuntimeController private constructor(private val appContext: Context) {
         emitBackgroundTasks()
     }
 
+    fun closeSessionWorker(sessionId: String): Boolean {
+        return acpManager.closeWorker(sessionId)
+    }
+
     fun writeTextFile(path: String, content: String): Boolean {
         return try {
             val f = File(path)
@@ -1335,6 +1339,7 @@ class RuntimeController private constructor(private val appContext: Context) {
         val headHash = runShell("git rev-parse --short HEAD 2>/dev/null || true", dir.absolutePath).trim()
         val numstat = runShell("git show --numstat --format=\"\" HEAD 2>/dev/null || true", dir.absolutePath)
         val nameStatus = runShell("git show --name-status --format=\"\" HEAD 2>/dev/null || true", dir.absolutePath)
+        val commitDiff = runShell("git show --format=\"\" HEAD 2>/dev/null | head -n 800 || true", dir.absolutePath)
         var pushOk = !push
         if (push && commitOk) {
             val pushOut = runShell("git push 2>&1", dir.absolutePath)
@@ -1351,6 +1356,7 @@ class RuntimeController private constructor(private val appContext: Context) {
             "output" to out.toString().trim(),
             "numstat" to numstat,
             "nameStatus" to nameStatus,
+            "commitDiff" to commitDiff,
         )
     }
 

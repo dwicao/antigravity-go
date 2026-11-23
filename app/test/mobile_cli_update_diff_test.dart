@@ -442,4 +442,58 @@ void main() {
     expect(receivedPrompt, contains('999'));
     expect(receivedPrompt, contains('flutter analyze failed'));
   });
+
+  test('AppUpdateState.compareSemver detects newer GitHub releases accurately', () {
+    const up = AppUpdateState(
+      latest: AppReleaseInfo(
+        tagName: 'v1.0.10',
+        versionName: '1.0.10',
+        htmlUrl: 'https://github.com/dwicao/antigravity-go/releases/tag/v1.0.10',
+      ),
+    );
+    expect(up.hasNewerVersion, isTrue);
+    expect(AppUpdateState.compareSemver('1.0.9', '1.0.9'), 0);
+    expect(AppUpdateState.compareSemver('1.0.8', '1.0.9'), lessThan(0));
+  });
+
+  testWidgets(
+      'ChangeCard opens per-file highlighted diff sheet and calls onOpenDiff',
+      (tester) async {
+    var openedDiff = false;
+    final msg = ChatMessage(
+      id: 'm-unified',
+      role: ChatRole.assistant,
+      text: 'Pushed commit.',
+      createdAt: DateTime(2026, 11, 23, 10, 0),
+      completedAt: DateTime(2026, 11, 23, 10, 1),
+      changedFiles: const [
+        FileChangeEntry(
+          path: 'app/lib/main.dart',
+          added: 1,
+          removed: 1,
+          diff: '@@ -1,1 +1,1 @@\n-oldLine()\n+newLine()',
+        ),
+      ],
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: MessageBubble(
+            message: msg,
+            onOpenDiff: () => openedDiff = true,
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.textContaining('main.dart'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('+newLine()'), findsOneWidget);
+    expect(find.text('-oldLine()'), findsOneWidget);
+
+    await tester.tap(find.text('Open Git Review'));
+    await tester.pumpAndSettle();
+    expect(openedDiff, isTrue);
+  });
 }

@@ -18,11 +18,13 @@ import '../../state/runtime_state.dart';
 import '../../state/sessions_state.dart';
 import '../../state/settings_state.dart';
 import '../../state/side_panel_state.dart';
+import '../../state/update_state.dart';
 import '../auth/google_login_sheet.dart';
 import '../cli/cli_manager_page.dart';
 import '../settings/settings_page.dart';
 import '../shell/background_tasks_sheet.dart';
 import '../shell/command_palette.dart';
+import '../update/update_sheet.dart';
 import '../usage/usage_page.dart';
 import 'message_bubble.dart';
 import 'tool_approval_card.dart';
@@ -644,6 +646,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                             .read(chatProvider.notifier)
                                             .editAndResend(m.id, newText)
                                         : null,
+                                onOpenDiff: () =>
+                                    ref.read(sidePanelProvider.notifier).openTab(
+                                          const SidePanelTab(
+                                            id: 'review',
+                                            kind: SidePanelTabKind.review,
+                                            title: 'Review',
+                                          ),
+                                        ),
                               ),
                             );
                           },
@@ -810,31 +820,45 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 child: Card(
                   child: ListView(
                     shrinkWrap: true,
-                    children: _mentionFiles.take(12).map((f) {
-                      final name = f['name'] ?? '';
-                      final path = f['path'] ?? '';
-                      return ListTile(
-                        dense: true,
-                        leading: Icon(
-                          f['type'] == 'dir'
-                              ? Icons.folder
-                              : Icons.insert_drive_file_outlined,
-                          size: 16,
-                        ),
-                        title: Text('@$name'),
-                        subtitle: Text(path, overflow: TextOverflow.ellipsis),
-                        onTap: () {
-                          final text = _inputController.text;
-                          final idx = text.lastIndexOf('@');
-                          final next =
-                              '${text.substring(0, idx)}@$path ';
-                          _inputController.text = next;
-                          _inputController.selection =
-                              TextSelection.collapsed(offset: next.length);
-                          setState(() => _showMentionMenu = false);
-                        },
-                      );
-                    }).toList(),
+                    children: (() {
+                      final txt = _inputController.text;
+                      final atIdx = txt.lastIndexOf('@');
+                      final query = atIdx >= 0
+                          ? txt.substring(atIdx + 1).trim().toLowerCase()
+                          : '';
+                      final filtered = query.isEmpty
+                          ? _mentionFiles
+                          : _mentionFiles.where((f) {
+                              final name = (f['name'] ?? '').toLowerCase();
+                              final path = (f['path'] ?? '').toLowerCase();
+                              return name.contains(query) || path.contains(query);
+                            }).toList();
+                      return filtered.take(12).map((f) {
+                        final name = f['name'] ?? '';
+                        final path = f['path'] ?? '';
+                        return ListTile(
+                          dense: true,
+                          leading: Icon(
+                            f['type'] == 'dir'
+                                ? Icons.folder
+                                : Icons.insert_drive_file_outlined,
+                            size: 16,
+                          ),
+                          title: Text('@$name'),
+                          subtitle: Text(path, overflow: TextOverflow.ellipsis),
+                          onTap: () {
+                            final text = _inputController.text;
+                            final idx = text.lastIndexOf('@');
+                            final next =
+                                '${text.substring(0, idx)}@$path ';
+                            _inputController.text = next;
+                            _inputController.selection =
+                                TextSelection.collapsed(offset: next.length);
+                            setState(() => _showMentionMenu = false);
+                          },
+                        );
+                      }).toList();
+                    })(),
                   ),
                 ),
               ),
@@ -1142,6 +1166,33 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                             selected: _enterToSend,
                             onSelected: (v) =>
                                 setState(() => _enterToSend = v),
+                          ),
+                        ],
+                        if (settings.activeAgent.isNotEmpty) ...[
+                          const SizedBox(width: 6),
+                          ActionChip(
+                            visualDensity: VisualDensity.compact,
+                            avatar: const Icon(Icons.smart_toy_outlined, size: 14),
+                            label: Text('@${settings.activeAgent}'),
+                            onPressed: () => Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => const CliManagerPage(),
+                              ),
+                            ),
+                          ),
+                        ],
+                        if (ref.watch(appUpdateProvider).hasNewerVersion) ...[
+                          const SizedBox(width: 6),
+                          ActionChip(
+                            visualDensity: VisualDensity.compact,
+                            avatar: const Icon(
+                              Icons.system_update_alt,
+                              size: 14,
+                            ),
+                            label: Text(
+                              'Update ${ref.watch(appUpdateProvider).latest!.tagName}',
+                            ),
+                            onPressed: () => UpdateSheet.show(context),
                           ),
                         ],
                       ],

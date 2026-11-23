@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:agy_client/agy_client.dart';
@@ -5,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
+import '../runtime/runtime_bridge.dart';
 import 'hosts_state.dart';
 import 'projects_state.dart';
 import 'runtime_state.dart';
@@ -130,6 +132,14 @@ class SessionsNotifier extends Notifier<SessionsState> {
   }
 
   Future<void> deleteSession(String id) async {
+    final target = state.sessions.where((s) => s.id == id).firstOrNull;
+    if (target?.remoteConversationId != null &&
+        target!.remoteConversationId!.isNotEmpty) {
+      unawaited(
+        RuntimeBridge.instance
+            .closeSessionWorker(target.remoteConversationId!),
+      );
+    }
     final next = state.sessions.where((s) => s.id != id).toList();
     if (next.isEmpty) {
       final created = _createDefaultSession();

@@ -129,6 +129,17 @@ class AcpSessionManager(
         return false
     }
 
+    fun closeWorker(sessionId: String): Boolean {
+        val worker = liveWorkers.remove(sessionId) ?: return false
+        worker.terminals.values.forEach { term ->
+            runCatching { term.process.destroyForcibly() }
+        }
+        runCatching { worker.writer.close() }
+        runCatching { worker.process.destroyForcibly() }
+        onTasksChanged()
+        return true
+    }
+
     fun startTurn(
         turnId: String,
         binaryPath: String,

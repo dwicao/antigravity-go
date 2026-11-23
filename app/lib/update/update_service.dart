@@ -178,4 +178,23 @@ class UpdateService {
       // No-op in tests or unsupported platforms.
     }
   }
+
+  Future<bool> canRequestPackageInstalls() async {
+    try {
+      return await _channel.invokeMethod<bool>('canRequestPackageInstalls') ??
+          true;
+    } on MissingPluginException {
+      return true;
+    }
+  }
+
+  Future<bool> openInstallUnknownAppsSettings() async {
+    try {
+      return await _channel
+              .invokeMethod<bool>('openInstallUnknownAppsSettings') ??
+          false;
+    } on MissingPluginException {
+      return false;
+    }
+  }
 }

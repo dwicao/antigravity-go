@@ -207,12 +207,12 @@ class ChangeCard extends StatelessWidget {
                 ConstrainedBox(
                   constraints: const BoxConstraints(maxHeight: 280),
                   child: SingleChildScrollView(
-                    child: SelectableText(
-                      file.diff!,
-                      style: const TextStyle(
-                        fontFamily: 'monospace',
-                        fontSize: 12,
-                      ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        for (final line in file.diff!.split('\n'))
+                          _DiffLineView(line: line),
+                      ],
                     ),
                   ),
                 )
@@ -301,6 +301,56 @@ class DiffCountsBadge extends StatelessWidget {
             style: style?.copyWith(color: Theme.of(context).colorScheme.error),
           ),
       ],
+    );
+  }
+}
+
+class _DiffLineView extends StatelessWidget {
+  const _DiffLineView({required this.line});
+
+  final String line;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isAdd = line.startsWith('+') && !line.startsWith('+++');
+    final isDel = line.startsWith('-') && !line.startsWith('---');
+    final isHunk = line.startsWith('@@');
+    final isMeta = line.startsWith('diff ') ||
+        line.startsWith('index ') ||
+        line.startsWith('+++') ||
+        line.startsWith('---');
+
+    final bg = isAdd
+        ? Colors.green.withOpacity(0.14)
+        : isDel
+            ? theme.colorScheme.error.withOpacity(0.14)
+            : isHunk
+                ? theme.colorScheme.primary.withOpacity(0.10)
+                : null;
+    final fg = isAdd
+        ? Colors.green
+        : isDel
+            ? theme.colorScheme.error
+            : isHunk
+                ? theme.colorScheme.primary
+                : isMeta
+                    ? theme.colorScheme.onSurfaceVariant
+                    : theme.colorScheme.onSurface;
+
+    return Container(
+      width: double.infinity,
+      color: bg,
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      child: SelectableText(
+        line,
+        style: TextStyle(
+          fontFamily: 'monospace',
+          fontSize: 11.5,
+          color: fg,
+          fontWeight: isHunk || isMeta ? FontWeight.w600 : FontWeight.w400,
+        ),
+      ),
     );
   }
 }

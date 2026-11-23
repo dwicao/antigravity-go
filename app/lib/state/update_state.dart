@@ -17,6 +17,8 @@ String formatUpdateBytes(int bytes) {
 }
 
 class AppUpdateState {
+  static const String currentVersion = '1.0.9';
+
   const AppUpdateState({
     this.checking = false,
     this.latest,
@@ -25,6 +27,7 @@ class AppUpdateState {
     this.totalBytes,
     this.speedBps = 0,
     this.persistedDataUsedBytes = 0,
+    this.needsInstallPermission = false,
     this.errorMessage,
     this.lastCheckedAt,
   });
@@ -36,8 +39,29 @@ class AppUpdateState {
   final int? totalBytes;
   final int speedBps;
   final int persistedDataUsedBytes;
+  final bool needsInstallPermission;
   final String? errorMessage;
   final DateTime? lastCheckedAt;
+
+  bool get hasNewerVersion =>
+      latest != null && compareSemver(latest!.versionName, currentVersion) > 0;
+
+  static int compareSemver(String a, String b) {
+    List<int> parse(String s) {
+      final core = s.replaceFirst(RegExp(r'^[vV]'), '').split('+').first.split('-').first;
+      return core.split('.').map((p) => int.tryParse(p) ?? 0).toList();
+    }
+
+    final pa = parse(a);
+    final pb = parse(b);
+    final len = pa.length > pb.length ? pa.length : pb.length;
+    for (var i = 0; i < len; i++) {
+      final va = i < pa.length ? pa[i] : 0;
+      final vb = i < pb.length ? pb[i] : 0;
+      if (va != vb) return va.compareTo(vb);
+    }
+    return 0;
+  }
 
   bool get isDownloading =>
       phase == UpdateTransferPhase.downloading ||
@@ -65,6 +89,7 @@ class AppUpdateState {
     bool clearTotal = false,
     int? speedBps,
     int? persistedDataUsedBytes,
+    bool? needsInstallPermission,
     String? errorMessage,
     bool clearError = false,
     DateTime? lastCheckedAt,
@@ -78,6 +103,8 @@ class AppUpdateState {
       speedBps: speedBps ?? this.speedBps,
       persistedDataUsedBytes:
           persistedDataUsedBytes ?? this.persistedDataUsedBytes,
+      needsInstallPermission:
+          needsInstallPermission ?? this.needsInstallPermission,
       errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
       lastCheckedAt: lastCheckedAt ?? this.lastCheckedAt,
     );
@@ -89,6 +116,7 @@ final appUpdateProvider =
 
 class AppUpdateNotifier extends Notifier<AppUpdateState> {
   static const _kDataUsedKey = 'agy_update_total_data_bytes';
+  static const _kLastCheckMsKey = 'agy_update_last_check_ms';
   StreamSubscription<UpdateProgressEvent>? _sub;
   int _lastRecordedReceived = 0;
 
@@ -105,7 +133,33 @@ class AppUpdateNotifier extends Notifier<AppUpdateState> {
     final prefs = await SharedPreferences.getInstance();
     if (!ref.mounted) return;
     final used = prefs.getInt(_kDataUsedKey) ?? 0;
-    state = state.copyWith(persistedDataUsedBytes: used);
+    final lastMs = prefs.getInt(_kLastCheckMsKey);
+    final canInstall = await UpdateService.instance.canRequestPackageInstalls();
+    if (!ref.mounted) return;
+    state = state.copyWith(
+      persistedDataUsedBytes: used,
+      needsInstallPermission: !canInstall,
+      lastCheckedAt:
+          lastMs != null ? DateTime.fromMillisecondsSinceEpoch(lastMs) : null,
+    );
+  }
+
+  Future<void> autoCheckIfDue({Duration interval = const Duration(hours: 24)}) async {
+    final prefs = await SharedPreferences.getInstance();
+    final lastMs = prefs.getInt(_kLastCheckMsKey);
+    if (lastMs != null) {
+      final elapsed = DateTime.now()
+          .difference(DateTime.fromMillisecondsSinceEpoch(lastMs));
+      if (elapsed < interval) return;
+    }
+    await checkForUpdates();
+  }
+
+  Future<void> refreshInstallPermission() async {
+    final canInstall = await UpdateService.instance.canRequestPackageInstalls();
+    if (ref.mounted) {
+      state = state.copyWith(needsInstallPermission: !canInstall);
+    }
   }
 
   Future<void> _commitReceivedBytes() async {
@@ -146,6 +200,11 @@ class AppUpdateNotifier extends Notifier<AppUpdateState> {
     state = state.copyWith(checking: true, clearError: true);
     try {
       final info = await UpdateService.instance.fetchLatestRelease();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(
+        _kLastCheckMsKey,
+        DateTime.now().millisecondsSinceEpoch,
+      );
       if (!ref.mounted) return info;
       state = state.copyWith(
         checking: false,

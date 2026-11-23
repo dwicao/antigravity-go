@@ -160,6 +160,10 @@ class RuntimePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChann
                 ctrl.cancelTurn(call.argument<String>("turnId") ?: "")
                 result.success(null)
             }
+            "closeSessionWorker" -> {
+                val sid = call.argument<String>("sessionId") ?: ""
+                result.success(ctrl.closeSessionWorker(sid))
+            }
             "backgroundTasks" -> result.success(ctrl.listBackgroundTasks())
             "cancelBackgroundTask" -> {
                 val ok = ctrl.cancelBackgroundTask(call.argument<String>("taskId") ?: "")

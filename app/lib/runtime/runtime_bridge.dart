@@ -246,6 +246,18 @@ class RuntimeBridge {
     await _method.invokeMethod<void>('cancelTurn', {'turnId': turnId});
   }
 
+  Future<bool> closeSessionWorker(String sessionId) async {
+    try {
+      return await _method.invokeMethod<bool>(
+            'closeSessionWorker',
+            {'sessionId': sessionId},
+          ) ??
+          false;
+    } on MissingPluginException {
+      return false;
+    }
+  }
+
   Future<List<NativeBackgroundTask>> getBackgroundTasks() async {
     try {
       final raw = await _method.invokeMethod<List<Object?>>('backgroundTasks');
@@ -362,7 +374,12 @@ class RuntimeBridge {
           files.add(FileChangeEntry(path: path, created: true));
         }
       }
-      return (status: status, diff: diff, branch: branch, files: files);
+      return (
+        status: status,
+        diff: diff,
+        branch: branch,
+        files: FileChangeEntry.attachUnifiedDiffs(files, diff),
+      );
     } on MissingPluginException {
       return (
         status: '',
@@ -399,6 +416,7 @@ class RuntimeBridge {
       );
       final numstat = raw?['numstat']?.toString() ?? '';
       final nameStatus = raw?['nameStatus']?.toString() ?? '';
+      final commitDiff = raw?['commitDiff']?.toString() ?? '';
       final created = <String>{};
       final deleted = <String>{};
       for (final line in nameStatus.split('\n')) {
@@ -407,17 +425,18 @@ class RuntimeBridge {
         if (parts.first.startsWith('A')) created.add(parts.sublist(1).join(' '));
         if (parts.first.startsWith('D')) deleted.add(parts.sublist(1).join(' '));
       }
+      final parsed = FileChangeEntry.parseGitNumstat(
+        numstat,
+        createdPaths: created,
+        deletedPaths: deleted,
+      );
       return (
         ok: raw?['ok'] as bool? ?? false,
         pushed: raw?['pushed'] as bool? ?? false,
         branch: raw?['branch']?.toString() ?? '',
         commitHash: raw?['commitHash']?.toString() ?? '',
         output: raw?['output']?.toString() ?? '',
-        files: FileChangeEntry.parseGitNumstat(
-          numstat,
-          createdPaths: created,
-          deletedPaths: deleted,
-        ),
+        files: FileChangeEntry.attachUnifiedDiffs(parsed, commitDiff),
       );
     } on MissingPluginException {
       return (

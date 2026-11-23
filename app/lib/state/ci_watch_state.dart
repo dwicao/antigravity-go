@@ -3,7 +3,9 @@ import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../remote/ssh_agy_runner.dart';
 import '../runtime/runtime_bridge.dart';
+import 'hosts_state.dart';
 
 class CiWatchItem {
   const CiWatchItem({
@@ -79,9 +81,21 @@ class CiWatchNotifier extends Notifier<List<CiWatchItem>> {
     return const [];
   }
 
-  Future<String> _exec(String command, String cwd) {
+  Future<String> _exec(String command, String cwd) async {
     if (shellRunnerOverride != null) {
       return shellRunnerOverride!(command, cwd);
+    }
+    final sshHost = ref.read(hostsProvider).activeSshHost;
+    if (sshHost != null) {
+      final (pwd, key) =
+          await ref.read(hostsProvider.notifier).readCredentials(sshHost.id);
+      return SshAgyRunner.instance.runRemoteCommand(
+        host: sshHost,
+        command: command,
+        cwd: cwd,
+        password: pwd,
+        privateKeyPem: key,
+      );
     }
     return RuntimeBridge.instance.runShellCommand(command: command, cwd: cwd);
   }

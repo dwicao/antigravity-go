@@ -62,12 +62,14 @@ class MessageBubble extends StatelessWidget {
     required this.message,
     this.onRegenerate,
     this.onEditResend,
+    this.onOpenDiff,
     this.tokensPerSecond,
   });
 
   final ChatMessage message;
   final VoidCallback? onRegenerate;
   final ValueChanged<String>? onEditResend;
+  final VoidCallback? onOpenDiff;
   final double? tokensPerSecond;
 
   @override
@@ -297,7 +299,10 @@ class MessageBubble extends StatelessWidget {
             ),
           ],
           if (!message.isStreaming && message.changedFiles.isNotEmpty)
-            ChangeCard(files: message.changedFiles),
+            ChangeCard(
+              files: message.changedFiles,
+              onOpenDiff: onOpenDiff,
+            ),
           if (!message.isStreaming) ...[
             const SizedBox(height: 8),
             _MessageMetricsFooter(message: message),

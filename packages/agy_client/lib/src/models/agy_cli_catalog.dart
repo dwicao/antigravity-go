@@ -191,8 +191,7 @@ class AgyCliCatalog {
     AgyCliSubcommand(
       name: 'agent',
       summary: 'List and inspect configured CLI agents (--agent)',
-      defaultArgs: ['agent', 'list'],
-      actions: ['list'],
+      defaultArgs: ['agent'],
     ),
     AgyCliSubcommand(
       name: 'mcp',
@@ -310,6 +309,109 @@ class FileChangeEntry {
       );
     }
     return out;
+  }
+
+  /// Splits a full `git diff` / `git show` patch by `diff --git` sections and
+  /// attaches the matching per-file patch snippet to each [FileChangeEntry].
+  static List<FileChangeEntry> attachUnifiedDiffs(
+    List<FileChangeEntry> entries,
+    String unifiedDiff,
+  ) {
+    if (entries.isEmpty || unifiedDiff.trim().isEmpty) return entries;
+    final perFile = <String, String>{};
+    final lines = unifiedDiff.split('\n');
+    String? currentPath;
+    final buf = StringBuffer();
+
+    void flush() {
+      if (currentPath != null && buf.isNotEmpty) {
+        perFile[currentPath!] = buf.toString().trimRight();
+      }
+      buf.clear();
+    }
+
+    for (final line in lines) {
+      if (line.startsWith('diff --git ')) {
+        flush();
+        final match = RegExp(r'^diff --git a/.+? b/(.+)$').firstMatch(line);
+        currentPath = match?.group(1)?.trim();
+        buf.writeln(line);
+      } else if (currentPath != null) {
+        buf.writeln(line);
+      }
+    }
+    flush();
+
+    return entries
+        .map(
+          (e) => FileChangeEntry(
+            path: e.path,
+            added: e.added,
+            removed: e.removed,
+            created: e.created,
+            deleted: e.deleted,
+            diff: perFile[e.path] ?? e.diff,
+          ),
+        )
+        .toList();
+  }
+}
+
+class AgyCliManagedItem {
+  const AgyCliManagedItem({
+    required this.name,
+    this.detail = '',
+    this.enabled = true,
+  });
+
+  final String name;
+  final String detail;
+  final bool enabled;
+
+  /// Parses CLI list output from `agy mcp list`, `agy plugin list`, or `agy agent`.
+  static List<AgyCliManagedItem> parseListOutput(String raw) {
+    final items = <AgyCliManagedItem>[];
+    for (final line in raw.split('\n')) {
+      final trimmed = line.trim();
+      if (trimmed.isEmpty) continue;
+      final lower = trimmed.toLowerCase();
+      if (lower.startsWith('error:') ||
+          lower.startsWith('i1') ||
+          lower.startsWith('w1') ||
+          lower.startsWith('e1') ||
+          lower.startsWith('no ') ||
+          lower.startsWith('usage:')) {
+        continue;
+      }
+      var clean = trimmed
+          .replaceFirst(RegExp(r'^[-*•]\s+'), '')
+          .trim();
+      if (clean.isEmpty) continue;
+      final disabled = lower.contains('(disabled)') || lower.contains('[disabled]');
+      clean = clean
+          .replaceAll(RegExp(r'\s*\((disabled|enabled)\)\s*', caseSensitive: false), ' ')
+          .trim();
+      final sepIdx = clean.indexOf(RegExp(r'[:\t]|\s{2,}|\s+-\s+|\s+—\s+'));
+      if (sepIdx > 0) {
+        final name = clean.substring(0, sepIdx).trim();
+        final detail = clean
+            .substring(sepIdx)
+            .replaceFirst(RegExp(r'^[:\-\—\s\t]+'), '')
+            .trim();
+        if (name.isNotEmpty) {
+          items.add(AgyCliManagedItem(name: name, detail: detail, enabled: !disabled));
+        }
+      } else {
+        final firstToken = clean.split(RegExp(r'\s+')).first;
+        final rest = clean.length > firstToken.length
+            ? clean.substring(firstToken.length).trim()
+            : '';
+        items.add(
+          AgyCliManagedItem(name: firstToken, detail: rest, enabled: !disabled),
+        );
+      }
+    }
+    return items;
   }
 }
 

@@ -64,4 +64,43 @@ void main() {
     expect(entries[1].created, isTrue);
     expect(entries[2].deleted, isTrue);
   });
+
+  test('FileChangeEntry.attachUnifiedDiffs splits git diff hunks by file', () {
+    const numstat = '2\t1\tapp/a.dart\n1\t0\tapp/b.dart\n';
+    const patch = '''
+diff --git a/app/a.dart b/app/a.dart
+index 111..222 100644
+--- a/app/a.dart
++++ b/app/a.dart
+@@ -1,2 +1,3 @@
+-old
++new
++added
+diff --git a/app/b.dart b/app/b.dart
+new file mode 100644
+--- /dev/null
++++ b/app/b.dart
+@@ -0,0 +1 @@
++hello
+''';
+    final base = FileChangeEntry.parseGitNumstat(numstat);
+    final enriched = FileChangeEntry.attachUnifiedDiffs(base, patch);
+    expect(enriched[0].diff, contains('+new'));
+    expect(enriched[0].diff, isNot(contains('+hello')));
+    expect(enriched[1].diff, contains('+hello'));
+  });
+
+  test('AgyCliManagedItem.parseListOutput parses enabled and disabled entries', () {
+    const raw = '''
+No previous warnings
+- filesystem: npx -y @modelcontextprotocol/server-filesystem (enabled)
+- github: https://api.githubcopilot.com/mcp (disabled)
+''';
+    final parsed = AgyCliManagedItem.parseListOutput(raw);
+    expect(parsed, hasLength(2));
+    expect(parsed[0].name, 'filesystem');
+    expect(parsed[0].enabled, isTrue);
+    expect(parsed[1].name, 'github');
+    expect(parsed[1].enabled, isFalse);
+  });
 }

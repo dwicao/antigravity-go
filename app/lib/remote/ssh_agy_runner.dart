@@ -170,6 +170,28 @@ class SshAgyRunner {
     }
   }
 
+  Future<String> runRemoteCommand({
+    required SshHostConfig host,
+    required String command,
+    String? cwd,
+    String? password,
+    String? privateKeyPem,
+  }) async {
+    final client = await connect(
+      host,
+      password: password,
+      privateKeyPem: privateKeyPem,
+    );
+    try {
+      final dir = (cwd != null && cwd.isNotEmpty) ? cwd : host.defaultWorkspace;
+      final cmd = dir.isNotEmpty ? 'cd ${_shellQuote(dir)} && $command' : command;
+      final out = await client.run(cmd);
+      return utf8.decode(out, allowMalformed: true);
+    } finally {
+      client.close();
+    }
+  }
+
   static String _shellQuote(String value) {
     if (value == '~') return '~';
     return "'${value.replaceAll("'", "'\\''")}'";

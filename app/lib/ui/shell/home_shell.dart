@@ -6,6 +6,7 @@ import '../../state/chat_state.dart';
 import '../../state/permissions_state.dart';
 import '../../state/sessions_state.dart';
 import '../../state/side_panel_state.dart';
+import '../../state/update_state.dart';
 import '../chat/chat_screen.dart';
 import '../settings/settings_page.dart';
 import '../side_panel/overview_panel.dart';
@@ -29,6 +30,16 @@ class _HomeShellState extends ConsumerState<HomeShell> {
   final _scaffoldKey = GlobalKey<ScaffoldState>();
   bool _showLeftSidebar = true;
   bool _showOverviewPanel = true;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        ref.read(appUpdateProvider.notifier).autoCheckIfDue();
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
