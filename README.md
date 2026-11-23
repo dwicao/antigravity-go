@@ -4,6 +4,8 @@
 
 Inspired by [dsh-Go](https://github.com/ccch1mneyyy/dsh-Go) and powered by the official [Antigravity CLI (`agy`)](https://antigravity.google/docs/cli/reference) and [Agent Client Protocol (ACP)](https://antigravity.google/docs/ide/extensions/acp).
 
+![Antigravity Go running on Samsung DeX](docs/screenshots/dex-workspace.webp)
+
 ## Key Features
 
 - **Google Account Sign-In**: Authenticate directly with your personal Google Account (Free, Google AI Pro, Google AI Ultra) via `agy acp --login` / OAuth, Gemini Enterprise (Google Cloud), or Gemini API Key.
