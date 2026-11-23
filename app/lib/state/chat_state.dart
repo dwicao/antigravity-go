@@ -430,11 +430,16 @@ class ChatNotifier extends Notifier<ChatThreadState> {
   Future<void> sendPrompt(
     String rawText, {
     List<String> attachments = const [],
+    bool force = false,
   }) async {
     final prompt = rawText.trim();
     if (prompt.isEmpty) return;
 
-    if (state.isStreaming || _activeStreamingSessionId != null) {
+    final hasBackgroundWork = state.isStreaming ||
+        _activeStreamingSessionId != null ||
+        state.activeBackgroundSessionIds.isNotEmpty ||
+        ref.read(runtimeProvider).backgroundTasks.isNotEmpty;
+    if (!force && hasBackgroundWork) {
       state = state.copyWith(
         queuedPrompts: [...state.queuedPrompts, prompt],
       );
@@ -880,7 +885,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       state = state.copyWith(
         queuedPrompts: state.queuedPrompts.sublist(1),
       );
-      await sendPrompt(nextPrompt);
+      await sendPrompt(nextPrompt, force: true);
     }
   }
 
@@ -939,14 +944,26 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     }
   }
 
+  Future<void> _cancelAllBackgroundWork() async {
+    if (state.isStreaming || _activeStreamingSessionId != null) {
+      await stopStreaming();
+    }
+    final nativeTasks = ref.read(runtimeProvider).backgroundTasks;
+    for (final task in nativeTasks) {
+      try {
+        await ref.read(runtimeProvider.notifier).cancelBackgroundTask(task.id);
+      } catch (_) {}
+    }
+  }
+
   Future<void> sendQueuedNow() async {
     if (state.queuedPrompts.isEmpty) return;
-    await stopStreaming();
+    await _cancelAllBackgroundWork();
     final nextPrompt = state.queuedPrompts.first;
     state = state.copyWith(
       queuedPrompts: state.queuedPrompts.sublist(1),
     );
-    await sendPrompt(nextPrompt);
+    await sendPrompt(nextPrompt, force: true);
   }
 
   void removeQueuedPrompt(int index) {
@@ -958,10 +975,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
   Future<void> steerNow(String prompt) async {
     final trimmed = prompt.trim();
     if (trimmed.isEmpty) return;
-    if (state.isStreaming) {
-      await stopStreaming();
-    }
-    await sendPrompt(trimmed);
+    await _cancelAllBackgroundWork();
+    await sendPrompt(trimmed, force: true);
   }
 
   Future<void> regenerateLastTurn() async {

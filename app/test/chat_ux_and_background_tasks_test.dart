@@ -3,6 +3,7 @@ import 'package:antigravity_go/runtime/runtime_models.dart';
 import 'package:antigravity_go/state/background_tasks_state.dart';
 import 'package:antigravity_go/state/chat_state.dart';
 import 'package:antigravity_go/state/runtime_state.dart';
+import 'package:antigravity_go/state/sessions_state.dart';
 import 'package:antigravity_go/ui/chat/chat_screen.dart';
 import 'package:antigravity_go/ui/chat/message_bubble.dart';
 import 'package:antigravity_go/ui/shell/background_tasks_sheet.dart';
@@ -27,6 +28,15 @@ class _FakeChatNotifier extends ChatNotifier {
 
   @override
   ChatThreadState build() => _initial;
+}
+
+class _FakeSessionsNotifier extends SessionsNotifier {
+  _FakeSessionsNotifier(this._initial);
+
+  final SessionsState _initial;
+
+  @override
+  SessionsState build() => _initial;
 }
 
 void main() {
@@ -118,6 +128,9 @@ void main() {
   test('Completed messages never leave stale running tool steps in backgroundTasksProvider', () {
     final container = ProviderContainer(
       overrides: [
+        sessionsProvider.overrideWith(
+          () => _FakeSessionsNotifier(const SessionsState(activeSessionId: 's1')),
+        ),
         runtimeProvider.overrideWith(
           () => _FakeRuntimeNotifier(const RuntimeUiState()),
         ),
@@ -163,6 +176,9 @@ void main() {
     );
     final container = ProviderContainer(
       overrides: [
+        sessionsProvider.overrideWith(
+          () => _FakeSessionsNotifier(const SessionsState(activeSessionId: 's1')),
+        ),
         runtimeProvider.overrideWith(
           () => _FakeRuntimeNotifier(const RuntimeUiState()),
         ),
@@ -181,6 +197,7 @@ void main() {
         ),
       ),
     );
+    await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
 
     // At top of a long list, jump-to-latest FAB should appear.
@@ -189,6 +206,54 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byTooltip('Jump to latest'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('ChatScreen queues messages when background task is active and exposes Steer button', (tester) async {
+    final container = ProviderContainer(
+      overrides: [
+        sessionsProvider.overrideWith(
+          () => _FakeSessionsNotifier(const SessionsState(activeSessionId: 's1')),
+        ),
+        runtimeProvider.overrideWith(
+          () => _FakeRuntimeNotifier(
+            RuntimeUiState(
+              backgroundTasks: [
+                NativeBackgroundTask(
+                  id: 'term-bg',
+                  turnId: 'turn-bg',
+                  kind: 'terminal',
+                  title: 'sleep 30',
+                  status: 'running',
+                  startedAt: DateTime.now(),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(
+          home: Scaffold(body: ChatScreen()),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byTooltip('Queue'), findsOneWidget);
+    expect(find.byTooltip('Steer (force send now)'), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField), 'Follow up while bg runs');
+    await tester.tap(find.byTooltip('Queue'));
+    await tester.pump();
+
+    expect(container.read(chatProvider).queuedPrompts, ['Follow up while bg runs']);
+    expect(find.text('Steer now'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });
 

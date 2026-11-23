@@ -223,10 +223,11 @@ class UsageOutputParser {
       final linePcts = _extractAllRemainingPcts(line);
       final combinedPcts =
           linePcts.isNotEmpty ? linePcts : _extractAllRemainingPcts(combined);
-      final isWeeklyLine =
-          _hasWeeklyKeyword(lower) || _hasWeeklyKeyword(nextLine.toLowerCase());
+      final hasLinePcts = linePcts.isNotEmpty;
+      final isWeeklyLine = _hasWeeklyKeyword(lower) ||
+          (!hasLinePcts && _hasWeeklyKeyword(nextLine.toLowerCase()));
       final isFiveHourLine = _hasFiveHourKeyword(lower) ||
-          _hasFiveHourKeyword(nextLine.toLowerCase());
+          (!hasLinePcts && _hasFiveHourKeyword(nextLine.toLowerCase()));
 
       double? fiveHPct;
       double? weeklyPct;

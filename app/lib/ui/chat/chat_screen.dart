@@ -8,6 +8,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../../runtime/runtime_bridge.dart';
 import '../../state/auth_state.dart';
+import '../../state/background_tasks_state.dart';
 import '../../state/chat_state.dart';
 import '../../state/draft_store.dart';
 import '../../state/hosts_state.dart';
@@ -71,6 +72,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   void initState() {
     super.initState();
     _scrollController.addListener(_onScroll);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _onScroll());
   }
 
   void _onScroll() {
@@ -189,6 +191,27 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     await ref.read(chatProvider.notifier).sendPrompt(text, attachments: files);
   }
 
+  Future<void> _steerSubmit() async {
+    final text = _inputController.text.trim();
+    if (text.isEmpty) {
+      if (ref.read(chatProvider).queuedPrompts.isNotEmpty) {
+        await ref.read(chatProvider.notifier).sendQueuedNow();
+      }
+      return;
+    }
+    final sessionId =
+        ref.read(sessionsProvider).activeSessionId ?? 'new_session';
+    ref.read(draftStoreProvider.notifier).clear(sessionId);
+    _inputController.clear();
+    setState(() {
+      _attachments.clear();
+      _showSlashMenu = false;
+      _showMentionMenu = false;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
+    await ref.read(chatProvider.notifier).steerNow(text);
+  }
+
   Future<void> _pickFile() async {
     final files = await FilePicker.pickFiles();
     if (files.isEmpty) return;
@@ -244,6 +267,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     final chat = ref.watch(chatProvider);
+    final bgTasks = ref.watch(backgroundTasksProvider);
+    final hasRunningBg =
+        bgTasks.any((t) => t.kind != BackgroundTaskKind.queued);
+    final isBusyOrBg = chat.isStreaming || hasRunningBg;
     final auth = ref.watch(authProvider);
     final hosts = ref.watch(hostsProvider);
     final project = ref.watch(projectsProvider).activeProject;
@@ -656,8 +683,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                             maxLines: widget.isDesktopMode ? 8 : 5,
                             textInputAction: TextInputAction.newline,
                             decoration: InputDecoration(
-                              hintText: chat.isStreaming
-                                  ? 'Queue follow-up or steer agent…'
+                              hintText: isBusyOrBg
+                                  ? 'Queue message (or Steer to force send)…'
                                   : widget.isDesktopMode && _enterToSend
                                       ? 'Ask anything, @ to mention, / for commands (Enter sends)'
                                       : 'Ask anything, @ to mention, / for commands…',
@@ -684,11 +711,23 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                               ref.read(chatProvider.notifier).stopStreaming(),
                           icon: const Icon(Icons.stop_rounded),
                         ),
+                      if (isBusyOrBg) ...[
+                        const SizedBox(width: 4),
+                        IconButton.filledTonal(
+                          tooltip: 'Steer (force send now)',
+                          onPressed: _steerSubmit,
+                          icon: const Icon(Icons.bolt_rounded),
+                        ),
+                      ],
                       const SizedBox(width: 4),
                       IconButton.filled(
-                        tooltip: chat.isStreaming ? 'Queue' : 'Send',
+                        tooltip: isBusyOrBg ? 'Queue' : 'Send',
                         onPressed: _submit,
-                        icon: const Icon(Icons.arrow_upward_rounded),
+                        icon: Icon(
+                          isBusyOrBg
+                              ? Icons.schedule_send_rounded
+                              : Icons.arrow_upward_rounded,
+                        ),
                       ),
                     ],
                   ),
