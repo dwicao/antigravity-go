@@ -48,7 +48,13 @@ class SshHostsPage extends ConsumerWidget {
               child: ListTile(
                 leading: const Icon(Icons.computer),
                 title: Text(h.name),
-                subtitle: Text('${h.username}@${h.hostname}:${h.port} · ${h.defaultWorkspace}'),
+                subtitle: Text(
+                  h.hostKeyFingerprint != null && h.hostKeyFingerprint!.isNotEmpty
+                      ? '${h.username}@${h.hostname}:${h.port} · ${h.defaultWorkspace}\nHost key pinned: ${h.hostKeyFingerprint}'
+                      : '${h.username}@${h.hostname}:${h.port} · ${h.defaultWorkspace}',
+                ),
+                isThreeLine: h.hostKeyFingerprint != null &&
+                    h.hostKeyFingerprint!.isNotEmpty,
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -60,16 +66,35 @@ class SshHostsPage extends ConsumerWidget {
                           await _testHost(context, ref, h);
                         } else if (action == 'edit') {
                           await _openEditor(context, ref, existing: h);
+                        } else if (action == 'reset_key') {
+                          await ref
+                              .read(hostsProvider.notifier)
+                              .clearHostFingerprint(h.id);
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Pinned host key cleared — next connect will trust new key.',
+                                ),
+                              ),
+                            );
+                          }
                         } else if (action == 'delete') {
                           await ref
                               .read(hostsProvider.notifier)
                               .removeHost(h.id);
                         }
                       },
-                      itemBuilder: (_) => const [
-                        PopupMenuItem(value: 'test', child: Text('Test SSH')),
-                        PopupMenuItem(value: 'edit', child: Text('Edit')),
-                        PopupMenuItem(value: 'delete', child: Text('Delete')),
+                      itemBuilder: (_) => [
+                        const PopupMenuItem(value: 'test', child: Text('Test SSH')),
+                        const PopupMenuItem(value: 'edit', child: Text('Edit')),
+                        if (h.hostKeyFingerprint != null &&
+                            h.hostKeyFingerprint!.isNotEmpty)
+                          const PopupMenuItem(
+                            value: 'reset_key',
+                            child: Text('Clear Pinned Host Key'),
+                          ),
+                        const PopupMenuItem(value: 'delete', child: Text('Delete')),
                       ],
                     ),
                   ],
@@ -124,85 +149,110 @@ class SshHostsPage extends ConsumerWidget {
     final agyCtrl = TextEditingController(text: existing?.agyBinary ?? 'agy');
     final pwdCtrl = TextEditingController();
     final keyCtrl = TextEditingController();
+    var clearFingerprint = false;
 
     final saved = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(existing == null ? 'Add SSH Host' : 'Edit SSH Host'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameCtrl,
-                decoration: const InputDecoration(labelText: 'Display Name'),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: hostCtrl,
-                decoration: const InputDecoration(labelText: 'Hostname / IP'),
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: userCtrl,
-                      decoration: const InputDecoration(labelText: 'Username'),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: Text(existing == null ? 'Add SSH Host' : 'Edit SSH Host'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nameCtrl,
+                  decoration: const InputDecoration(labelText: 'Display Name'),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: hostCtrl,
+                  decoration: const InputDecoration(labelText: 'Hostname / IP'),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: userCtrl,
+                        decoration: const InputDecoration(labelText: 'Username'),
+                      ),
                     ),
+                    const SizedBox(width: 8),
+                    SizedBox(
+                      width: 84,
+                      child: TextField(
+                        controller: portCtrl,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(labelText: 'Port'),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: dirCtrl,
+                  decoration:
+                      const InputDecoration(labelText: 'Workspace Path'),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: agyCtrl,
+                  decoration:
+                      const InputDecoration(labelText: 'agy Binary Path'),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: pwdCtrl,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Password (stored in Android Keystore)',
                   ),
-                  const SizedBox(width: 8),
-                  SizedBox(
-                    width: 84,
-                    child: TextField(
-                      controller: portCtrl,
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(labelText: 'Port'),
-                    ),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: keyCtrl,
+                  maxLines: 3,
+                  decoration: const InputDecoration(
+                    labelText: 'Private Key PEM (optional)',
+                  ),
+                ),
+                if (existing?.hostKeyFingerprint != null &&
+                    existing!.hostKeyFingerprint!.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          clearFingerprint
+                              ? 'Pinned host key will be cleared on save'
+                              : 'Pinned key: ${existing.hostKeyFingerprint}',
+                          style: Theme.of(ctx).textTheme.bodySmall,
+                        ),
+                      ),
+                      if (!clearFingerprint)
+                        TextButton(
+                          onPressed: () =>
+                              setDialogState(() => clearFingerprint = true),
+                          child: const Text('Reset Key'),
+                        ),
+                    ],
                   ),
                 ],
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: dirCtrl,
-                decoration:
-                    const InputDecoration(labelText: 'Workspace Path'),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: agyCtrl,
-                decoration:
-                    const InputDecoration(labelText: 'agy Binary Path'),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: pwdCtrl,
-                obscureText: true,
-                decoration: const InputDecoration(
-                  labelText: 'Password (stored in Android Keystore)',
-                ),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: keyCtrl,
-                maxLines: 3,
-                decoration: const InputDecoration(
-                  labelText: 'Private Key PEM (optional)',
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Save'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Save'),
-          ),
-        ],
       ),
     );
 
@@ -222,7 +272,10 @@ class SshHostsPage extends ConsumerWidget {
               agyBinary: agyCtrl.text.trim().isEmpty
                   ? 'agy'
                   : agyCtrl.text.trim(),
-              usePrivateKey: keyCtrl.text.trim().isNotEmpty,
+              usePrivateKey: keyCtrl.text.trim().isNotEmpty ||
+                  (existing?.usePrivateKey ?? false),
+              hostKeyFingerprint:
+                  clearFingerprint ? null : existing?.hostKeyFingerprint,
             ),
             password: pwdCtrl.text,
             privateKeyPem: keyCtrl.text,

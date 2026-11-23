@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Builds static native Android shell binaries (GNU Bash + BusyBox POSIX utilities)
-# for arm64-v8a and x86_64 into app/android/app/src/main/jniLibs/<abi>/ so
-# Antigravity CLI (`agy`) has `bash`, `sh`, `ls`, `find`, `grep`, `sed`, `awk`,
-# `tar`, etc. in $PATH on any unrooted Android device.
+# Builds static native Android shell binaries (GNU Bash, BusyBox POSIX utilities,
+# and lightweight PTY host) for arm64-v8a and x86_64 into
+# app/android/app/src/main/jniLibs/<abi>/ so Antigravity CLI (`agy`) and the
+# embedded terminal run cleanly on any unrooted Android device.
 set -euo pipefail
 
 ROOT=$(CDPATH= cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -61,7 +61,7 @@ build_for_arch() {
   local out_dir="$JNI_DIR/$abi"
   mkdir -p "$out_dir"
 
-  echo "[shell-tools] Building static busybox + bash for $abi ($platform)..."
+  echo "[shell-tools] Building static busybox + bash + pty host for $abi ($platform)..."
   docker run --rm --platform "$platform" \
     -v "$CACHE_DIR:/cache:ro" \
     -v "$out_dir:/out" \
@@ -105,15 +105,192 @@ build_for_arch() {
       make -j"$(nproc)"
       strip bash
       cp bash /out/libbash.so
-      chmod 0755 /out/libbusybox.so /out/libbash.so
+
+      cat <<'\''PTYEOF'\'' > /tmp/pty_host.c
+#define _GNU_SOURCE
+#include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <pty.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/ioctl.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+static int write_all(int fd, const char *buf, size_t len) {
+    size_t off = 0;
+    while (off < len) {
+        ssize_t n = write(fd, buf + off, len - off);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
+            return -1;
+        }
+        off += (size_t)n;
+    }
+    return 0;
+}
+
+int main(int argc, char **argv) {
+    if (argc < 5) {
+        fprintf(stderr, "usage: %s <cols> <rows> <ctrl_fifo_or_dash> <cmd> [args...]\n", argv[0]);
+        return 2;
+    }
+    int cols = atoi(argv[1]);
+    int rows = atoi(argv[2]);
+    if (cols < 1) cols = 80;
+    if (rows < 1) rows = 24;
+    const char *ctrl_path = argv[3];
+
+    struct winsize ws;
+    memset(&ws, 0, sizeof(ws));
+    ws.ws_col = (unsigned short)cols;
+    ws.ws_row = (unsigned short)rows;
+
+    int master_fd = -1;
+    int slave_fd = -1;
+    if (openpty(&master_fd, &slave_fd, NULL, NULL, &ws) != 0) {
+        perror("openpty");
+        return 1;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        perror("fork");
+        close(master_fd);
+        close(slave_fd);
+        return 1;
+    }
+
+    if (pid == 0) {
+        close(master_fd);
+        setsid();
+        ioctl(slave_fd, TIOCSCTTY, 0);
+        dup2(slave_fd, STDIN_FILENO);
+        dup2(slave_fd, STDOUT_FILENO);
+        dup2(slave_fd, STDERR_FILENO);
+        if (slave_fd > 2) close(slave_fd);
+        execvp(argv[4], &argv[4]);
+        _exit(127);
+    }
+
+    close(slave_fd);
+
+    int ctrl_fd = -1;
+    if (ctrl_path != NULL && strcmp(ctrl_path, "-") != 0 && ctrl_path[0] != '\0') {
+        mkfifo(ctrl_path, 0600);
+        ctrl_fd = open(ctrl_path, O_RDWR | O_NONBLOCK);
+    }
+
+    int stdin_open = 1;
+    char buf[8192];
+    char ctrl_buf[128];
+    size_t ctrl_len = 0;
+
+    while (1) {
+        struct pollfd fds[3];
+        int nfds = 0;
+        int idx_master = -1, idx_stdin = -1, idx_ctrl = -1;
+
+        idx_master = nfds;
+        fds[nfds].fd = master_fd;
+        fds[nfds].events = POLLIN;
+        fds[nfds].revents = 0;
+        nfds++;
+
+        if (stdin_open) {
+            idx_stdin = nfds;
+            fds[nfds].fd = STDIN_FILENO;
+            fds[nfds].events = POLLIN;
+            fds[nfds].revents = 0;
+            nfds++;
+        }
+
+        if (ctrl_fd >= 0) {
+            idx_ctrl = nfds;
+            fds[nfds].fd = ctrl_fd;
+            fds[nfds].events = POLLIN;
+            fds[nfds].revents = 0;
+            nfds++;
+        }
+
+        int rc = poll(fds, (nfds_t)nfds, -1);
+        if (rc < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+
+        if (idx_stdin >= 0 && (fds[idx_stdin].revents & (POLLIN | POLLERR | POLLHUP))) {
+            ssize_t n = read(STDIN_FILENO, buf, sizeof(buf));
+            if (n > 0) {
+                if (write_all(master_fd, buf, (size_t)n) < 0) break;
+            } else if (n == 0 || (n < 0 && errno != EINTR && errno != EAGAIN)) {
+                stdin_open = 0;
+            }
+        }
+
+        if (idx_ctrl >= 0 && (fds[idx_ctrl].revents & POLLIN)) {
+            ssize_t n = read(ctrl_fd, ctrl_buf + ctrl_len, sizeof(ctrl_buf) - 1 - ctrl_len);
+            if (n > 0) {
+                ctrl_len += (size_t)n;
+                ctrl_buf[ctrl_len] = '\0';
+                char *nl = strchr(ctrl_buf, '\n');
+                while (nl != NULL) {
+                    *nl = '\0';
+                    unsigned int nc = 0, nr = 0;
+                    if (sscanf(ctrl_buf, "%u %u", &nc, &nr) == 2 && nc >= 1 && nr >= 1) {
+                        struct winsize nws;
+                        memset(&nws, 0, sizeof(nws));
+                        nws.ws_col = (unsigned short)(nc > 2000 ? 2000 : nc);
+                        nws.ws_row = (unsigned short)(nr > 2000 ? 2000 : nr);
+                        ioctl(master_fd, TIOCSWINSZ, &nws);
+                        kill(-pid, SIGWINCH);
+                    }
+                    size_t remain = ctrl_len - (size_t)(nl - ctrl_buf + 1);
+                    memmove(ctrl_buf, nl + 1, remain);
+                    ctrl_len = remain;
+                    ctrl_buf[ctrl_len] = '\0';
+                    nl = strchr(ctrl_buf, '\n');
+                }
+                if (ctrl_len >= sizeof(ctrl_buf) - 1) ctrl_len = 0;
+            }
+        }
+
+        if (idx_master >= 0 && (fds[idx_master].revents & (POLLIN | POLLERR | POLLHUP))) {
+            ssize_t n = read(master_fd, buf, sizeof(buf));
+            if (n > 0) {
+                write_all(STDOUT_FILENO, buf, (size_t)n);
+            } else if (n == 0 || (n < 0 && errno != EINTR && errno != EAGAIN)) {
+                break;
+            }
+        }
+    }
+
+    close(master_fd);
+    if (ctrl_fd >= 0) close(ctrl_fd);
+    int status = 0;
+    waitpid(pid, &status, 0);
+    if (WIFEXITED(status)) return WEXITSTATUS(status);
+    if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
+    return 1;
+}
+PTYEOF
+      gcc -Os -Wall -Wextra -static /tmp/pty_host.c -o /out/libpty.so
+      strip /out/libpty.so
+      chmod 0755 /out/libbusybox.so /out/libbash.so /out/libpty.so
 
       ln -sf /out/libbusybox.so /tmp/busybox
       ln -sf /out/libbusybox.so /tmp/ls
       /out/libbash.so -c "echo verified-bash-\$(/tmp/busybox uname -m)"
       /tmp/ls /tmp >/dev/null
+      /out/libpty.so 91 33 - /out/libbash.so -c "echo verified-pty"
     '
 
-  for bin in libbash.so libbusybox.so; do
+  for bin in libbash.so libbusybox.so libpty.so; do
     local target="$out_dir/$bin"
     [[ -s "$target" ]] || { echo "Missing $target" >&2; exit 1; }
     readelf -h "$target" | grep -q "$expected_machine" || {

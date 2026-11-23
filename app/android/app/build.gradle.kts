@@ -58,7 +58,7 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = true
-            keepDebugSymbols += listOf("**/libbash.so", "**/libbusybox.so")
+            keepDebugSymbols += listOf("**/libbash.so", "**/libbusybox.so", "**/libpty.so")
         }
     }
 

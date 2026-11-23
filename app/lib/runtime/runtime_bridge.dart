@@ -496,14 +496,38 @@ class RuntimeBridge {
     return createWorkspaceDirectory(path);
   }
 
-  Future<void> startTerminalSession(String sessionId, {String? cwd}) async {
+  Future<void> startTerminalSession(
+    String sessionId, {
+    String? cwd,
+    int cols = 80,
+    int rows = 24,
+  }) async {
     try {
       await _method.invokeMethod<void>('startTerminalSession', {
         'sessionId': sessionId,
         'cwd': ?cwd,
+        'cols': cols,
+        'rows': rows,
       });
     } on MissingPluginException {
       // No-op in tests.
+    }
+  }
+
+  Future<bool> resizeTerminalSession(
+    String sessionId, {
+    required int cols,
+    required int rows,
+  }) async {
+    try {
+      return await _method.invokeMethod<bool>('resizeTerminalSession', {
+            'sessionId': sessionId,
+            'cols': cols,
+            'rows': rows,
+          }) ??
+          false;
+    } on MissingPluginException {
+      return false;
     }
   }
 

@@ -76,6 +76,38 @@ class AgyService : Service() {
                 return START_STICKY
             }
 
+            ACTION_RUN_AUTOMATIONS -> {
+                val wasRunning = running
+                activeInstance = this
+                val notification = buildNotification(this, "Running scheduled automation…")
+                if (Build.VERSION.SDK_INT >= 34) {
+                    startForeground(
+                        NOTIFICATION_ID,
+                        notification,
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+                    )
+                } else {
+                    startForeground(NOTIFICATION_ID, notification)
+                }
+                acquireWakeLock(refresh = true)
+                AutomationScheduler.runDueHeadless(this) {
+                    mainHandler.post {
+                        if (!wasRunning && !running) {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                                stopForeground(STOP_FOREGROUND_REMOVE)
+                            } else {
+                                @Suppress("DEPRECATION")
+                                stopForeground(true)
+                            }
+                            stopSelf(startId)
+                        } else if (running) {
+                            updateTurnStatus(this, latestStatusText)
+                        }
+                    }
+                }
+                return START_NOT_STICKY
+            }
+
             else -> {
                 activeInstance = this
                 val statusText = intent?.getStringExtra(EXTRA_STATUS_TEXT)
@@ -151,6 +183,7 @@ class AgyService : Service() {
         const val ACTION_START = "io.github.dwicao.antigravity_go.SERVICE_START"
         const val ACTION_STOP = "io.github.dwicao.antigravity_go.SERVICE_STOP"
         const val ACTION_UPDATE_STATUS = "io.github.dwicao.antigravity_go.SERVICE_STATUS"
+        const val ACTION_RUN_AUTOMATIONS = "io.github.dwicao.antigravity_go.RUN_AUTOMATIONS"
         const val EXTRA_STATUS_TEXT = "statusText"
 
         private const val CHANNEL_ID = "agy_runtime_channel"

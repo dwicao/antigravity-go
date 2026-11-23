@@ -9,6 +9,7 @@ import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import io.github.dwicao.antigravity_go.runtime.RuntimeController
 
 class PhonePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChannel.StreamHandler {
     private lateinit var appContext: Context
@@ -17,15 +18,13 @@ class PhonePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChannel
     private val mainHandler = Handler(Looper.getMainLooper())
     private var eventSink: EventChannel.EventSink? = null
 
-    @Volatile
-    private var enabled = false
-
-    @Volatile
-    private var safetyStrict = true
-
-    private val mcpServer = PhoneMcpServer(
-        isStrictMode = { safetyStrict },
-        onActionLogged = { action, target, allowed, reason ->
+    override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        appContext = binding.applicationContext
+        methodChannel = MethodChannel(binding.binaryMessenger, "agy/phone")
+        methodChannel.setMethodCallHandler(this)
+        eventChannel = EventChannel(binding.binaryMessenger, "agy/phone/events")
+        eventChannel.setStreamHandler(this)
+        PhoneControlCoordinator.setListener { action, target, allowed, reason ->
             mainHandler.post {
                 eventSink?.success(
                     mapOf(
@@ -36,19 +35,11 @@ class PhonePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChannel
                     )
                 )
             }
-        },
-    )
-
-    override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
-        appContext = binding.applicationContext
-        methodChannel = MethodChannel(binding.binaryMessenger, "agy/phone")
-        methodChannel.setMethodCallHandler(this)
-        eventChannel = EventChannel(binding.binaryMessenger, "agy/phone/events")
-        eventChannel.setStreamHandler(this)
+        }
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
-        mcpServer.stop()
+        PhoneControlCoordinator.setListener(null)
         methodChannel.setMethodCallHandler(null)
         eventChannel.setStreamHandler(null)
     }
@@ -65,20 +56,21 @@ class PhonePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChannel
         when (call.method) {
             "status" -> result.success(
                 mapOf(
-                    "enabled" to enabled,
+                    "enabled" to PhoneControlCoordinator.enabled,
                     "accessibilityConnected" to (AgyAccessibilityService.instance != null),
-                    "safetyGateStrict" to safetyStrict,
-                    "mcpPort" to mcpServer.port,
-                    "mcpToken" to mcpServer.authToken,
+                    "safetyGateStrict" to PhoneControlCoordinator.safetyStrict,
+                    "mcpPort" to PhoneControlCoordinator.mcpServer.port,
+                    "mcpToken" to PhoneControlCoordinator.mcpServer.authToken,
                 )
             )
             "setEnabled" -> {
-                enabled = call.argument<Boolean>("enabled") ?: false
-                if (enabled) mcpServer.start() else mcpServer.stop()
+                val enabled = call.argument<Boolean>("enabled") ?: false
+                PhoneControlCoordinator.setEnabled(enabled)
+                runCatching { RuntimeController.get(appContext).syncPhoneMcpRegistration() }
                 result.success(null)
             }
             "setSafetyStrict" -> {
-                safetyStrict = call.argument<Boolean>("strict") ?: true
+                PhoneControlCoordinator.safetyStrict = call.argument<Boolean>("strict") ?: true
                 result.success(null)
             }
             "openAccessibilitySettings" -> {

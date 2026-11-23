@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:agy_client/agy_client.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
@@ -17,6 +18,7 @@ final automationsProvider =
 
 class AutomationsNotifier extends Notifier<List<AgyAutomation>> {
   static const _prefsKey = 'agy_automations_v1';
+  static const _nativeChannel = MethodChannel('agy/automations');
 
   Timer? _schedulerTimer;
   AutomationTriggerCallback? onAutomationDue;
@@ -40,14 +42,73 @@ class AutomationsNotifier extends Notifier<List<AgyAutomation>> {
     final prefs = await SharedPreferences.getInstance();
     if (!ref.mounted) return;
     final raw = prefs.getString(_prefsKey);
-    if (raw == null || raw.isEmpty) return;
+    if (raw != null && raw.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw) as List<dynamic>;
+        var loaded = decoded
+            .whereType<Map<String, dynamic>>()
+            .map(AgyAutomation.fromJson)
+            .toList();
+        loaded = await _mergeNativeRuns(loaded);
+        if (!ref.mounted) return;
+        state = loaded;
+        await _syncNative(loaded);
+        await runDueAutomations();
+      } catch (_) {}
+    }
+  }
+
+  Future<List<AgyAutomation>> _mergeNativeRuns(
+    List<AgyAutomation> items,
+  ) async {
     try {
-      final decoded = jsonDecode(raw) as List<dynamic>;
-      state = decoded
-          .whereType<Map<String, dynamic>>()
-          .map(AgyAutomation.fromJson)
-          .toList();
-      await runDueAutomations();
+      final rawRuns =
+          await _nativeChannel.invokeMethod<List<Object?>>('pullRuns');
+      if (rawRuns == null || rawRuns.isEmpty) return items;
+      final byId = <String, ({DateTime runAt, String? status})>{};
+      for (final entry in rawRuns.whereType<Map<Object?, Object?>>()) {
+        final id = entry['id']?.toString();
+        final iso = entry['lastRunAt']?.toString();
+        final dt = iso != null ? DateTime.tryParse(iso) : null;
+        if (id != null && dt != null) {
+          byId[id] = (runAt: dt, status: entry['lastStatus']?.toString());
+        }
+      }
+      var mergedAny = false;
+      final out = items.map((a) {
+        final native = byId[a.id];
+        if (native == null) return a;
+        if (a.lastRunAt == null || native.runAt.isAfter(a.lastRunAt!)) {
+          mergedAny = true;
+          return a.copyWith(
+            lastRunAt: native.runAt,
+            lastStatus: native.status ?? a.lastStatus,
+          );
+        }
+        return a;
+      }).toList();
+      if (mergedAny) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(
+          _prefsKey,
+          jsonEncode(out.map((a) => a.toJson()).toList()),
+        );
+      }
+      return out;
+    } on MissingPluginException {
+      return items;
+    } catch (_) {
+      return items;
+    }
+  }
+
+  Future<void> _syncNative(List<AgyAutomation> items) async {
+    try {
+      await _nativeChannel.invokeMethod<void>('sync', {
+        'items': items.map((a) => a.toJson()).toList(),
+      });
+    } on MissingPluginException {
+      // No-op in tests or non-Android platforms.
     } catch (_) {}
   }
 
@@ -118,5 +179,6 @@ class AutomationsNotifier extends Notifier<List<AgyAutomation>> {
       _prefsKey,
       jsonEncode(state.map((a) => a.toJson()).toList()),
     );
+    await _syncNative(state);
   }
 }

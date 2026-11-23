@@ -110,5 +110,27 @@ void main() {
       expect((refusal! as AgyTurnResultEvent).status, 'ERROR');
       expect(ReasoningEffort.fromString('max'), ReasoningEffort.max);
     });
+
+    test('encodes session/resume and multimodal session/prompt image blocks', () {
+      final codec = AcpCodec();
+      final resume = codec.encodeResumeSession(
+        id: 11,
+        sessionId: 'sess-123',
+        cwd: '/work',
+      );
+      expect(resume, contains('"method":"session/resume"'));
+      expect(resume, contains('"sessionId":"sess-123"'));
+
+      final prompt = codec.encodePrompt(
+        id: 12,
+        sessionId: 'sess-123',
+        text: 'Inspect screenshot',
+        imageBlocks: const [
+          {'type': 'image', 'mimeType': 'image/png', 'data': 'AAAA'},
+        ],
+      );
+      expect(prompt, contains('"type":"image"'));
+      expect(prompt, contains('"mimeType":"image/png"'));
+    });
   });
 }

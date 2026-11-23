@@ -30,6 +30,7 @@ class SshHostConfig {
     String? agyBinary,
     bool? usePrivateKey,
     String? hostKeyFingerprint,
+    bool clearFingerprint = false,
   }) {
     return SshHostConfig(
       id: id,
@@ -40,7 +41,9 @@ class SshHostConfig {
       defaultWorkspace: defaultWorkspace ?? this.defaultWorkspace,
       agyBinary: agyBinary ?? this.agyBinary,
       usePrivateKey: usePrivateKey ?? this.usePrivateKey,
-      hostKeyFingerprint: hostKeyFingerprint ?? this.hostKeyFingerprint,
+      hostKeyFingerprint: clearFingerprint
+          ? null
+          : (hostKeyFingerprint ?? this.hostKeyFingerprint),
     );
   }
 

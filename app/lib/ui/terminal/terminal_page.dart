@@ -39,12 +39,22 @@ class _TerminalPageState extends ConsumerState<TerminalPage> {
         RuntimeBridge.instance.writeTerminalInput(_sessionId, data);
       }
     };
+    _terminal.onResize = (width, height, pixelWidth, pixelHeight) {
+      if (_sessionActive) {
+        RuntimeBridge.instance.resizeTerminalSession(
+          _sessionId,
+          cols: width,
+          rows: height,
+        );
+      }
+    };
     _termSub = RuntimeBridge.instance.events
         .where((e) => e.sessionId == _sessionId)
         .listen((evt) {
       if (!mounted) return;
       if (evt.kind == 'terminal_output' && evt.stdoutLine != null) {
-        _terminal.write(evt.stdoutLine!.replaceAll('\n', '\r\n'));
+        final chunk = evt.stdoutLine!;
+        _terminal.write(evt.isPty ? chunk : chunk.replaceAll('\n', '\r\n'));
       } else if (evt.kind == 'terminal_exit') {
         _terminal.write('\r\n[shell exited (${evt.exitCode ?? 0})]\r\n');
         setState(() => _sessionActive = false);
@@ -58,7 +68,12 @@ class _TerminalPageState extends ConsumerState<TerminalPage> {
     final cwd = proj.isNotEmpty
         ? proj
         : ref.read(runtimeProvider).status.workspaceRoot;
-    await RuntimeBridge.instance.startTerminalSession(_sessionId, cwd: cwd);
+    await RuntimeBridge.instance.startTerminalSession(
+      _sessionId,
+      cwd: cwd,
+      cols: _terminal.viewWidth > 0 ? _terminal.viewWidth : 80,
+      rows: _terminal.viewHeight > 0 ? _terminal.viewHeight : 24,
+    );
     if (mounted) {
       setState(() => _sessionActive = true);
     }

@@ -158,8 +158,16 @@ class RuntimePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChann
             "startTerminalSession" -> {
                 val sid = call.argument<String>("sessionId") ?: ""
                 val cwd = call.argument<String>("cwd")
-                ctrl.startTerminalSession(sid, cwd)
+                val cols = call.argument<Int>("cols") ?: 80
+                val rows = call.argument<Int>("rows") ?: 24
+                ctrl.startTerminalSession(sid, cwd, cols, rows)
                 result.success(null)
+            }
+            "resizeTerminalSession" -> {
+                val sid = call.argument<String>("sessionId") ?: ""
+                val cols = call.argument<Int>("cols") ?: 80
+                val rows = call.argument<Int>("rows") ?: 24
+                result.success(ctrl.resizeTerminalSession(sid, cols, rows))
             }
             "writeTerminalInput" -> {
                 val sid = call.argument<String>("sessionId") ?: ""

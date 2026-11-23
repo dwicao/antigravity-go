@@ -6,18 +6,21 @@ class PhoneControlStatus {
     required this.accessibilityConnected,
     required this.safetyGateStrict,
     this.mcpPort,
+    this.mcpToken,
   });
 
   const PhoneControlStatus.initial()
       : enabled = false,
         accessibilityConnected = false,
         safetyGateStrict = true,
-        mcpPort = null;
+        mcpPort = null,
+        mcpToken = null;
 
   final bool enabled;
   final bool accessibilityConnected;
   final bool safetyGateStrict;
   final int? mcpPort;
+  final String? mcpToken;
 
   factory PhoneControlStatus.fromMap(Map<Object?, Object?> map) {
     return PhoneControlStatus(
@@ -25,6 +28,7 @@ class PhoneControlStatus {
       accessibilityConnected: map['accessibilityConnected'] as bool? ?? false,
       safetyGateStrict: map['safetyGateStrict'] as bool? ?? true,
       mcpPort: (map['mcpPort'] as num?)?.toInt(),
+      mcpToken: map['mcpToken'] as String?,
     );
   }
 }

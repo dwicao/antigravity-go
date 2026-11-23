@@ -78,10 +78,27 @@ class AcpCodec {
     });
   }
 
+  String encodeResumeSession({
+    required int id,
+    required String sessionId,
+    required String cwd,
+  }) {
+    return jsonEncode({
+      'jsonrpc': '2.0',
+      'id': id,
+      'method': 'session/resume',
+      'params': {
+        'sessionId': sessionId,
+        'cwd': cwd,
+      },
+    });
+  }
+
   String encodePrompt({
     required int id,
     required String sessionId,
     required String text,
+    List<Map<String, dynamic>> imageBlocks = const [],
   }) {
     return jsonEncode({
       'jsonrpc': '2.0',
@@ -91,6 +108,7 @@ class AcpCodec {
         'sessionId': sessionId,
         'prompt': [
           {'type': 'text', 'text': text},
+          ...imageBlocks,
         ],
       },
     });

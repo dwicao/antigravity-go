@@ -3,14 +3,15 @@ import 'dart:convert';
 
 import 'package:agy_client/agy_client.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
 import '../remote/ssh_agy_runner.dart';
 import '../runtime/runtime_bridge.dart';
 import '../runtime/runtime_models.dart';
-import '../ui/chat/secret_mask.dart';
 import 'auth_state.dart';
+import 'chat_message_store.dart';
+import 'chat_models.dart';
+import 'chat_turn_helpers.dart';
 import 'ci_watch_state.dart';
 import 'harness_state.dart';
 import 'hosts_state.dart';
@@ -21,290 +22,50 @@ import 'sessions_state.dart';
 import 'settings_state.dart';
 import 'usage_state.dart';
 
-enum ChatRole { user, assistant, system }
-
-class ChatToolStep {
-  const ChatToolStep({
-    required this.id,
-    required this.toolName,
-    required this.state,
-    this.parameters = const {},
-    this.output,
-    this.error,
-    this.durationSeconds,
-    this.startedAt,
-  });
-
-  final String id;
-  final String toolName;
-  final ToolCallState state;
-  final Map<String, dynamic> parameters;
-  final String? output;
-  final String? error;
-  final double? durationSeconds;
-  final DateTime? startedAt;
-
-  Map<String, dynamic> toJson() => {
-        'id': id,
-        'toolName': toolName,
-        'state': state.name,
-        'parameters': parameters,
-        if (output != null) 'output': AgySecretMask.mask(output!),
-        if (error != null) 'error': AgySecretMask.mask(error!),
-        if (durationSeconds != null) 'durationSeconds': durationSeconds,
-        if (startedAt != null) 'startedAt': startedAt!.toIso8601String(),
-      };
-
-  factory ChatToolStep.fromJson(Map<String, dynamic> json) {
-    final stateStr = json['state'] as String? ?? 'completed';
-    return ChatToolStep(
-      id: json['id'] as String? ?? '',
-      toolName: json['toolName'] as String? ?? 'tool',
-      state: ToolCallState.values.firstWhere(
-        (s) => s.name == stateStr,
-        orElse: () => ToolCallState.completed,
-      ),
-      parameters: json['parameters'] as Map<String, dynamic>? ?? const {},
-      output: json['output'] as String?,
-      error: json['error'] as String?,
-      durationSeconds: (json['durationSeconds'] as num?)?.toDouble(),
-      startedAt: DateTime.tryParse(json['startedAt'] as String? ?? ''),
-    );
-  }
-}
-
-class ChatMessage {
-  const ChatMessage({
-    required this.id,
-    required this.role,
-    required this.text,
-    required this.createdAt,
-    this.thoughts = '',
-    this.tools = const [],
-    this.usage,
-    this.attachments = const [],
-    this.isStreaming = false,
-    this.requiresAuth = false,
-    this.durationSeconds,
-    this.tokensPerSecond,
-    this.modelId,
-    this.reasoningEffort,
-    this.completedAt,
-    this.changedFiles = const [],
-    this.steps = const [],
-    this.checkpointRef,
-    this.isCompactionSummary = false,
-    this.contextTokens,
-  });
-
-  final String id;
-  final ChatRole role;
-  final String text;
-  final DateTime createdAt;
-  final String thoughts;
-  final List<ChatToolStep> tools;
-  final TokenUsage? usage;
-  final List<String> attachments;
-  final bool isStreaming;
-  final bool requiresAuth;
-  final double? durationSeconds;
-  final double? tokensPerSecond;
-  final String? modelId;
-  final String? reasoningEffort;
-  final DateTime? completedAt;
-  final List<FileChangeEntry> changedFiles;
-  final List<ChatMilestoneStep> steps;
-  final String? checkpointRef;
-  final bool isCompactionSummary;
-  final int? contextTokens;
-
-  ChatMessage copyWith({
-    String? text,
-    String? thoughts,
-    List<ChatToolStep>? tools,
-    TokenUsage? usage,
-    bool? isStreaming,
-    bool? requiresAuth,
-    double? durationSeconds,
-    double? tokensPerSecond,
-    String? modelId,
-    String? reasoningEffort,
-    DateTime? completedAt,
-    List<FileChangeEntry>? changedFiles,
-    List<ChatMilestoneStep>? steps,
-    String? checkpointRef,
-    bool? isCompactionSummary,
-    int? contextTokens,
-  }) {
-    return ChatMessage(
-      id: id,
-      role: role,
-      text: text ?? this.text,
-      createdAt: createdAt,
-      thoughts: thoughts ?? this.thoughts,
-      tools: tools ?? this.tools,
-      usage: usage ?? this.usage,
-      attachments: attachments,
-      isStreaming: isStreaming ?? this.isStreaming,
-      requiresAuth: requiresAuth ?? this.requiresAuth,
-      durationSeconds: durationSeconds ?? this.durationSeconds,
-      tokensPerSecond: tokensPerSecond ?? this.tokensPerSecond,
-      modelId: modelId ?? this.modelId,
-      reasoningEffort: reasoningEffort ?? this.reasoningEffort,
-      completedAt: completedAt ?? this.completedAt,
-      changedFiles: changedFiles ?? this.changedFiles,
-      steps: steps ?? this.steps,
-      checkpointRef: checkpointRef ?? this.checkpointRef,
-      isCompactionSummary: isCompactionSummary ?? this.isCompactionSummary,
-      contextTokens: contextTokens ?? this.contextTokens,
-    );
-  }
-
-  Map<String, dynamic> toJson() => {
-        'id': id,
-        'role': role.name,
-        'text': text,
-        'createdAt': createdAt.toIso8601String(),
-        if (thoughts.isNotEmpty) 'thoughts': thoughts,
-        if (tools.isNotEmpty) 'tools': tools.map((t) => t.toJson()).toList(),
-        if (usage != null) 'usage': usage!.toJson(),
-        if (attachments.isNotEmpty) 'attachments': attachments,
-        if (durationSeconds != null) 'durationSeconds': durationSeconds,
-        if (tokensPerSecond != null) 'tokensPerSecond': tokensPerSecond,
-        if (modelId != null) 'modelId': modelId,
-        if (reasoningEffort != null) 'reasoningEffort': reasoningEffort,
-        if (completedAt != null) 'completedAt': completedAt!.toIso8601String(),
-        if (changedFiles.isNotEmpty)
-          'changedFiles': changedFiles.map((f) => f.toJson()).toList(),
-        if (steps.isNotEmpty) 'steps': steps.map((s) => s.toJson()).toList(),
-        'checkpointRef': ?checkpointRef,
-        if (isCompactionSummary) 'isCompactionSummary': true,
-        'contextTokens': ?contextTokens,
-      };
-
-  factory ChatMessage.fromJson(Map<String, dynamic> json) {
-    final roleName = json['role'] as String? ?? 'user';
-    return ChatMessage(
-      id: json['id'] as String? ?? const Uuid().v4(),
-      role: ChatRole.values.firstWhere(
-        (r) => r.name == roleName,
-        orElse: () => ChatRole.user,
-      ),
-      text: json['text'] as String? ?? '',
-      createdAt: DateTime.tryParse(json['createdAt'] as String? ?? '') ??
-          DateTime.now(),
-      thoughts: json['thoughts'] as String? ?? '',
-      tools: (json['tools'] as List<dynamic>? ?? const [])
-          .whereType<Map<String, dynamic>>()
-          .map(ChatToolStep.fromJson)
-          .toList(),
-      usage: json['usage'] is Map<String, dynamic>
-          ? TokenUsage.fromJson(json['usage'] as Map<String, dynamic>)
-          : null,
-      attachments: (json['attachments'] as List<dynamic>? ?? const [])
-          .map((e) => e.toString())
-          .toList(),
-      durationSeconds: (json['durationSeconds'] as num?)?.toDouble(),
-      tokensPerSecond: (json['tokensPerSecond'] as num?)?.toDouble(),
-      modelId: json['modelId'] as String?,
-      reasoningEffort: json['reasoningEffort'] as String?,
-      completedAt: DateTime.tryParse(json['completedAt'] as String? ?? ''),
-      changedFiles: (json['changedFiles'] as List<dynamic>? ?? const [])
-          .whereType<Map<String, dynamic>>()
-          .map(FileChangeEntry.fromJson)
-          .toList(),
-      steps: (json['steps'] as List<dynamic>? ?? const [])
-          .whereType<Map<String, dynamic>>()
-          .map(ChatMilestoneStep.fromJson)
-          .toList(),
-      checkpointRef: json['checkpointRef'] as String?,
-      isCompactionSummary: json['isCompactionSummary'] == true,
-      contextTokens: (json['contextTokens'] as num?)?.toInt(),
-    );
-  }
-}
-
-class ChatThreadState {
-  const ChatThreadState({
-    this.messages = const [],
-    this.isStreaming = false,
-    this.queuedPrompts = const [],
-    this.pendingPermission,
-    this.activeTurnId,
-    this.tokensPerSecond = 0,
-    this.stallWarning,
-    this.loopWarning,
-    this.activeBackgroundSessionIds = const {},
-    this.loadedSessionId,
-  });
-
-  final List<ChatMessage> messages;
-  final bool isStreaming;
-  final List<String> queuedPrompts;
-  final AgyPermissionRequestEvent? pendingPermission;
-  final String? activeTurnId;
-  final double tokensPerSecond;
-  final String? stallWarning;
-  final LoopDetectionResult? loopWarning;
-  final Set<String> activeBackgroundSessionIds;
-  final String? loadedSessionId;
-
-  ChatThreadState copyWith({
-    List<ChatMessage>? messages,
-    bool? isStreaming,
-    List<String>? queuedPrompts,
-    AgyPermissionRequestEvent? pendingPermission,
-    bool clearPermission = false,
-    String? activeTurnId,
-    bool clearActiveTurnId = false,
-    double? tokensPerSecond,
-    String? stallWarning,
-    bool clearStallWarning = false,
-    LoopDetectionResult? loopWarning,
-    bool clearLoopWarning = false,
-    Set<String>? activeBackgroundSessionIds,
-    String? loadedSessionId,
-  }) {
-    return ChatThreadState(
-      messages: messages ?? this.messages,
-      isStreaming: isStreaming ?? this.isStreaming,
-      queuedPrompts: queuedPrompts ?? this.queuedPrompts,
-      pendingPermission: clearPermission
-          ? null
-          : (pendingPermission ?? this.pendingPermission),
-      activeTurnId:
-          clearActiveTurnId ? null : (activeTurnId ?? this.activeTurnId),
-      tokensPerSecond: tokensPerSecond ?? this.tokensPerSecond,
-      stallWarning:
-          clearStallWarning ? null : (stallWarning ?? this.stallWarning),
-      loopWarning:
-          clearLoopWarning ? null : (loopWarning ?? this.loopWarning),
-      activeBackgroundSessionIds:
-          activeBackgroundSessionIds ?? this.activeBackgroundSessionIds,
-      loadedSessionId: loadedSessionId ?? this.loadedSessionId,
-    );
-  }
-}
+export 'chat_message_store.dart';
+export 'chat_models.dart';
 
 final chatProvider =
     NotifierProvider<ChatNotifier, ChatThreadState>(ChatNotifier.new);
 
+class _SessionTurnRuntime {
+  _SessionTurnRuntime({
+    required this.turnId,
+    required this.isSsh,
+    this.activeLocalRequest,
+  });
+
+  StreamSubscription<AgyChatEvent>? sub;
+  Timer? stallWatchdog;
+  final HarnessLoopDetector loopDetector = HarnessLoopDetector();
+  final Set<String> seenLoopCallIds = <String>{};
+  bool receivedTurnContent = false;
+  bool usedFallbackForTurn = false;
+  AgyPromptRequest? activeLocalRequest;
+  String turnId;
+  bool isSsh;
+  DateTime? streamBurstStart;
+  final List<({DateTime at, double tokens})> rateSamples = [];
+
+  void dispose() {
+    stallWatchdog?.cancel();
+    stallWatchdog = null;
+    final s = sub;
+    sub = null;
+    if (s != null) {
+      unawaited(s.cancel());
+    }
+  }
+}
+
 class ChatNotifier extends Notifier<ChatThreadState> {
-  StreamSubscription<AgyChatEvent>? _activeSub;
   StreamSubscription<RuntimeEvent>? _wakeupSub;
   String? _loadedSessionId;
+  final Map<String, _SessionTurnRuntime> _sessionRuntimes = {};
   final Map<String, String> _wakeupAssistantIds = {};
   final Map<String, Timer> _wakeupFinalizeTimers = {};
   final Set<String> _completedAssistantIds = <String>{};
   final AcpCodec _wakeupCodec = AcpCodec();
-  final HarnessLoopDetector _loopDetector = HarnessLoopDetector();
-  final Set<String> _seenLoopCallIds = <String>{};
-  Timer? _stallWatchdog;
-  bool _receivedTurnContent = false;
-  bool _usedFallbackForTurn = false;
-  AgyPromptRequest? _activeLocalRequest;
-  DateTime? _streamBurstStart;
-  final List<({DateTime at, double tokens})> _rateSamples = [];
   final Map<String, List<ChatMessage>> _inFlightMessages = {};
   final Map<String, DateTime> _turnStartedAt = {};
   final Map<String, DateTime> _firstOutputAt = {};
@@ -313,6 +74,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
   final Map<String, AgyPermissionRequestEvent> _pendingPermissionsBySession =
       {};
   final Map<String, LoopDetectionResult> _sessionLoopWarnings = {};
+  final Map<String, String> _sessionStallWarnings = {};
   final Map<String, int> _sessionTurnTokens = {};
   final Map<String, List<({String prompt, List<String> attachments})>>
       _queuedItemsBySession = {};
@@ -325,70 +87,64 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         String? instructions,
         String? tempRemoteId,
       })> _pendingCompactions = {};
-  String? _activeStreamingSessionId;
 
   static List<ChatToolStep> _finalizeTools(
     List<ChatToolStep> tools, {
     bool failed = false,
-  }) {
-    var changed = false;
-    final out = tools.map((t) {
-      if (t.state == ToolCallState.running || t.state == ToolCallState.pending) {
-        changed = true;
-        return ChatToolStep(
-          id: t.id,
-          toolName: t.toolName,
-          state: failed ? ToolCallState.failed : ToolCallState.completed,
-          parameters: t.parameters,
-          output: t.output,
-          error: t.error,
-          durationSeconds: t.durationSeconds,
-          startedAt: t.startedAt,
-        );
-      }
-      return t;
-    }).toList();
-    return changed ? out : tools;
-  }
+  }) =>
+      ChatTurnHelpers.finalizeTools(tools, failed: failed);
 
-  double _recordRateSample(String delta) {
-    if (delta.isEmpty) return state.tokensPerSecond;
+  static String? extractGitPushCwd(
+    List<ChatToolStep> tools, {
+    required String fallbackCwd,
+  }) =>
+      ChatTurnHelpers.extractGitPushCwd(tools, fallbackCwd: fallbackCwd);
+
+  static List<FileChangeEntry> extractChangedFilesFromTools(
+    List<ChatToolStep> tools,
+  ) =>
+      ChatTurnHelpers.extractChangedFilesFromTools(tools);
+
+  double _recordRateSample(String sessionId, String delta) {
+    final rt = _sessionRuntimes[sessionId];
+    if (rt == null || delta.isEmpty) return state.tokensPerSecond;
     final now = DateTime.now();
-    // Same empirical estimate as DSH-go's run_pulse.dart (~0.35 tok/char).
+    // Empirical estimate (~0.35 tok/char).
     final est = delta.trim().length * 0.35;
     if (est <= 0) return state.tokensPerSecond;
-    if (_rateSamples.isEmpty ||
-        now.difference(_rateSamples.last.at).inMilliseconds > 1500) {
-      _streamBurstStart = now;
+    if (rt.rateSamples.isEmpty ||
+        now.difference(rt.rateSamples.last.at).inMilliseconds > 1500) {
+      rt.streamBurstStart = now;
     }
-    _rateSamples.add((at: now, tokens: est));
+    rt.rateSamples.add((at: now, tokens: est));
     final cutoff = now.subtract(const Duration(milliseconds: 2500));
-    _rateSamples.removeWhere((s) => s.at.isBefore(cutoff));
-    final start =
-        _streamBurstStart != null && _streamBurstStart!.isAfter(cutoff)
-            ? _streamBurstStart!
-            : cutoff;
+    rt.rateSamples.removeWhere((s) => s.at.isBefore(cutoff));
+    final start = rt.streamBurstStart != null && rt.streamBurstStart!.isAfter(cutoff)
+        ? rt.streamBurstStart!
+        : cutoff;
     final elapsedMs = now.difference(start).inMilliseconds;
     final secs = (elapsedMs < 500 ? 500 : elapsedMs) / 1000.0;
-    final sum = _rateSamples.fold<double>(0, (a, s) => a + s.tokens);
+    final sum = rt.rateSamples.fold<double>(0, (a, s) => a + s.tokens);
     return sum / secs;
   }
 
-  void _resetWatchdog() {
-    _stallWatchdog?.cancel();
-    final activeSid = _activeStreamingSessionId;
-    if (activeSid == null || _pendingPermissionsBySession[activeSid] != null) {
+  void _resetWatchdog(String sessionId) {
+    final rt = _sessionRuntimes[sessionId];
+    if (rt == null) return;
+    rt.stallWatchdog?.cancel();
+    if (_pendingPermissionsBySession[sessionId] != null) {
       return;
     }
-    _stallWatchdog = Timer(const Duration(seconds: 180), () {
-      final sid = _activeStreamingSessionId;
-      if (sid != null &&
-          _pendingPermissionsBySession[sid] == null &&
+    rt.stallWatchdog = Timer(const Duration(seconds: 180), () {
+      if (_sessionRuntimes.containsKey(sessionId) &&
+          _pendingPermissionsBySession[sessionId] == null &&
           ref.mounted) {
-        state = state.copyWith(
-          stallWarning:
-              'Agent turn has had no output for 3 minutes — check connection or tap Stop & Regenerate.',
-        );
+        const msg =
+            'Agent turn has had no output for 3 minutes — check connection or tap Stop & Regenerate.';
+        _sessionStallWarnings[sessionId] = msg;
+        if (_loadedSessionId == sessionId) {
+          state = state.copyWith(stallWarning: msg);
+        }
       }
     });
   }
@@ -415,7 +171,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       }
     }
     if (target == null) return;
-    String preview = '';
+    var preview = '';
     for (var i = msgs.length - 1; i >= 0; i--) {
       final t = msgs[i].text.trim();
       if (t.isNotEmpty) {
@@ -435,13 +191,15 @@ class ChatNotifier extends Notifier<ChatThreadState> {
   @override
   ChatThreadState build() {
     ref.onDispose(() {
-      _stallWatchdog?.cancel();
+      for (final rt in _sessionRuntimes.values) {
+        rt.dispose();
+      }
+      _sessionRuntimes.clear();
       for (final timer in _wakeupFinalizeTimers.values) {
         timer.cancel();
       }
       _wakeupFinalizeTimers.clear();
       _wakeupAssistantIds.clear();
-      _activeSub?.cancel();
       _wakeupSub?.cancel();
     });
     _wakeupSub?.cancel();
@@ -508,7 +266,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     _firstOutputAt.remove(assistantId);
     _turnModelId.remove(assistantId);
     _turnEffort.remove(assistantId);
-    if (_activeStreamingSessionId != _loadedSessionId &&
+    if (!_sessionRuntimes.containsKey(sessionId) &&
         _loadedSessionId == sessionId) {
       state = state.copyWith(tokensPerSecond: 0);
     }
@@ -543,8 +301,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       target = sessionsState.activeSession;
     }
     if (target == null) return;
-    // Never create a duplicate wakeup bubble if this session already has an active foreground turn.
-    if (_activeStreamingSessionId == target.id) return;
+    if (_sessionRuntimes.containsKey(target.id)) return;
 
     final msgs = _messagesForSession(target.id);
     var assistantId = _wakeupAssistantIds[target.id];
@@ -604,76 +361,79 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         .toList();
   }
 
+  Set<String> _computeActiveBgIds() {
+    return <String>{..._sessionRuntimes.keys};
+  }
+
   Future<void> _loadMessages(String sessionId) async {
     final inFlight = _inFlightMessages[sessionId];
+    final activeRt = _sessionRuntimes[sessionId];
     if (inFlight != null) {
       if (!ref.mounted || _loadedSessionId != sessionId) return;
-      final isSessionStreaming = _activeStreamingSessionId == sessionId;
+      final isSessionStreaming = activeRt != null;
       state = state.copyWith(
         messages: List<ChatMessage>.from(inFlight),
         isStreaming: isSessionStreaming,
         queuedPrompts: _queuedPromptLabels(sessionId),
         pendingPermission: _pendingPermissionsBySession[sessionId],
         clearPermission: _pendingPermissionsBySession[sessionId] == null,
-        clearStallWarning: true,
+        stallWarning: _sessionStallWarnings[sessionId],
+        clearStallWarning: _sessionStallWarnings[sessionId] == null,
         loopWarning: _sessionLoopWarnings[sessionId],
         clearLoopWarning: _sessionLoopWarnings[sessionId] == null,
-        clearActiveTurnId: !isSessionStreaming,
+        activeTurnId: activeRt?.turnId,
+        clearActiveTurnId: activeRt == null,
+        activeBackgroundSessionIds: _computeActiveBgIds(),
         loadedSessionId: sessionId,
       );
       return;
     }
-    final prefs = await SharedPreferences.getInstance();
-    if (!ref.mounted || _loadedSessionId != sessionId) return;
-    final raw = prefs.getString('agy_msgs_$sessionId');
-    if (raw == null || raw.isEmpty) {
-      state = ChatThreadState(
-        queuedPrompts: _queuedPromptLabels(sessionId),
-        pendingPermission: _pendingPermissionsBySession[sessionId],
-        loopWarning: _sessionLoopWarnings[sessionId],
-        activeBackgroundSessionIds: state.activeBackgroundSessionIds,
-        loadedSessionId: sessionId,
-      );
-      return;
-    }
-    try {
-      final rawList = (jsonDecode(raw) as List<dynamic>)
-          .whereType<Map<String, dynamic>>()
-          .map(ChatMessage.fromJson)
-          .toList();
-      // Sanitize any stale streaming/running state persisted before an OS kill or restart.
-      final list = rawList
-          .map((m) => m.copyWith(
-                isStreaming: false,
-                tools: _finalizeTools(m.tools),
-              ))
-          .toList();
-      state = ChatThreadState(
-        messages: list,
-        queuedPrompts: _queuedPromptLabels(sessionId),
-        pendingPermission: _pendingPermissionsBySession[sessionId],
-        loopWarning: _sessionLoopWarnings[sessionId],
-        activeBackgroundSessionIds: state.activeBackgroundSessionIds,
-        loadedSessionId: sessionId,
-      );
-    } catch (_) {
-      state = ChatThreadState(
-        queuedPrompts: _queuedPromptLabels(sessionId),
-        pendingPermission: _pendingPermissionsBySession[sessionId],
-        loopWarning: _sessionLoopWarnings[sessionId],
-        activeBackgroundSessionIds: state.activeBackgroundSessionIds,
-        loadedSessionId: sessionId,
-      );
-    }
-  }
 
-  Future<void> _persistMessages(String sessionId, List<ChatMessage> msgs) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      'agy_msgs_$sessionId',
-      jsonEncode(msgs.map((m) => m.toJson()).toList()),
+    final rawList = await ChatMessageStore.instance.load(sessionId);
+    if (!ref.mounted || _loadedSessionId != sessionId) return;
+    // Re-check in case a background turn completed or started while awaiting I/O.
+    final latestInFlight = _inFlightMessages[sessionId];
+    final latestRt = _sessionRuntimes[sessionId];
+    if (latestInFlight != null) {
+      state = state.copyWith(
+        messages: List<ChatMessage>.from(latestInFlight),
+        isStreaming: latestRt != null,
+        queuedPrompts: _queuedPromptLabels(sessionId),
+        pendingPermission: _pendingPermissionsBySession[sessionId],
+        clearPermission: _pendingPermissionsBySession[sessionId] == null,
+        stallWarning: _sessionStallWarnings[sessionId],
+        clearStallWarning: _sessionStallWarnings[sessionId] == null,
+        loopWarning: _sessionLoopWarnings[sessionId],
+        clearLoopWarning: _sessionLoopWarnings[sessionId] == null,
+        activeTurnId: latestRt?.turnId,
+        clearActiveTurnId: latestRt == null,
+        activeBackgroundSessionIds: _computeActiveBgIds(),
+        loadedSessionId: sessionId,
+      );
+      return;
+    }
+
+    final list = rawList
+        .map((m) => m.copyWith(
+              isStreaming: false,
+              tools: _finalizeTools(m.tools),
+            ))
+        .toList();
+    state = ChatThreadState(
+      messages: list,
+      isStreaming: latestRt != null,
+      activeTurnId: latestRt?.turnId,
+      queuedPrompts: _queuedPromptLabels(sessionId),
+      pendingPermission: _pendingPermissionsBySession[sessionId],
+      stallWarning: _sessionStallWarnings[sessionId],
+      loopWarning: _sessionLoopWarnings[sessionId],
+      activeBackgroundSessionIds: _computeActiveBgIds(),
+      loadedSessionId: sessionId,
     );
   }
+
+  Future<void> _persistMessages(String sessionId, List<ChatMessage> msgs) =>
+      ChatMessageStore.instance.save(sessionId, msgs);
 
   List<ChatMessage> _messagesForSession(String sessionId) {
     if (_loadedSessionId == sessionId) {
@@ -728,30 +488,30 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     String rawText, {
     List<String> attachments = const [],
     bool force = false,
+    AgySessionSummary? targetSession,
   }) async {
     final prompt = rawText.trim();
     if (prompt.isEmpty) return;
 
-    final hasBackgroundWork = state.isStreaming ||
-        _activeStreamingSessionId != null ||
-        state.activeBackgroundSessionIds.isNotEmpty ||
-        ref.read(runtimeProvider).backgroundTasks.isNotEmpty;
-    if (!force && hasBackgroundWork) {
-      final queueSid = ref.read(sessionsProvider).activeSessionId ??
-          _loadedSessionId ??
-          'default';
+    var session = targetSession ?? ref.read(sessionsProvider).activeSession;
+    final targetSid = session?.id ?? _loadedSessionId;
+    final sessionBusy =
+        targetSid != null && _sessionRuntimes.containsKey(targetSid);
+    if (!force && sessionBusy) {
+      final queueSid = targetSid;
       final nextQueue = <({String prompt, List<String> attachments})>[
         ...(_queuedItemsBySession[queueSid] ?? const []),
         (prompt: prompt, attachments: List<String>.from(attachments)),
       ];
       _queuedItemsBySession[queueSid] = nextQueue;
-      state = state.copyWith(
-        queuedPrompts: nextQueue.map((e) => e.prompt).toList(),
-      );
+      if (_loadedSessionId == queueSid) {
+        state = state.copyWith(
+          queuedPrompts: nextQueue.map((e) => e.prompt).toList(),
+        );
+      }
       return;
     }
 
-    var session = ref.read(sessionsProvider).activeSession;
     session ??= await ref.read(sessionsProvider.notifier).createSession();
     if (!ref.mounted) return;
 
@@ -766,9 +526,9 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           lower.endsWith('.webp') ||
           lower.endsWith('.gif');
     }
-    final textAttachments = sshHost != null
-        ? attachments
-        : attachments.where((p) => !isImagePath(p)).toList();
+
+    final textAttachments =
+        attachments.where((p) => !isImagePath(p)).toList();
     final attachmentNote = textAttachments.isEmpty
         ? ''
         : '\n\n[Attached files: ${textAttachments.join(', ')}]';
@@ -776,7 +536,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     final now = DateTime.now();
 
     final priorMsgs = _messagesForSession(session.id);
-    final prevCompactIdx = priorMsgs.lastIndexWhere((m) => m.isCompactionSummary);
+    final prevCompactIdx =
+        priorMsgs.lastIndexWhere((m) => m.isCompactionSummary);
     final hasPostCompactUserTurn = prevCompactIdx >= 0 &&
         priorMsgs.skip(prevCompactIdx + 1).any((m) => m.role == ChatRole.user);
     final carryCompactContext =
@@ -810,23 +571,37 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     final turnId = const Uuid().v4();
     final streamToken = ++_nextStreamToken;
     _sessionTurnTokens[session.id] = streamToken;
-    _loadedSessionId = session.id;
-    _activeStreamingSessionId = session.id;
+    if (_loadedSessionId == null || targetSession == null) {
+      _loadedSessionId = session.id;
+    }
     _turnStartedAt[assistantId] = now;
     _turnModelId[assistantId] = settings.selectedModelId;
     _turnEffort[assistantId] = settings.reasoningEffort;
     _inFlightMessages[session.id] = nextMessages;
-    final bgIds = {...state.activeBackgroundSessionIds, session.id};
+    _sessionLoopWarnings.remove(session.id);
+    _sessionStallWarnings.remove(session.id);
+    _pendingPermissionsBySession.remove(session.id);
+
+    final rt = _SessionTurnRuntime(
+      turnId: turnId,
+      isSsh: sshHost != null,
+    );
+    _sessionRuntimes.remove(session.id)?.dispose();
+    _sessionRuntimes[session.id] = rt;
+
+    final isViewingSession = _loadedSessionId == session.id;
     state = state.copyWith(
-      messages: nextMessages,
-      isStreaming: true,
-      activeTurnId: turnId,
-      activeBackgroundSessionIds: bgIds,
-      clearPermission: true,
-      loadedSessionId: session.id,
+      messages: isViewingSession ? nextMessages : state.messages,
+      isStreaming: isViewingSession ? true : state.isStreaming,
+      activeTurnId: isViewingSession ? turnId : state.activeTurnId,
+      activeBackgroundSessionIds: _computeActiveBgIds(),
+      clearPermission: isViewingSession,
+      clearStallWarning: isViewingSession,
+      clearLoopWarning: isViewingSession,
+      tokensPerSecond: isViewingSession ? 0 : state.tokensPerSecond,
+      loadedSessionId: isViewingSession ? session.id : state.loadedSessionId,
     );
 
-    // Auto-title new conversations from the first user prompt.
     if (session.messageCount == 0) {
       final title = prompt.length > 36 ? '${prompt.substring(0, 36)}…' : prompt;
       session = session.copyWith(title: title);
@@ -855,9 +630,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
             : (runtime.status.workspaceRoot ?? ''));
 
     final requestedMode = AgyExecutionMode.fromCli(settings.executionMode);
-    final effectiveMode = sshHost != null
-        ? requestedMode
-        : requestedMode.androidSafe;
+    final effectiveMode =
+        sshHost != null ? requestedMode : requestedMode.androidSafe;
 
     final requestPrompt = carryCompactContext
         ? '[Compacted Session Context]\n${priorMsgs[prevCompactIdx].text.trim()}\n\n[User Request]\n$effectivePrompt'
@@ -988,24 +762,10 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     }
 
     final currentSession = _latestSession(session);
-    _receivedTurnContent = false;
-    _usedFallbackForTurn = false;
-    _activeLocalRequest = sshHost == null ? request : null;
-    _rateSamples.clear();
-    _streamBurstStart = null;
-    _loopDetector.reset();
-    _seenLoopCallIds.clear();
-    _sessionLoopWarnings.remove(currentSession.id);
-    _pendingPermissionsBySession.remove(currentSession.id);
-    state = state.copyWith(
-      tokensPerSecond: 0,
-      clearStallWarning: true,
-      clearLoopWarning: true,
-    );
-    _resetWatchdog();
+    rt.activeLocalRequest = sshHost == null ? request : null;
+    _resetWatchdog(currentSession.id);
 
-    await _activeSub?.cancel();
-    _activeSub = stream.listen(
+    rt.sub = stream.listen(
       (evt) {
         if (!ref.mounted ||
             _sessionTurnTokens[currentSession.id] != streamToken) {
@@ -1034,29 +794,22 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     );
   }
 
-  static TokenUsage? _mergeStepUsage(TokenUsage? prev, TokenUsage? stepUsage) {
-    if (stepUsage == null) return prev;
-    if (prev == null) return stepUsage;
-    return prev.copyWith(
-      contextTokens:
-          stepUsage.contextTokens > 0 ? stepUsage.contextTokens : prev.contextTokens,
-    );
-  }
-
   void _handleEvent(
     AgySessionSummary session,
     String assistantId,
     AgyChatEvent evt,
   ) {
-    _resetWatchdog();
-    if (state.stallWarning != null && _loadedSessionId == session.id) {
+    final rt = _sessionRuntimes[session.id];
+    _resetWatchdog(session.id);
+    if (_sessionStallWarnings.remove(session.id) != null &&
+        _loadedSessionId == session.id &&
+        state.stallWarning != null) {
       state = state.copyWith(clearStallWarning: true);
     }
     final msgs = _messagesForSession(session.id);
     final idx = msgs.indexWhere((m) => m.id == assistantId);
     if (idx < 0) return;
     final current = msgs[idx];
-    // Completed turns are strictly immutable: ignore any late/replayed events.
     if (!current.isStreaming || current.completedAt != null) return;
 
     switch (evt) {
@@ -1082,10 +835,10 @@ class ChatNotifier extends Notifier<ChatThreadState> {
               );
         }
       case AgyThoughtDeltaEvent():
-        _receivedTurnContent = true;
+        rt?.receivedTurnContent = true;
         _firstOutputAt.putIfAbsent(assistantId, DateTime.now);
         if (_loadedSessionId == session.id) {
-          final rate = _recordRateSample(evt.delta);
+          final rate = _recordRateSample(session.id, evt.delta);
           state = state.copyWith(tokensPerSecond: rate);
         }
         final nextSteps = [...current.steps];
@@ -1105,7 +858,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
             );
           }
         }
-        final nextUsage = _mergeStepUsage(current.usage, evt.stepUsage);
+        final nextUsage =
+            ChatTurnHelpers.mergeStepUsage(current.usage, evt.stepUsage);
         _replaceMessageInSession(
           session.id,
           idx,
@@ -1119,13 +873,14 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           ),
         );
       case AgyTextDeltaEvent():
-        _receivedTurnContent = true;
+        rt?.receivedTurnContent = true;
         _firstOutputAt.putIfAbsent(assistantId, DateTime.now);
         if (_loadedSessionId == session.id) {
-          final rate = _recordRateSample(evt.delta);
+          final rate = _recordRateSample(session.id, evt.delta);
           state = state.copyWith(tokensPerSecond: rate);
         }
-        final nextUsage = _mergeStepUsage(current.usage, evt.stepUsage);
+        final nextUsage =
+            ChatTurnHelpers.mergeStepUsage(current.usage, evt.stepUsage);
         _replaceMessageInSession(
           session.id,
           idx,
@@ -1138,7 +893,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           ),
         );
       case AgyToolCallEvent():
-        _receivedTurnContent = true;
+        rt?.receivedTurnContent = true;
         final tools = [...current.tools];
         final nextSteps = [...current.steps];
         final effCallId = evt.callId.isNotEmpty
@@ -1190,20 +945,19 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           idx,
           current.copyWith(tools: tools, steps: nextSteps),
         );
-        // Harness Doom-Loop Circuit Breaker check on new or updated tool steps.
-        if (ref.read(harnessProvider).loopBreakerEnabled) {
+        if (ref.read(harnessProvider).loopBreakerEnabled && rt != null) {
           final isFailed = evt.state == ToolCallState.failed ||
               (evt.errorMessage?.isNotEmpty ?? false);
           LoopDetectionResult loopHit = LoopDetectionResult.none;
-          if (_seenLoopCallIds.add(effCallId) || evt.parameters.isNotEmpty) {
-            loopHit = _loopDetector.recordToolCall(
+          if (rt.seenLoopCallIds.add(effCallId) || evt.parameters.isNotEmpty) {
+            loopHit = rt.loopDetector.recordToolCall(
               name: resolvedToolName,
               input: jsonEncode(mergedParams),
               isError: isFailed,
               callId: effCallId,
             );
           } else if (isFailed) {
-            loopHit = _loopDetector.markLastFailed(
+            loopHit = rt.loopDetector.markLastFailed(
               toolName: resolvedToolName,
               callId: effCallId,
             );
@@ -1215,18 +969,17 @@ class ChatNotifier extends Notifier<ChatThreadState> {
             }
           }
         }
-        // Checkpoint completed tool steps mid-turn against OS process kills.
         if (evt.state != ToolCallState.running) {
           unawaited(_persistMessages(session.id, _messagesForSession(session.id)));
         }
       case AgyPermissionRequestEvent():
         _pendingPermissionsBySession[session.id] = evt;
-        _stallWatchdog?.cancel();
+        rt?.stallWatchdog?.cancel();
         if (_loadedSessionId == session.id) {
           state = state.copyWith(pendingPermission: evt);
         }
       case AgyTurnResultEvent():
-        _receivedTurnContent = true;
+        rt?.receivedTurnContent = true;
         _pendingPermissionsBySession.remove(session.id);
         final statusUpper = evt.status.toUpperCase();
         final errText = evt.error?.trim() ?? '';
@@ -1300,32 +1053,32 @@ class ChatNotifier extends Notifier<ChatThreadState> {
               usage: evt.usage,
               sessionId: session.id,
             );
-        if (_activeStreamingSessionId == session.id) {
+        if (_sessionRuntimes.containsKey(session.id)) {
           unawaited(_completeStreaming(session, assistantId));
         }
       case AgyErrorEvent():
         _pendingPermissionsBySession.remove(session.id);
         if (evt.requiresAuth) {
           ref.read(authProvider.notifier).refresh();
-        } else if (!_receivedTurnContent &&
-            !_usedFallbackForTurn &&
-            _activeLocalRequest != null &&
+        } else if (rt != null &&
+            !rt.receivedTurnContent &&
+            !rt.usedFallbackForTurn &&
+            rt.activeLocalRequest != null &&
             !evt.message.toLowerCase().contains('auto mode is not available')) {
-          // DSH-go style engine fallback: if ACP fails before producing any output,
-          // automatically retry once via `-p --output-format stream-json`.
-          _usedFallbackForTurn = true;
-          final fallbackReq = _activeLocalRequest!;
+          rt.usedFallbackForTurn = true;
+          final fallbackReq = rt.activeLocalRequest!;
           final fallbackTurnId = const Uuid().v4();
           final fallbackToken = ++_nextStreamToken;
           _sessionTurnTokens[session.id] = fallbackToken;
+          rt.turnId = fallbackTurnId;
           if (_loadedSessionId == session.id) {
             state = state.copyWith(
               activeTurnId: fallbackTurnId,
               clearPermission: true,
             );
           }
-          _activeSub?.cancel();
-          _activeSub = RuntimeBridge.instance
+          rt.sub?.cancel();
+          rt.sub = RuntimeBridge.instance
               .runPrompt(fallbackReq, fallbackTurnId, useAcp: false)
               .listen(
                 (e) {
@@ -1386,7 +1139,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
             requiresAuth: !current.isCompactionSummary && evt.requiresAuth,
           ),
         );
-        if (_activeStreamingSessionId == session.id) {
+        if (_sessionRuntimes.containsKey(session.id)) {
           unawaited(_completeStreaming(session, assistantId));
         }
     }
@@ -1436,62 +1189,6 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     _completeStreaming(session, assistantId);
   }
 
-  static String? extractGitPushCwd(
-    List<ChatToolStep> tools, {
-    required String fallbackCwd,
-  }) {
-    for (final t in tools.reversed) {
-      if (t.state == ToolCallState.failed ||
-          (t.error != null && t.error!.isNotEmpty)) {
-        continue;
-      }
-      final cmd = (t.parameters['CommandLine'] ??
-              t.parameters['command'] ??
-              '')
-          .toString();
-      final lower = cmd.toLowerCase();
-      if (!lower.contains('git push') ||
-          lower.contains('--dry-run') ||
-          lower.contains('--help')) {
-        continue;
-      }
-      final paramCwd = (t.parameters['Cwd'] ??
-              t.parameters['cwd'] ??
-              t.parameters['workdir'] ??
-              '')
-          .toString()
-          .trim();
-      if (paramCwd.isNotEmpty) return paramCwd;
-
-      final cdMatch = RegExp(
-        r'''(?:^|[;&|]\s*)cd\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))''',
-      ).firstMatch(cmd);
-      if (cdMatch != null) {
-        final dir = (cdMatch.group(1) ??
-                cdMatch.group(2) ??
-                cdMatch.group(3) ??
-                '')
-            .trim();
-        if (dir.isNotEmpty) return dir;
-      }
-
-      final gitCMatch = RegExp(
-        r'''git\s+-C\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))''',
-      ).firstMatch(cmd);
-      if (gitCMatch != null) {
-        final dir = (gitCMatch.group(1) ??
-                gitCMatch.group(2) ??
-                gitCMatch.group(3) ??
-                '')
-            .trim();
-        if (dir.isNotEmpty) return dir;
-      }
-
-      if (fallbackCwd.isNotEmpty) return fallbackCwd;
-    }
-    return null;
-  }
-
   Future<void> _completeStreaming(
     AgySessionSummary session,
     String assistantId,
@@ -1499,21 +1196,15 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     if (!_completedAssistantIds.add(assistantId)) return;
     _wakeupFinalizeTimers.remove(session.id)?.cancel();
     _wakeupAssistantIds.remove(session.id);
-    _stallWatchdog?.cancel();
-    _stallWatchdog = null;
-    final subToCancel = _activeSub;
-    _activeSub = null;
-    if (subToCancel != null) {
-      unawaited(subToCancel.cancel());
-    }
-    final hadLocalRequest = _activeLocalRequest != null;
-    _activeLocalRequest = null;
-    if (_activeStreamingSessionId == session.id) {
-      _activeStreamingSessionId = null;
-    }
+    final rt = _sessionRuntimes.remove(session.id);
+    final hadLocalRequest = rt?.activeLocalRequest != null;
+    rt?.dispose();
+
     _sessionTurnTokens.remove(session.id);
     _pendingPermissionsBySession.remove(session.id);
     _sessionLoopWarnings.remove(session.id);
+    _sessionStallWarnings.remove(session.id);
+
     final msgs = _messagesForSession(session.id);
     var updatedMsgs = msgs;
     var changed = false;
@@ -1574,19 +1265,18 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     _turnModelId.remove(assistantId);
     _turnEffort.remove(assistantId);
 
-    final nextBgIds = {...state.activeBackgroundSessionIds}..remove(session.id);
+    final isViewingSession = _loadedSessionId == session.id;
     state = state.copyWith(
-      isStreaming: _loadedSessionId == session.id ? false : state.isStreaming,
-      tokensPerSecond: 0,
-      activeBackgroundSessionIds: nextBgIds,
-      clearPermission: true,
-      clearStallWarning: true,
-      clearLoopWarning: _loadedSessionId == session.id,
-      clearActiveTurnId: true,
+      isStreaming: isViewingSession ? false : state.isStreaming,
+      tokensPerSecond: isViewingSession ? 0 : state.tokensPerSecond,
+      activeBackgroundSessionIds: _computeActiveBgIds(),
+      clearPermission: isViewingSession,
+      clearStallWarning: isViewingSession,
+      clearLoopWarning: isViewingSession,
+      clearActiveTurnId: isViewingSession,
     );
     await _persistMessages(session.id, persisted);
 
-    // If this turn ran a `git push` command, automatically watch CI in that repo.
     if (hadLocalRequest || persisted.any((m) => m.id == assistantId)) {
       final completedMsg =
           persisted.where((m) => m.id == assistantId).firstOrNull;
@@ -1625,53 +1315,80 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         nextItem.prompt,
         attachments: nextItem.attachments,
         force: true,
+        targetSession: _latestSession(session),
       );
-    } else if (state.queuedPrompts.isNotEmpty) {
+    } else if (isViewingSession && state.queuedPrompts.isNotEmpty) {
       final nextPrompt = state.queuedPrompts.first;
       state = state.copyWith(
         queuedPrompts: state.queuedPrompts.sublist(1),
       );
-      await sendPrompt(nextPrompt, force: true);
+      await sendPrompt(
+        nextPrompt,
+        force: true,
+        targetSession: _latestSession(session),
+      );
     }
   }
 
-  Future<void> stopStreaming() async {
-    final turnId = state.activeTurnId;
-    final streamingSid = _activeStreamingSessionId;
-    final clearedSid = streamingSid ?? _loadedSessionId;
-    if (clearedSid != null) {
-      _sessionTurnTokens.remove(clearedSid);
-      _wakeupFinalizeTimers.remove(clearedSid)?.cancel();
-      _wakeupAssistantIds.remove(clearedSid);
-      _pendingPermissionsBySession.remove(clearedSid);
-      _sessionLoopWarnings.remove(clearedSid);
+  Future<void> stopStreaming({String? sessionId}) async {
+    final targetSid =
+        sessionId ?? _loadedSessionId ?? state.activeBackgroundSessionIds.firstOrNull;
+    final rt = targetSid != null ? _sessionRuntimes.remove(targetSid) : null;
+    final turnId = rt?.turnId ??
+        ((targetSid == null || targetSid == _loadedSessionId)
+            ? state.activeTurnId
+            : null);
+
+    if (targetSid != null) {
+      _sessionTurnTokens.remove(targetSid);
+      _wakeupFinalizeTimers.remove(targetSid)?.cancel();
+      _wakeupAssistantIds.remove(targetSid);
+      _pendingPermissionsBySession.remove(targetSid);
+      _sessionLoopWarnings.remove(targetSid);
+      _sessionStallWarnings.remove(targetSid);
     }
-    await _activeSub?.cancel();
-    _activeSub = null;
+    rt?.dispose();
+
     if (turnId != null) {
       try {
         await RuntimeBridge.instance.cancelTurn(turnId);
       } catch (_) {}
+      try {
+        await SshAgyRunner.instance.cancelActive(turnId: turnId);
+      } catch (_) {}
     }
-    _stallWatchdog?.cancel();
-    _stallWatchdog = null;
-    _activeLocalRequest = null;
-    _activeStreamingSessionId = null;
-    try {
-      await SshAgyRunner.instance.cancelActive(turnId: turnId);
-    } catch (_) {}
-    final updated = state.messages
-        .map((m) => m.isStreaming
-            ? m.copyWith(
-                isStreaming: false,
-                tools: _finalizeTools(m.tools, failed: true),
-                completedAt: DateTime.now(),
-              )
-            : m)
-        .toList();
-    if (streamingSid != null) {
-      final bgMsgs = _inFlightMessages.remove(streamingSid);
-      if (bgMsgs != null && streamingSid != _loadedSessionId) {
+
+    final isViewingTarget = targetSid == null || targetSid == _loadedSessionId;
+    if (isViewingTarget) {
+      final updated = state.messages
+          .map((m) => m.isStreaming
+              ? m.copyWith(
+                  isStreaming: false,
+                  tools: _finalizeTools(m.tools, failed: true),
+                  completedAt: DateTime.now(),
+                )
+              : m)
+          .toList();
+      if (targetSid != null) {
+        _inFlightMessages.remove(targetSid);
+      }
+      state = state.copyWith(
+        messages: updated,
+        isStreaming: false,
+        tokensPerSecond: 0,
+        activeBackgroundSessionIds: _computeActiveBgIds(),
+        clearPermission: true,
+        clearStallWarning: true,
+        clearLoopWarning: true,
+        clearActiveTurnId: true,
+      );
+      final saveSid = targetSid ?? ref.read(sessionsProvider).activeSessionId;
+      if (saveSid != null) {
+        await _persistMessages(saveSid, updated);
+      }
+    } else {
+      final bgMsgs = _inFlightMessages.remove(targetSid);
+      if (bgMsgs != null) {
         final cleanedBg = bgMsgs
             .map((m) => m.isStreaming
                 ? m.copyWith(
@@ -1681,101 +1398,12 @@ class ChatNotifier extends Notifier<ChatThreadState> {
                   )
                 : m)
             .toList();
-        await _persistMessages(streamingSid, cleanedBg);
+        await _persistMessages(targetSid, cleanedBg);
       }
-    }
-    final nextBgIds = {...state.activeBackgroundSessionIds};
-    if (clearedSid != null) {
-      nextBgIds.remove(clearedSid);
-    } else {
-      nextBgIds.clear();
-    }
-    state = state.copyWith(
-      messages: updated,
-      isStreaming: false,
-      tokensPerSecond: 0,
-      activeBackgroundSessionIds: nextBgIds,
-      clearPermission: true,
-      clearStallWarning: true,
-      clearLoopWarning: true,
-      clearActiveTurnId: true,
-    );
-    final activeId = ref.read(sessionsProvider).activeSessionId;
-    if (activeId != null) {
-      await _persistMessages(activeId, updated);
-    }
-  }
-
-  static String? _buildToolDiff(
-    String path,
-    String? oldText,
-    String? newText,
-  ) {
-    final oldLines = oldText == null || oldText.isEmpty
-        ? const <String>[]
-        : oldText.split('\n');
-    final newLines = newText == null || newText.isEmpty
-        ? const <String>[]
-        : newText.split('\n');
-    if (oldLines.isEmpty && newLines.isEmpty) return null;
-    final buf = StringBuffer()
-      ..writeln('--- a/$path')
-      ..writeln('+++ b/$path')
-      ..writeln('@@ -1,${oldLines.length} +1,${newLines.length} @@');
-    for (final line in oldLines.take(80)) {
-      buf.writeln('-$line');
-    }
-    if (oldLines.length > 80) buf.writeln('-... (${oldLines.length - 80} more)');
-    for (final line in newLines.take(80)) {
-      buf.writeln('+$line');
-    }
-    if (newLines.length > 80) buf.writeln('+... (${newLines.length - 80} more)');
-    return buf.toString();
-  }
-
-  static List<FileChangeEntry> extractChangedFilesFromTools(
-    List<ChatToolStep> tools,
-  ) {
-    final byPath = <String, FileChangeEntry>{};
-    for (final step in tools) {
-      if (step.state == ToolCallState.failed) continue;
-      final nameLower = step.toolName.toLowerCase();
-      final isFileEdit = nameLower.contains('write') ||
-          nameLower.contains('edit') ||
-          nameLower.contains('replace') ||
-          nameLower.contains('patch') ||
-          nameLower.contains('create_file');
-      if (!isFileEdit) continue;
-      final rawPath = step.parameters['TargetFile'] ??
-          step.parameters['AbsolutePath'] ??
-          step.parameters['path'] ??
-          step.parameters['file'];
-      final path = rawPath?.toString().trim() ?? '';
-      if (path.isEmpty) continue;
-
-      final replacement = step.parameters['Replacement'] ??
-          step.parameters['ReplacementContent'] ??
-          step.parameters['CodeContent'] ??
-          step.parameters['content'];
-      final target = step.parameters['TargetContent'];
-      final repStr = replacement?.toString();
-      final tgtStr = target?.toString();
-      final added = repStr != null ? repStr.split('\n').length : 0;
-      final removed = tgtStr != null ? tgtStr.split('\n').length : 0;
-      final created = (step.parameters['Overwrite'] == false) ||
-          nameLower.contains('create') ||
-          (nameLower.contains('write_to_file') && removed == 0);
-      final prev = byPath[path];
-      final diffSnippet = _buildToolDiff(path, tgtStr, repStr) ?? prev?.diff;
-      byPath[path] = FileChangeEntry(
-        path: path,
-        added: (prev?.added ?? 0) + added,
-        removed: (prev?.removed ?? 0) + removed,
-        created: prev?.created ?? created,
-        diff: diffSnippet,
+      state = state.copyWith(
+        activeBackgroundSessionIds: _computeActiveBgIds(),
       );
     }
-    return byPath.values.toList();
   }
 
   Future<void> forceStopTask({
@@ -1799,29 +1427,25 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       return;
     }
     if (kindName == 'session' && sessionId != null) {
-      if (_activeStreamingSessionId == sessionId ||
-          ref.read(sessionsProvider).activeSessionId == sessionId) {
-        await stopStreaming();
-      } else {
-        _inFlightMessages.remove(sessionId);
-        final nextBg = {...state.activeBackgroundSessionIds}..remove(sessionId);
-        state = state.copyWith(activeBackgroundSessionIds: nextBg);
-      }
-      if (state.activeTurnId != null) {
+      await stopStreaming(sessionId: sessionId);
+      final rtTurn = _sessionRuntimes[sessionId]?.turnId;
+      if (rtTurn != null) {
         await ref
             .read(runtimeProvider.notifier)
-            .cancelBackgroundTask('turn:${state.activeTurnId}');
+            .cancelBackgroundTask('turn:$rtTurn');
       }
       return;
     }
-    // Active tool / subagent step or fallback
     await stopStreaming();
     await ref.read(runtimeProvider.notifier).refresh();
   }
 
   Future<int> forceStopAllTasks() async {
     ref.read(ciWatchProvider.notifier).cancelAll();
-    if (state.isStreaming || _activeStreamingSessionId != null) {
+    for (final sid in _sessionRuntimes.keys.toList()) {
+      await stopStreaming(sessionId: sid);
+    }
+    if (state.isStreaming) {
       await stopStreaming();
     }
     _inFlightMessages.clear();
@@ -1832,6 +1456,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       isStreaming: false,
       clearPermission: true,
       clearStallWarning: true,
+      clearLoopWarning: true,
+      clearActiveTurnId: true,
     );
     return stoppedNative;
   }
@@ -1862,8 +1488,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         state.queuedPrompts.isEmpty) {
       return;
     }
-    if (state.isStreaming || _activeStreamingSessionId != null) {
-      await stopStreaming();
+    if (state.isStreaming || (sid != null && _sessionRuntimes.containsKey(sid))) {
+      await stopStreaming(sessionId: sid);
       if (!ref.mounted) return;
     }
     if (sessionQueue != null && sessionQueue.isNotEmpty) {
@@ -1919,8 +1545,9 @@ class ChatNotifier extends Notifier<ChatThreadState> {
   }) async {
     final trimmed = prompt.trim();
     if (trimmed.isEmpty) return;
-    if (state.isStreaming || _activeStreamingSessionId != null) {
-      await stopStreaming();
+    final sid = _loadedSessionId ?? ref.read(sessionsProvider).activeSessionId;
+    if (state.isStreaming || (sid != null && _sessionRuntimes.containsKey(sid))) {
+      await stopStreaming(sessionId: sid);
       if (!ref.mounted) return;
     }
     await sendPrompt(trimmed, attachments: attachments, force: true);
@@ -1960,23 +1587,32 @@ class ChatNotifier extends Notifier<ChatThreadState> {
 
   Future<void> resolvePermission(String optionId) async {
     final perm = state.pendingPermission;
-    final turnId = state.activeTurnId;
-    final sid = _activeStreamingSessionId ?? _loadedSessionId;
+    final sid = _loadedSessionId ?? ref.read(sessionsProvider).activeSessionId;
+    final rt = sid != null ? _sessionRuntimes[sid] : null;
+    final turnId = rt?.turnId ?? state.activeTurnId;
     if (sid != null) {
       _pendingPermissionsBySession.remove(sid);
+      _resetWatchdog(sid);
     }
     state = state.copyWith(clearPermission: true);
-    _resetWatchdog();
     if (perm != null && turnId != null) {
       try {
-        await RuntimeBridge.instance.respondPermission(
-          turnId: turnId,
-          requestId: perm.requestId,
-          optionId: optionId,
-        );
+        if (rt?.isSsh == true) {
+          await SshAgyRunner.instance.respondToPermission(
+            turnId: turnId,
+            requestId: perm.requestId,
+            optionId: optionId,
+          );
+        } else {
+          await RuntimeBridge.instance.respondPermission(
+            turnId: turnId,
+            requestId: perm.requestId,
+            optionId: optionId,
+          );
+        }
       } catch (err) {
         if (!ref.mounted) return;
-        if (sid != null && _activeStreamingSessionId == sid) {
+        if (sid != null && _sessionRuntimes.containsKey(sid)) {
           _pendingPermissionsBySession[sid] = perm;
           if (_loadedSessionId == sid) {
             state = state.copyWith(pendingPermission: perm);
@@ -1989,14 +1625,18 @@ class ChatNotifier extends Notifier<ChatThreadState> {
 
   Future<void> clearCurrentThread() async {
     final activeId = ref.read(sessionsProvider).activeSessionId;
-    _loopDetector.reset();
-    _seenLoopCallIds.clear();
     _pendingCompactions.clear();
     if (activeId != null) {
+      _sessionRuntimes[activeId]?.loopDetector.reset();
+      _sessionRuntimes[activeId]?.seenLoopCallIds.clear();
       _pendingPermissionsBySession.remove(activeId);
       _sessionLoopWarnings.remove(activeId);
+      _sessionStallWarnings.remove(activeId);
     }
-    state = ChatThreadState(loadedSessionId: activeId);
+    state = ChatThreadState(
+      activeBackgroundSessionIds: _computeActiveBgIds(),
+      loadedSessionId: activeId,
+    );
     if (activeId != null) {
       await _persistMessages(activeId, const []);
       await _syncSessionMeta(activeId, const []);
@@ -2033,7 +1673,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     _inFlightMessages[branched.id] = currentMsgs;
     state = ChatThreadState(
       messages: currentMsgs,
-      activeBackgroundSessionIds: state.activeBackgroundSessionIds,
+      activeBackgroundSessionIds: _computeActiveBgIds(),
       loadedSessionId: branched.id,
     );
     await _persistMessages(branched.id, currentMsgs);
@@ -2053,20 +1693,12 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     );
   }
 
-  /// Compacts the active conversation window:
-  /// 1. Closes and resets the old bloated backend ACP session (`remoteConversationId`).
-  /// 2. Distills uncompacted turns into a fresh [ChatMessage] with
-  ///    `isCompactionSummary: true` (via stateless LLM turn when online, or
-  ///    deterministic extractive fallback when offline/error).
-  /// 3. Keeps older messages visible in scrollback while excluding them from
-  ///    `contextBudgetProvider` so context drops immediately and subsequent
-  ///    prompts resume cleanly from the compacted handoff summary.
   Future<({bool ok, String message})> compactThread({
     String? instructions,
   }) async {
+    final session = ref.read(sessionsProvider).activeSession;
     final busy = state.isStreaming ||
-        _activeStreamingSessionId != null ||
-        state.activeBackgroundSessionIds.isNotEmpty;
+        (session != null && _sessionRuntimes.containsKey(session.id));
     if (busy) {
       return (
         ok: false,
@@ -2074,7 +1706,6 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       );
     }
 
-    final session = ref.read(sessionsProvider).activeSession;
     final msgs = state.messages;
     if (session == null || msgs.isEmpty) {
       return (ok: false, message: 'Nothing to compact yet.');
@@ -2115,8 +1746,6 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     final runtime = ref.read(runtimeProvider);
     final oldRemoteId = session.remoteConversationId;
 
-    // Close the old bloated backend session and detach it so the next prompt
-    // starts from a clean context window seeded with the handoff summary.
     if (sshHost == null && oldRemoteId != null && oldRemoteId.isNotEmpty) {
       try {
         await RuntimeBridge.instance.closeSessionWorker(oldRemoteId);
@@ -2132,8 +1761,6 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     if (!ref.mounted) return (ok: false, message: 'Cancelled');
 
     final settings = ref.read(settingsProvider);
-    _loopDetector.reset();
-    _seenLoopCallIds.clear();
 
     if (sshHost == null && !runtime.status.isReady) {
       final fallback = HarnessContextMonitor.buildFallbackCompactionSummary(
@@ -2177,7 +1804,6 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     final streamToken = ++_nextStreamToken;
     _sessionTurnTokens[resetSession.id] = streamToken;
     _loadedSessionId = resetSession.id;
-    _activeStreamingSessionId = resetSession.id;
     _turnStartedAt[assistantId] = now;
     _turnModelId[assistantId] = settings.selectedModelId;
     _turnEffort[assistantId] = settings.reasoningEffort;
@@ -2189,14 +1815,15 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       tempRemoteId: null,
     );
 
+    final rt = _SessionTurnRuntime(turnId: turnId, isSsh: sshHost != null);
+    _sessionRuntimes.remove(resetSession.id)?.dispose();
+    _sessionRuntimes[resetSession.id] = rt;
+
     state = state.copyWith(
       messages: nextMessages,
       isStreaming: true,
       activeTurnId: turnId,
-      activeBackgroundSessionIds: {
-        ...state.activeBackgroundSessionIds,
-        resetSession.id,
-      },
+      activeBackgroundSessionIds: _computeActiveBgIds(),
       tokensPerSecond: 0,
       clearPermission: true,
       clearStallWarning: true,
@@ -2254,6 +1881,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       stream = SshAgyRunner.instance.runPrompt(
         host: sshHost,
         request: request,
+        turnId: turnId,
         password: pwd,
         privateKeyPem: key,
       );
@@ -2261,15 +1889,10 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       stream = RuntimeBridge.instance.runPrompt(request, turnId);
     }
 
-    _receivedTurnContent = false;
-    _usedFallbackForTurn = false;
-    _activeLocalRequest = sshHost == null ? request : null;
-    _rateSamples.clear();
-    _streamBurstStart = null;
-    _resetWatchdog();
+    rt.activeLocalRequest = sshHost == null ? request : null;
+    _resetWatchdog(resetSession.id);
 
-    await _activeSub?.cancel();
-    _activeSub = stream.listen(
+    rt.sub = stream.listen(
       (evt) {
         if (!ref.mounted ||
             _sessionTurnTokens[resetSession.id] != streamToken) {
@@ -2301,6 +1924,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
   }
 
   void dismissLoopWarning() {
+    final sid = _loadedSessionId;
+    if (sid != null) _sessionLoopWarnings.remove(sid);
     state = state.copyWith(clearLoopWarning: true);
   }
 
@@ -2308,21 +1933,21 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     final hit = state.loopWarning;
     if (hit == null) return;
     final pivot = hit.pivotPrompt;
-    _loopDetector.reset();
-    _seenLoopCallIds.clear();
-    final activeId = ref.read(sessionsProvider).activeSessionId;
-    if (activeId != null) _sessionLoopWarnings.remove(activeId);
+    final activeId = _loadedSessionId ?? ref.read(sessionsProvider).activeSessionId;
+    if (activeId != null) {
+      _sessionRuntimes[activeId]?.loopDetector.reset();
+      _sessionRuntimes[activeId]?.seenLoopCallIds.clear();
+      _sessionLoopWarnings.remove(activeId);
+    }
     state = state.copyWith(clearLoopWarning: true);
-    if (state.isStreaming || _activeStreamingSessionId != null) {
-      await stopStreaming();
+    if (state.isStreaming ||
+        (activeId != null && _sessionRuntimes.containsKey(activeId))) {
+      await stopStreaming(sessionId: activeId);
     }
     if (!ref.mounted) return;
     await sendPrompt(pivot, force: true);
   }
 
-  /// Deterministic `/rewind` rollback: restores workspace Git snapshot (when a
-  /// checkpoint exists on the target user message) and prunes conversation
-  /// history back to right before that message, returning the prompt text.
   Future<({bool ok, String message, String? restoredPrompt})> rewindToMessage(
     String userMessageId,
   ) async {
@@ -2380,7 +2005,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         return (ok: false, message: 'Cancelled', restoredPrompt: null);
       }
       if (res['ok'] == true) {
-        gitNote = 'Workspace & conversation restored (${cpRef.substring(0, cpRef.length.clamp(0, 7))})';
+        gitNote =
+            'Workspace & conversation restored (${cpRef.substring(0, cpRef.length.clamp(0, 7))})';
       } else {
         gitNote = 'Conversation rewound (${res['message'] ?? 'no git snapshot'})';
       }
@@ -2399,10 +2025,10 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       }
     }
     final prefix = state.messages.sublist(0, targetIdx);
-    _loopDetector.reset();
-    _seenLoopCallIds.clear();
     final activeId = ref.read(sessionsProvider).activeSessionId;
     if (activeId != null) {
+      _sessionRuntimes[activeId]?.loopDetector.reset();
+      _sessionRuntimes[activeId]?.seenLoopCallIds.clear();
       _sessionLoopWarnings.remove(activeId);
     }
     state = state.copyWith(

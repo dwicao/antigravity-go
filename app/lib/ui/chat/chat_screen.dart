@@ -9,7 +9,6 @@ import 'package:share_plus/share_plus.dart';
 
 import '../../remote/ssh_agy_runner.dart';
 import '../../runtime/runtime_bridge.dart';
-import '../../theme/app_theme.dart';
 import '../../state/auth_state.dart';
 import '../../state/background_tasks_state.dart';
 import '../../state/chat_state.dart';
@@ -22,15 +21,16 @@ import '../../state/runtime_state.dart';
 import '../../state/sessions_state.dart';
 import '../../state/settings_state.dart';
 import '../../state/side_panel_state.dart';
-import '../../state/update_state.dart';
+import '../../theme/app_theme.dart';
 import '../auth/google_login_sheet.dart';
 import '../cli/cli_manager_page.dart';
 import '../harness/harness_page.dart';
 import '../settings/settings_page.dart';
 import '../shell/background_tasks_sheet.dart';
 import '../shell/command_palette.dart';
-import '../update/update_sheet.dart';
 import '../usage/usage_page.dart';
+import 'chat_banners_and_sheets.dart';
+import 'chat_composer_bar.dart';
 import 'message_bubble.dart';
 import 'tool_approval_card.dart';
 
@@ -325,7 +325,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       if (widget.onOpenSessions != null) {
         widget.onOpenSessions!();
       } else {
-        await _showSessionPickerSheet();
+        await showChatSessionPickerSheet(context, ref);
       }
       return;
     }
@@ -381,7 +381,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     if (firstWord == '/fork' || firstWord == '/branch') {
       _clearInputMenus();
-      final branched = await ref.read(chatProvider.notifier).forkCurrentSession();
+      final branched =
+          await ref.read(chatProvider.notifier).forkCurrentSession();
       await ref.read(chatProvider.notifier).appendSystemFeedback(
             'Forked conversation into **${branched.title}** with full history.',
           );
@@ -406,7 +407,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         }
       }
       _clearInputMenus();
-      await _showModelPickerSheet();
+      await showChatModelPickerSheet(context, ref);
       return;
     }
 
@@ -455,87 +456,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(res.message)),
-    );
-  }
-
-  Future<void> _showModelPickerSheet() async {
-    final currentId = ref.read(settingsProvider).selectedModelId;
-    await showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      builder: (ctx) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
-          children: [
-            Text(
-              'Select Active Model',
-              style: Theme.of(ctx).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-            ),
-            const SizedBox(height: 8),
-            for (final m in AgyModelCatalog.builtIn)
-              ListTile(
-                dense: true,
-                leading: Icon(
-                  m.id == currentId
-                      ? Icons.radio_button_checked
-                      : Icons.radio_button_unchecked,
-                ),
-                title: Text(m.displayName),
-                subtitle: Text(m.id),
-                onTap: () async {
-                  Navigator.of(ctx).pop();
-                  await ref.read(settingsProvider.notifier).setModel(m.id);
-                  await ref.read(chatProvider.notifier).appendSystemFeedback(
-                        'Switched active model to **${m.displayName}**.',
-                      );
-                },
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Future<void> _showSessionPickerSheet() async {
-    final sessions = ref.read(sessionsProvider).sessions;
-    final activeId = ref.read(sessionsProvider).activeSessionId;
-    await showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      builder: (ctx) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
-          children: [
-            Text(
-              'Resume Session',
-              style: Theme.of(ctx).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-            ),
-            const SizedBox(height: 8),
-            for (final s in sessions)
-              ListTile(
-                dense: true,
-                selected: s.id == activeId,
-                leading: const Icon(Icons.chat_bubble_outline, size: 18),
-                title: Text(s.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-                subtitle: Text(
-                  s.lastPreview ?? s.workspacePath,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                onTap: () {
-                  Navigator.of(ctx).pop();
-                  ref.read(sessionsProvider.notifier).selectSession(s.id);
-                },
-              ),
-          ],
-        ),
-      ),
     );
   }
 
@@ -617,9 +537,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   Widget build(BuildContext context) {
     final chat = ref.watch(chatProvider);
     final bgTasks = ref.watch(backgroundTasksProvider);
-    final hasRunningBg =
-        bgTasks.any((t) => t.kind != BackgroundTaskKind.queued);
-    final isBusyOrBg = chat.isStreaming || hasRunningBg;
+    final activeSessionId =
+        ref.watch(sessionsProvider.select((s) => s.activeSessionId)) ??
+            'new_session';
+    final hasCurrentSessionRunningTool = bgTasks.any(
+      (t) =>
+          t.kind != BackgroundTaskKind.queued &&
+          t.kind != BackgroundTaskKind.session &&
+          t.kind != BackgroundTaskKind.ci &&
+          (t.sessionId == null || t.sessionId == activeSessionId),
+    );
+    final isCurrentSessionBusy = chat.isStreaming || hasCurrentSessionRunningTool;
+
     final auth = ref.watch(authProvider);
     final hosts = ref.watch(hostsProvider);
     final ctxSnap = ref.watch(contextBudgetProvider);
@@ -628,9 +557,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final settings = ref.watch(settingsProvider);
     final perms = ref.watch(permissionsProvider);
     final sidePanel = ref.watch(sidePanelProvider);
-    final activeSessionId =
-        ref.watch(sessionsProvider.select((s) => s.activeSessionId)) ??
-            'new_session';
+
     ref.listen<Map<String, ChatDraft>>(draftStoreProvider, (prev, next) {
       if (!_draftAppliedForSession && _inputController.text.isEmpty) {
         final restored = next[activeSessionId]?.text ?? '';
@@ -681,6 +608,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         });
       }
     }
+
     final theme = Theme.of(context);
     final semantic = AgySemanticColors.of(context);
     final slashMatches = _showSlashMenu
@@ -725,10 +653,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      project.name,
-                      overflow: TextOverflow.ellipsis,
-                    ),
+                    Text(project.name, overflow: TextOverflow.ellipsis),
                     Text(
                       '$hostLabel · ${activeModel.displayName}',
                       overflow: TextOverflow.ellipsis,
@@ -920,7 +845,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         if (!auth.isAuthenticated ||
             (!runtime.status.isReady && hosts.isLocalActive))
           wrapCentered(
-            _OnboardingBanner(
+            ChatOnboardingBanner(
               isAuthenticated: auth.isAuthenticated,
               runtimeReady: runtime.status.isReady,
               runtimeBusy: runtime.busy,
@@ -932,10 +857,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ),
         Expanded(
           child: chat.messages.isEmpty
-              ? _EmptyHero(
-                  onPickSuggestion: (s) {
-                    _inputController.text = s;
-                  },
+              ? ChatEmptyHero(
+                  onPickSuggestion: (s) => _inputController.text = s,
                 )
               : Stack(
                   children: [
@@ -1407,569 +1330,32 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               ),
             ),
           ),
-        SafeArea(
-          top: false,
-          child: wrapCentered(
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 4, 12, 10),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // dsh-Go style rounded pill composer so narrow mobile widths
-                  // give maximum unobstructed horizontal space to the TextField.
-                  Container(
-                    padding: const EdgeInsets.fromLTRB(6, 5, 6, 5),
-                    decoration: BoxDecoration(
-                      color: theme.colorScheme.surfaceContainerHigh
-                          .withOpacity(0.85),
-                      borderRadius: BorderRadius.circular(26),
-                      border: Border.all(
-                        color: theme.colorScheme.outlineVariant.withOpacity(0.45),
-                      ),
-                    ),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        PopupMenuButton<String>(
-                          tooltip: 'Attach or CLI tools',
-                          padding: EdgeInsets.zero,
-                          onSelected: (action) {
-                            switch (action) {
-                              case 'file':
-                                _pickFile();
-                              case 'image':
-                                _pickImage();
-                              case 'voice':
-                                if (!_listeningVoice) _dictateVoice();
-                              case 'slash':
-                                _inputController.text = '/';
-                                _inputController.selection =
-                                    const TextSelection.collapsed(offset: 1);
-                                _onChanged('/');
-                              case 'cli':
-                                Navigator.of(context).push(
-                                  MaterialPageRoute<void>(
-                                    builder: (_) => const CliManagerPage(),
-                                  ),
-                                );
-                            }
-                          },
-                          itemBuilder: (_) => [
-                            const PopupMenuItem(
-                              value: 'file',
-                              child: ListTile(
-                                dense: true,
-                                leading: Icon(Icons.attach_file),
-                                title: Text('Attach file'),
-                              ),
-                            ),
-                            const PopupMenuItem(
-                              value: 'image',
-                              child: ListTile(
-                                dense: true,
-                                leading: Icon(Icons.image_outlined),
-                                title: Text('Attach image'),
-                              ),
-                            ),
-                            PopupMenuItem(
-                              value: 'voice',
-                              child: ListTile(
-                                dense: true,
-                                leading: Icon(
-                                  _listeningVoice ? Icons.mic : Icons.mic_none,
-                                ),
-                                title: const Text('Voice input'),
-                              ),
-                            ),
-                            const PopupMenuItem(
-                              value: 'slash',
-                              child: ListTile(
-                                dense: true,
-                                leading: Icon(Icons.code),
-                                title: Text('Slash commands (/)'),
-                              ),
-                            ),
-                            const PopupMenuItem(
-                              value: 'cli',
-                              child: ListTile(
-                                dense: true,
-                                leading: Icon(Icons.terminal),
-                                title: Text('Antigravity CLI & Flags'),
-                              ),
-                            ),
-                          ],
-                          child: Container(
-                            width: 36,
-                            height: 36,
-                            decoration: BoxDecoration(
-                              color: theme.colorScheme.surfaceContainerHighest,
-                              shape: BoxShape.circle,
-                            ),
-                            child: Icon(
-                              _listeningVoice ? Icons.mic : Icons.add_rounded,
-                              size: 20,
-                              color: _listeningVoice
-                                  ? theme.colorScheme.primary
-                                  : theme.colorScheme.onSurfaceVariant,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Focus(
-                            onKeyEvent: _handleComposerKey,
-                            child: TextField(
-                              controller: _inputController,
-                              onChanged: _onChanged,
-                              minLines: 1,
-                              maxLines: widget.isDesktopMode ? 8 : 5,
-                              textInputAction: TextInputAction.newline,
-                              decoration: InputDecoration(
-                                isDense: true,
-                                border: InputBorder.none,
-                                enabledBorder: InputBorder.none,
-                                focusedBorder: InputBorder.none,
-                                filled: false,
-                                hintMaxLines: 1,
-                                contentPadding: const EdgeInsets.symmetric(
-                                  horizontal: 2,
-                                  vertical: 8,
-                                ),
-                                hintText: isBusyOrBg
-                                    ? 'Queue message (or Steer)…'
-                                    : widget.isDesktopMode && _enterToSend
-                                        ? 'Ask anything, @ file, / command (Enter sends)'
-                                        : 'Ask anything, @ file, / command…',
-                              ),
-                            ),
-                          ),
-                        ),
-                        if (isBusyOrBg) ...[
-                          const SizedBox(width: 4),
-                          IconButton.filledTonal(
-                            tooltip: 'Stop (Esc)',
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints.tightFor(
-                              width: 36,
-                              height: 36,
-                            ),
-                            onPressed: () {
-                              if (chat.isStreaming) {
-                                ref.read(chatProvider.notifier).stopStreaming();
-                              } else {
-                                ref
-                                    .read(chatProvider.notifier)
-                                    .forceStopAllTasks();
-                              }
-                            },
-                            icon: const Icon(Icons.stop_rounded, size: 19),
-                          ),
-                          const SizedBox(width: 4),
-                          IconButton.filledTonal(
-                            tooltip: 'Steer (force send now)',
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints.tightFor(
-                              width: 36,
-                              height: 36,
-                            ),
-                            onPressed: _steerSubmit,
-                            icon: const Icon(Icons.bolt_rounded, size: 19),
-                          ),
-                        ],
-                        const SizedBox(width: 4),
-                        IconButton.filled(
-                          tooltip: isBusyOrBg ? 'Queue' : 'Send',
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints.tightFor(
-                            width: 36,
-                            height: 36,
-                          ),
-                          onPressed: _submit,
-                          icon: Icon(
-                            isBusyOrBg
-                                ? Icons.schedule_send_rounded
-                                : Icons.arrow_upward_rounded,
-                            size: 19,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  // 1:1 Antigravity Desktop Inline Composer Bar (Model, Effort, Permission Preset, Mode)
-                  SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      children: [
-                        _PickerPill<String>(
-                          icon: Icons.auto_awesome,
-                          label: activeModel.displayName,
-                          items: AgyModelCatalog.builtIn
-                              .map(
-                                (m) => PopupMenuItem(
-                                  value: m.id,
-                                  child: Text(m.displayName),
-                                ),
-                              )
-                              .toList(),
-                          onSelected: (v) =>
-                              ref.read(settingsProvider.notifier).setModel(v),
-                        ),
-                        if (activeModel.supportsEffort) ...[
-                          const SizedBox(width: 6),
-                          _PickerPill<String>(
-                            icon: Icons.psychology_outlined,
-                            label: ReasoningEffort.fromString(
-                              settings.reasoningEffort,
-                            ).label,
-                            items: activeModel.availableEfforts
-                                .map(
-                                  (e) => PopupMenuItem(
-                                    value: e.cliValue,
-                                    child: Text(e.label),
-                                  ),
-                                )
-                                .toList(),
-                            onSelected: (v) => ref
-                                .read(settingsProvider.notifier)
-                                .setEffort(v),
-                          ),
-                        ],
-                        const SizedBox(width: 6),
-                        _PickerPill<AntigravityPermissionPreset>(
-                          icon: Icons.shield_outlined,
-                          label: settings.permissionPreset.label,
-                          items: AntigravityPermissionPreset.values
-                              .where(
-                                (p) =>
-                                    hosts.activeSshHost != null ||
-                                    p != AntigravityPermissionPreset.auto,
-                              )
-                              .map(
-                                (p) => PopupMenuItem(
-                                  value: p,
-                                  child: Text('${p.label} — ${p.description}'),
-                                ),
-                              )
-                              .toList(),
-                          onSelected: (p) => ref
-                              .read(settingsProvider.notifier)
-                              .setPermissionPreset(p),
-                        ),
-                        const SizedBox(width: 6),
-                        _PickerPill<String>(
-                          icon: Icons.tune,
-                          label: AgyExecutionMode.fromCli(
-                            settings.executionMode,
-                          ).label,
-                          items: AgyExecutionMode.values
-                              .where(
-                                (m) =>
-                                    hosts.activeSshHost != null ||
-                                    m != AgyExecutionMode.auto,
-                              )
-                              .map(
-                                (m) => PopupMenuItem(
-                                  value: m.cliValue,
-                                  child: Text(m.label),
-                                ),
-                              )
-                              .toList(),
-                          onSelected: (v) => ref
-                              .read(settingsProvider.notifier)
-                              .setExecutionMode(v),
-                        ),
-                        const SizedBox(width: 6),
-                        Tooltip(
-                          message:
-                              '~${ctxSnap.usedTokens} / ${ctxSnap.budgetTokens} tokens (${ctxSnap.statusLabel}) — tap for Harness & /compact',
-                          child: InkWell(
-                            borderRadius: BorderRadius.circular(20),
-                            onTap: () => Navigator.of(context).push(
-                              MaterialPageRoute<void>(
-                                builder: (_) => const HarnessPage(),
-                              ),
-                            ),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                                vertical: 5,
-                              ),
-                              decoration: BoxDecoration(
-                                color: ctxSnap.shouldCompact
-                                    ? theme.colorScheme.errorContainer
-                                    : ctxSnap.needsWarning
-                                        ? semantic.warningContainer
-                                        : theme.colorScheme.surfaceContainerHighest,
-                                borderRadius: BorderRadius.circular(20),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    Icons.engineering_outlined,
-                                    size: 13,
-                                    color: ctxSnap.shouldCompact
-                                        ? theme.colorScheme.onErrorContainer
-                                        : ctxSnap.needsWarning
-                                            ? semantic.onWarningContainer
-                                            : theme.colorScheme.onSurfaceVariant,
-                                  ),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    '${ctxSnap.percentage}% ctx',
-                                    style: theme.textTheme.labelSmall?.copyWith(
-                                      fontWeight: FontWeight.w600,
-                                      color: ctxSnap.shouldCompact
-                                          ? theme.colorScheme.onErrorContainer
-                                          : ctxSnap.needsWarning
-                                              ? semantic.onWarningContainer
-                                              : null,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-                        if (widget.isDesktopMode) ...[
-                          const SizedBox(width: 8),
-                          FilterChip(
-                            visualDensity: VisualDensity.compact,
-                            label: const Text('Enter sends'),
-                            selected: _enterToSend,
-                            onSelected: (v) =>
-                                setState(() => _enterToSend = v),
-                          ),
-                        ],
-                        if (settings.activeAgent.isNotEmpty) ...[
-                          const SizedBox(width: 6),
-                          ActionChip(
-                            visualDensity: VisualDensity.compact,
-                            avatar: const Icon(Icons.smart_toy_outlined, size: 14),
-                            label: Text('@${settings.activeAgent}'),
-                            onPressed: () => Navigator.of(context).push(
-                              MaterialPageRoute<void>(
-                                builder: (_) => const CliManagerPage(),
-                              ),
-                            ),
-                          ),
-                        ],
-                        if (ref.watch(appUpdateProvider).hasNewerVersion) ...[
-                          const SizedBox(width: 6),
-                          ActionChip(
-                            visualDensity: VisualDensity.compact,
-                            avatar: const Icon(
-                              Icons.system_update_alt,
-                              size: 14,
-                            ),
-                            label: Text(
-                              'Update ${ref.watch(appUpdateProvider).latest!.tagName}',
-                            ),
-                            onPressed: () => UpdateSheet.show(context),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
+        wrapCentered(
+          ChatComposerBar(
+            inputController: _inputController,
+            isBusy: isCurrentSessionBusy,
+            isStreamingCurrentSession: chat.isStreaming,
+            listeningVoice: _listeningVoice,
+            isDesktopMode: widget.isDesktopMode,
+            enterToSend: _enterToSend,
+            ctxSnap: ctxSnap,
+            onKeyEvent: _handleComposerKey,
+            onChanged: _onChanged,
+            onPickFile: _pickFile,
+            onPickImage: _pickImage,
+            onDictateVoice: _dictateVoice,
+            onTriggerSlash: () {
+              _inputController.text = '/';
+              _inputController.selection =
+                  const TextSelection.collapsed(offset: 1);
+              _onChanged('/');
+            },
+            onSubmit: _submit,
+            onSteerSubmit: _steerSubmit,
+            onToggleEnterToSend: (v) => setState(() => _enterToSend = v),
           ),
         ),
       ],
-    );
-  }
-}
-
-class _PickerPill<T> extends StatelessWidget {
-  const _PickerPill({
-    required this.icon,
-    required this.label,
-    required this.items,
-    required this.onSelected,
-  });
-
-  final IconData icon;
-  final String label;
-  final List<PopupMenuEntry<T>> items;
-  final ValueChanged<T> onSelected;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return PopupMenuButton<T>(
-      onSelected: onSelected,
-      itemBuilder: (_) => items,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.6),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 14, color: theme.colorScheme.primary),
-            const SizedBox(width: 5),
-            Text(
-              label,
-              style: theme.textTheme.labelMedium?.copyWith(
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(width: 2),
-            const Icon(Icons.arrow_drop_down, size: 16),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _OnboardingBanner extends StatelessWidget {
-  const _OnboardingBanner({
-    required this.isAuthenticated,
-    required this.runtimeReady,
-    required this.runtimeBusy,
-    required this.isLocal,
-    required this.onSignIn,
-    required this.onInstallRuntime,
-  });
-
-  final bool isAuthenticated;
-  final bool runtimeReady;
-  final bool runtimeBusy;
-  final bool isLocal;
-  final VoidCallback onSignIn;
-  final VoidCallback onInstallRuntime;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isCompact = MediaQuery.sizeOf(context).width < 460;
-    final icon = Icon(
-      !runtimeReady && isLocal ? Icons.terminal : Icons.account_circle,
-      color: theme.colorScheme.primary,
-    );
-    final msg = Text(
-      !runtimeReady && isLocal
-          ? 'Install the on-device `agy` harness to run Antigravity agents on Android.'
-          : 'Sign in with your Google Account to run Antigravity AI agents & view quotas.',
-      style: theme.textTheme.bodySmall,
-      maxLines: isCompact ? 3 : null,
-      overflow: isCompact ? TextOverflow.ellipsis : null,
-    );
-    final action = (!runtimeReady && isLocal)
-        ? FilledButton.tonal(
-            onPressed: runtimeBusy ? null : onInstallRuntime,
-            child: Text(runtimeBusy ? 'Installing…' : 'Install agy'),
-          )
-        : (!isAuthenticated)
-            ? FilledButton.tonal(
-                onPressed: onSignIn,
-                child: const Text('Google Sign-In'),
-              )
-            : null;
-
-    return Container(
-      margin: const EdgeInsets.fromLTRB(12, 4, 12, 4),
-      padding: EdgeInsets.all(isCompact ? 10 : 12),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.primaryContainer.withOpacity(0.35),
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: isCompact
-          ? Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Row(
-                  children: [
-                    icon,
-                    const SizedBox(width: 10),
-                    Expanded(child: msg),
-                  ],
-                ),
-                if (action != null) ...[
-                  const SizedBox(height: 6),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: action,
-                  ),
-                ],
-              ],
-            )
-          : Row(
-              children: [
-                icon,
-                const SizedBox(width: 10),
-                Expanded(child: msg),
-                ?action,
-              ],
-            ),
-    );
-  }
-}
-
-class _EmptyHero extends StatelessWidget {
-  const _EmptyHero({required this.onPickSuggestion});
-
-  final ValueChanged<String> onPickSuggestion;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    const suggestions = [
-      '/plan Audit this project and propose improvements',
-      '/goal Write unit tests and verify everything passes',
-      'Check git status and summarize recent changes',
-      '/boost Analyze performance bottlenecks in the codebase',
-    ];
-    return Center(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.auto_awesome,
-              size: 48,
-              color: theme.colorScheme.primary,
-            ),
-            const SizedBox(height: 12),
-            Text(
-              'Antigravity in your pocket',
-              style: theme.textTheme.headlineSmall?.copyWith(
-                fontWeight: FontWeight.w700,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'Run AI agents on your phone or control your computer over SSH — with your Google Account & live 5h/weekly quota tracking.',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 20),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              alignment: WrapAlignment.center,
-              children: suggestions
-                  .map(
-                    (s) => ActionChip(
-                      label: Text(s),
-                      onPressed: () => onPickSuggestion(s),
-                    ),
-                  )
-                  .toList(),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }

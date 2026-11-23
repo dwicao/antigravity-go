@@ -102,6 +102,7 @@ class RuntimeEvent {
     this.stdoutLine,
     this.stderrLine,
     this.exitCode,
+    this.isPty = false,
     this.backgroundTasks = const [],
   });
 
@@ -113,6 +114,7 @@ class RuntimeEvent {
   final String? stdoutLine;
   final String? stderrLine;
   final int? exitCode;
+  final bool isPty;
   final List<NativeBackgroundTask> backgroundTasks;
 
   factory RuntimeEvent.fromMap(Map<Object?, Object?> map) {
@@ -136,6 +138,7 @@ class RuntimeEvent {
       stdoutLine: map['stdoutLine']?.toString(),
       stderrLine: map['stderrLine']?.toString(),
       exitCode: (map['exitCode'] as num?)?.toInt(),
+      isPty: map['isPty'] as bool? ?? false,
       backgroundTasks: tasks,
     );
   }
