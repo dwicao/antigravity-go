@@ -122,7 +122,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       return;
     }
 
-    if (wantSlash != _showSlashMenu || wantMention != _showMentionMenu) {
+    if (wantSlash ||
+        wantMention ||
+        wantSlash != _showSlashMenu ||
+        wantMention != _showMentionMenu) {
       setState(() {
         _showSlashMenu = wantSlash;
         _showMentionMenu = wantMention;
