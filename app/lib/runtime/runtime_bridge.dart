@@ -493,27 +493,7 @@ class RuntimeBridge {
   }
 
   Future<bool> createDirectory(String path) async {
-    try {
-      return await _method.invokeMethod<bool>(
-            'createDirectory',
-            {'path': path},
-          ) ??
-          false;
-    } on MissingPluginException {
-      return false;
-    }
-  }
-
-  Future<bool> deleteWorkspaceEntry(String path) async {
-    try {
-      return await _method.invokeMethod<bool>(
-            'deleteWorkspaceEntry',
-            {'path': path},
-          ) ??
-          false;
-    } on MissingPluginException {
-      return false;
-    }
+    return createWorkspaceDirectory(path);
   }
 
   Future<void> startTerminalSession(String sessionId, {String? cwd}) async {

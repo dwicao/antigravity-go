@@ -758,14 +758,14 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     final settings = ref.read(settingsProvider);
     final hosts = ref.read(hostsProvider);
     final sshHost = hosts.activeSshHost;
-    final isImagePath = (String p) {
+    bool isImagePath(String p) {
       final lower = p.toLowerCase();
       return lower.endsWith('.png') ||
           lower.endsWith('.jpg') ||
           lower.endsWith('.jpeg') ||
           lower.endsWith('.webp') ||
           lower.endsWith('.gif');
-    };
+    }
     final textAttachments = sshHost != null
         ? attachments
         : attachments.where((p) => !isImagePath(p)).toList();
