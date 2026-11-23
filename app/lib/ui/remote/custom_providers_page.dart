@@ -291,7 +291,7 @@ class CustomProvidersPage extends ConsumerWidget {
                       ),
                     ),
                     const SizedBox(width: 6),
-                    IconButton.tonal(
+                    IconButton.filledTonal(
                       tooltip: 'Fetch /models',
                       onPressed: fetchingModels
                           ? null
