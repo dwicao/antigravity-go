@@ -1,0 +1,99 @@
+/// Configuration profile for an OpenAI-compatible `/v1` external model endpoint
+/// (e.g. OpenAI, OpenRouter, DeepSeek, Ollama, LM Studio, vLLM, LiteLLM).
+class OpenAiProviderConfig {
+  const OpenAiProviderConfig({
+    required this.id,
+    required this.name,
+    required this.baseUrl,
+    required this.modelId,
+    this.contextWindowTokens = 128000,
+    this.supportsTools = true,
+    this.supportsVision = true,
+    this.systemPrompt = '',
+  });
+
+  final String id;
+  final String name;
+  final String baseUrl;
+  final String modelId;
+  final int contextWindowTokens;
+  final bool supportsTools;
+  final bool supportsVision;
+  final String systemPrompt;
+
+  /// Normalizes user-provided URLs into a clean API base without trailing slashes.
+  /// - `https://api.openai.com/v1/` -> `https://api.openai.com/v1`
+  /// - `http://127.0.0.1:11434` -> `http://127.0.0.1:11434/v1`
+  /// - `https://openrouter.ai/api/v1` -> `https://openrouter.ai/api/v1`
+  /// - `https://proxy.example.com/v1/chat/completions` -> `https://proxy.example.com/v1`
+  static String normalizeBaseUrl(String raw) {
+    var url = raw.trim();
+    while (url.endsWith('/')) {
+      url = url.substring(0, url.length - 1);
+    }
+    if (url.isEmpty) return '';
+    if (url.endsWith('/chat/completions')) {
+      url = url.substring(0, url.length - '/chat/completions'.length);
+    } else if (url.endsWith('/models')) {
+      url = url.substring(0, url.length - '/models'.length);
+    }
+    final uri = Uri.tryParse(url);
+    if (uri != null && (uri.path.isEmpty || uri.path == '/')) {
+      return '$url/v1';
+    }
+    return url;
+  }
+
+  String get normalizedBaseUrl => normalizeBaseUrl(baseUrl);
+
+  Uri get chatCompletionsUri => Uri.parse('$normalizedBaseUrl/chat/completions');
+
+  Uri get modelsUri => Uri.parse('$normalizedBaseUrl/models');
+
+  OpenAiProviderConfig copyWith({
+    String? name,
+    String? baseUrl,
+    String? modelId,
+    int? contextWindowTokens,
+    bool? supportsTools,
+    bool? supportsVision,
+    String? systemPrompt,
+  }) {
+    return OpenAiProviderConfig(
+      id: id,
+      name: name ?? this.name,
+      baseUrl: baseUrl ?? this.baseUrl,
+      modelId: modelId ?? this.modelId,
+      contextWindowTokens: contextWindowTokens ?? this.contextWindowTokens,
+      supportsTools: supportsTools ?? this.supportsTools,
+      supportsVision: supportsVision ?? this.supportsVision,
+      systemPrompt: systemPrompt ?? this.systemPrompt,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'baseUrl': baseUrl,
+        'modelId': modelId,
+        'contextWindowTokens': contextWindowTokens,
+        'supportsTools': supportsTools,
+        'supportsVision': supportsVision,
+        if (systemPrompt.isNotEmpty) 'systemPrompt': systemPrompt,
+      };
+
+  factory OpenAiProviderConfig.fromJson(Map<String, dynamic> json) {
+    return OpenAiProviderConfig(
+      id: json['id'] as String? ?? '',
+      name: json['name'] as String? ?? 'Custom /v1 Model',
+      baseUrl: json['baseUrl'] as String? ?? '',
+      modelId: json['modelId'] as String? ?? '',
+      contextWindowTokens:
+          ((json['contextWindowTokens'] as num?)?.toInt() ?? 128000)
+              .clamp(2048, 4000000),
+      supportsTools: json['supportsTools'] as bool? ?? true,
+      supportsVision: json['supportsVision'] as bool? ?? true,
+      systemPrompt: json['systemPrompt'] as String? ?? '',
+    );
+  }
+}

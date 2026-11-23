@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
 import '../runtime/runtime_bridge.dart';
+import 'chat_message_store.dart';
 import 'draft_store.dart';
 import 'hosts_state.dart';
 import 'projects_state.dart';
@@ -142,8 +143,7 @@ class SessionsNotifier extends Notifier<SessionsState> {
       );
     }
     ref.read(draftStoreProvider.notifier).clear(id);
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('agy_msgs_$id');
+    await ChatMessageStore.instance.delete(id);
     if (!ref.mounted) return;
     final next = state.sessions.where((s) => s.id != id).toList();
     if (next.isEmpty) {

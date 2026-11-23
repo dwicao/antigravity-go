@@ -5,6 +5,7 @@ import 'package:agy_client/agy_client.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
+import '../remote/openai_compat_runner.dart';
 import '../remote/ssh_agy_runner.dart';
 import '../runtime/runtime_bridge.dart';
 import '../runtime/runtime_models.dart';
@@ -13,6 +14,7 @@ import 'chat_message_store.dart';
 import 'chat_models.dart';
 import 'chat_turn_helpers.dart';
 import 'ci_watch_state.dart';
+import 'custom_providers_state.dart';
 import 'harness_state.dart';
 import 'hosts_state.dart';
 import 'permissions_state.dart';
@@ -32,6 +34,7 @@ class _SessionTurnRuntime {
   _SessionTurnRuntime({
     required this.turnId,
     required this.isSsh,
+    this.isCustomOpenAi = false,
   });
 
   StreamSubscription<AgyChatEvent>? sub;
@@ -43,6 +46,7 @@ class _SessionTurnRuntime {
   AgyPromptRequest? activeLocalRequest;
   String turnId;
   bool isSsh;
+  bool isCustomOpenAi;
   DateTime? streamBurstStart;
   final List<({DateTime at, double tokens})> rateSamples = [];
 
@@ -64,6 +68,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
   final Map<String, String> _wakeupAssistantIds = {};
   final Map<String, Timer> _wakeupFinalizeTimers = {};
   final Set<String> _completedAssistantIds = <String>{};
+  final List<String> _completedAssistantOrder = <String>[];
+  static const int _maxCompletedAssistantHistory = 400;
   final AcpCodec _wakeupCodec = AcpCodec();
   final Map<String, List<ChatMessage>> _inFlightMessages = {};
   final Map<String, DateTime> _turnStartedAt = {};
@@ -529,6 +535,9 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     if (!ref.mounted) return;
 
     final settings = ref.read(settingsProvider);
+    final activeCustom = ref.read(activeCustomProviderProvider);
+    final activeModelId = activeCustom?.modelId ?? settings.selectedModelId;
+    final activeEffort = activeCustom != null ? '' : settings.reasoningEffort;
     final hosts = ref.read(hostsProvider);
     final sshHost = hosts.activeSshHost;
     bool isImagePath(String p) {
@@ -554,7 +563,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     final hasPostCompactUserTurn = prevCompactIdx >= 0 &&
         priorMsgs.skip(prevCompactIdx + 1).any((m) => m.role == ChatRole.user);
     final carryCompactContext =
-        (session.remoteConversationId == null ||
+        (activeCustom != null ||
+                session.remoteConversationId == null ||
                 session.remoteConversationId!.isEmpty) &&
             prevCompactIdx >= 0 &&
             !hasPostCompactUserTurn &&
@@ -575,8 +585,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       role: ChatRole.assistant,
       text: '',
       createdAt: now,
-      modelId: settings.selectedModelId,
-      reasoningEffort: settings.reasoningEffort,
+      modelId: activeModelId,
+      reasoningEffort: activeEffort,
       isStreaming: true,
     );
 
@@ -588,8 +598,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       _loadedSessionId = session.id;
     }
     _turnStartedAt[assistantId] = now;
-    _turnModelId[assistantId] = settings.selectedModelId;
-    _turnEffort[assistantId] = settings.reasoningEffort;
+    _turnModelId[assistantId] = activeModelId;
+    _turnEffort[assistantId] = activeEffort;
     _inFlightMessages[session.id] = nextMessages;
     _sessionLoopWarnings.remove(session.id);
     _sessionStallWarnings.remove(session.id);
@@ -597,7 +607,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
 
     final rt = _SessionTurnRuntime(
       turnId: turnId,
-      isSsh: sshHost != null,
+      isSsh: activeCustom == null && sshHost != null,
+      isCustomOpenAi: activeCustom != null,
     );
     _sessionRuntimes.remove(session.id)?.dispose();
     _sessionRuntimes[session.id] = rt;
@@ -650,59 +661,45 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         ? '[Compacted Session Context]\n${priorMsgs[prevCompactIdx].text.trim()}\n\n[User Request]\n$effectivePrompt'
         : effectivePrompt;
 
-    final String? apiKey;
     final Stream<AgyChatEvent> stream;
-    final AgyPromptRequest request;
+    AgyPromptRequest? localRequest;
     try {
-      apiKey = await ref.read(authServiceProvider).readGeminiApiKey();
-      if (!ref.mounted || _sessionTurnTokens[session.id] != streamToken) return;
-
-      request = AgyPromptRequest(
-        prompt: requestPrompt,
-        workspacePath: effectiveWorkspace,
-        extraDirs: [
-          ...project.folders,
-          if (perms.allFilesAccess) perms.externalStorageRoot,
-          if (perms.allFilesAccess) '/sdcard',
-        ],
-        conversationId: session.remoteConversationId,
-        modelId: settings.selectedModelId,
-        effortCliValue: settings.reasoningEffort,
-        mode: effectiveMode,
-        dangerouslySkipPermissions: skipPerms,
-        allowNonWorkspaceAccess: allowNonWorkspace,
-        geminiApiKey: apiKey,
-        agentName: settings.activeAgent.isEmpty ? null : settings.activeAgent,
-        printTimeoutSeconds: settings.printTimeoutSeconds > 0
-            ? settings.printTimeoutSeconds
-            : null,
-        disableSlashCommands: settings.disableSlashCommands,
-        continueLast: settings.continueLast &&
-            !carryCompactContext &&
-            (session.remoteConversationId == null ||
-                session.remoteConversationId!.isEmpty),
-        remoteAgent: settings.remoteAgent.isEmpty ? null : settings.remoteAgent,
-        attachments: attachments,
-      );
-
-      if (sshHost != null) {
-        final (pwd, key) =
-            await ref.read(hostsProvider.notifier).readCredentials(sshHost.id);
+      if (activeCustom != null) {
+        final customKey = await ref
+            .read(customProvidersProvider.notifier)
+            .readApiKey(activeCustom.id);
         if (!ref.mounted || _sessionTurnTokens[session.id] != streamToken) {
           return;
         }
-        Future<void> saveFp(String fp) => ref
-            .read(hostsProvider.notifier)
-            .saveHostFingerprint(sshHost.id, fp);
-        if (ref.read(harnessProvider).autoCheckpointEnabled) {
+        String? sshPwd;
+        String? sshKey;
+        Future<void> saveFp(String fp) => sshHost == null
+            ? Future.value()
+            : ref.read(hostsProvider.notifier).saveHostFingerprint(sshHost.id, fp);
+        if (sshHost != null) {
+          final creds = await ref
+              .read(hostsProvider.notifier)
+              .readCredentials(sshHost.id);
+          if (!ref.mounted || _sessionTurnTokens[session.id] != streamToken) {
+            return;
+          }
+          sshPwd = creds.$1;
+          sshKey = creds.$2;
+        }
+        if (ref.read(harnessProvider).autoCheckpointEnabled &&
+            (sshHost != null || runtime.status.isReady)) {
           try {
-            final cp = await SshAgyRunner.instance.createCheckpoint(
-              host: sshHost,
-              cwd: effectiveWorkspace,
-              password: pwd,
-              privateKeyPem: key,
-              onTrustFirstKey: saveFp,
-            );
+            final cp = sshHost != null
+                ? await SshAgyRunner.instance.createCheckpoint(
+                    host: sshHost,
+                    cwd: effectiveWorkspace,
+                    password: sshPwd,
+                    privateKeyPem: sshKey,
+                    onTrustFirstKey: saveFp,
+                  )
+                : await RuntimeBridge.instance.createCheckpoint(
+                    cwd: effectiveWorkspace.isEmpty ? null : effectiveWorkspace,
+                  );
             if (!ref.mounted || _sessionTurnTokens[session.id] != streamToken) {
               return;
             }
@@ -719,50 +716,148 @@ class ChatNotifier extends Notifier<ChatThreadState> {
             }
           } catch (_) {}
         }
-        stream = SshAgyRunner.instance.runPrompt(
-          host: sshHost,
-          request: request,
+        final historySlice = prevCompactIdx >= 0
+            ? priorMsgs.skip(prevCompactIdx + (carryCompactContext ? 1 : 0))
+            : priorMsgs;
+        final historyTurns = historySlice
+            .where((m) => !m.isStreaming && m.text.trim().isNotEmpty)
+            .map((m) => (
+                  role: m.role == ChatRole.assistant ? 'assistant' : 'user',
+                  text: m.text,
+                ))
+            .toList();
+        stream = OpenAiCompatRunner.instance.runPrompt(
+          profile: activeCustom,
+          apiKey: customKey,
           turnId: turnId,
-          password: pwd,
-          privateKeyPem: key,
-          onTrustFirstKey: saveFp,
+          prompt: requestPrompt,
+          workspacePath: effectiveWorkspace,
+          dangerouslySkipPermissions: skipPerms,
+          history: historyTurns,
+          attachments: attachments,
+          sshHost: sshHost,
+          sshPassword: sshPwd,
+          sshPrivateKey: sshKey,
+          onTrustFirstKey: sshHost == null ? null : saveFp,
         );
       } else {
-        if (!runtime.status.isReady) {
-          _finishAssistantMessage(
-            session: session,
-            assistantId: assistantId,
-            text:
-                'On-device Antigravity CLI (`agy`) is not installed yet.\n\nTap **Setup Runtime** in Settings or the Quick Panel to install `agy` natively on your phone, or switch to an **SSH Remote Host** in the drawer.',
-          );
+        final apiKey = await ref.read(authServiceProvider).readGeminiApiKey();
+        if (!ref.mounted || _sessionTurnTokens[session.id] != streamToken) {
           return;
         }
-        if (ref.read(harnessProvider).autoCheckpointEnabled) {
-          try {
-            final cp = await RuntimeBridge.instance.createCheckpoint(
-              cwd: effectiveWorkspace.isEmpty ? null : effectiveWorkspace,
-            );
-            if (!ref.mounted || _sessionTurnTokens[session.id] != streamToken) {
-              return;
-            }
-            final refHash = cp['ref']?.toString() ?? '';
-            if (cp['ok'] == true && refHash.isNotEmpty) {
-              final currentMsgs = _messagesForSession(session.id);
-              final uIdx = currentMsgs.indexWhere((m) => m.id == userMsgId);
-              if (uIdx >= 0) {
-                final updated = [...currentMsgs];
-                updated[uIdx] = updated[uIdx].copyWith(checkpointRef: refHash);
-                _updateSessionMessages(session.id, updated);
-                unawaited(_persistMessages(session.id, updated));
-              }
-            }
-          } catch (_) {}
-        }
-        stream = RuntimeBridge.instance.runPrompt(
-          request,
-          turnId,
+
+        final request = AgyPromptRequest(
+          prompt: requestPrompt,
+          workspacePath: effectiveWorkspace,
+          extraDirs: [
+            ...project.folders,
+            if (perms.allFilesAccess) perms.externalStorageRoot,
+            if (perms.allFilesAccess) '/sdcard',
+          ],
+          conversationId: session.remoteConversationId,
+          modelId: settings.selectedModelId,
+          effortCliValue: settings.reasoningEffort,
+          mode: effectiveMode,
+          dangerouslySkipPermissions: skipPerms,
+          allowNonWorkspaceAccess: allowNonWorkspace,
+          geminiApiKey: apiKey,
+          agentName: settings.activeAgent.isEmpty ? null : settings.activeAgent,
+          printTimeoutSeconds: settings.printTimeoutSeconds > 0
+              ? settings.printTimeoutSeconds
+              : null,
+          disableSlashCommands: settings.disableSlashCommands,
+          continueLast: settings.continueLast &&
+              !carryCompactContext &&
+              (session.remoteConversationId == null ||
+                  session.remoteConversationId!.isEmpty),
+          remoteAgent:
+              settings.remoteAgent.isEmpty ? null : settings.remoteAgent,
           attachments: attachments,
         );
+
+        if (sshHost != null) {
+          final (pwd, key) = await ref
+              .read(hostsProvider.notifier)
+              .readCredentials(sshHost.id);
+          if (!ref.mounted || _sessionTurnTokens[session.id] != streamToken) {
+            return;
+          }
+          Future<void> saveFp(String fp) => ref
+              .read(hostsProvider.notifier)
+              .saveHostFingerprint(sshHost.id, fp);
+          if (ref.read(harnessProvider).autoCheckpointEnabled) {
+            try {
+              final cp = await SshAgyRunner.instance.createCheckpoint(
+                host: sshHost,
+                cwd: effectiveWorkspace,
+                password: pwd,
+                privateKeyPem: key,
+                onTrustFirstKey: saveFp,
+              );
+              if (!ref.mounted ||
+                  _sessionTurnTokens[session.id] != streamToken) {
+                return;
+              }
+              final refHash = cp['ref']?.toString() ?? '';
+              if (cp['ok'] == true && refHash.isNotEmpty) {
+                final currentMsgs = _messagesForSession(session.id);
+                final uIdx = currentMsgs.indexWhere((m) => m.id == userMsgId);
+                if (uIdx >= 0) {
+                  final updated = [...currentMsgs];
+                  updated[uIdx] = updated[uIdx].copyWith(checkpointRef: refHash);
+                  _updateSessionMessages(session.id, updated);
+                  unawaited(_persistMessages(session.id, updated));
+                }
+              }
+            } catch (_) {}
+          }
+          stream = SshAgyRunner.instance.runPrompt(
+            host: sshHost,
+            request: request,
+            turnId: turnId,
+            password: pwd,
+            privateKeyPem: key,
+            onTrustFirstKey: saveFp,
+          );
+        } else {
+          if (!runtime.status.isReady) {
+            _finishAssistantMessage(
+              session: session,
+              assistantId: assistantId,
+              text:
+                  'On-device Antigravity CLI (`agy`) is not installed yet.\n\nTap **Setup Runtime** in Settings or the Quick Panel to install `agy` natively on your phone, switch to an **SSH Remote Host**, or configure an **External /v1 Model** in Settings.',
+            );
+            return;
+          }
+          if (ref.read(harnessProvider).autoCheckpointEnabled) {
+            try {
+              final cp = await RuntimeBridge.instance.createCheckpoint(
+                cwd: effectiveWorkspace.isEmpty ? null : effectiveWorkspace,
+              );
+              if (!ref.mounted ||
+                  _sessionTurnTokens[session.id] != streamToken) {
+                return;
+              }
+              final refHash = cp['ref']?.toString() ?? '';
+              if (cp['ok'] == true && refHash.isNotEmpty) {
+                final currentMsgs = _messagesForSession(session.id);
+                final uIdx = currentMsgs.indexWhere((m) => m.id == userMsgId);
+                if (uIdx >= 0) {
+                  final updated = [...currentMsgs];
+                  updated[uIdx] = updated[uIdx].copyWith(checkpointRef: refHash);
+                  _updateSessionMessages(session.id, updated);
+                  unawaited(_persistMessages(session.id, updated));
+                }
+              }
+            } catch (_) {}
+          }
+          localRequest = request;
+          stream = RuntimeBridge.instance.runPrompt(
+            request,
+            turnId,
+            attachments: attachments,
+          );
+        }
       }
     } catch (err) {
       if (!ref.mounted || _sessionTurnTokens[session.id] != streamToken) return;
@@ -775,7 +870,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     }
 
     final currentSession = _latestSession(session);
-    rt.activeLocalRequest = sshHost == null ? request : null;
+    rt.activeLocalRequest = localRequest;
     _resetWatchdog(currentSession.id);
 
     rt.sub = stream.listen(
@@ -827,7 +922,9 @@ class ChatNotifier extends Notifier<ChatThreadState> {
 
     switch (evt) {
       case AgyInitEvent():
-        ref.read(authProvider.notifier).markAuthenticatedFromTurn();
+        if (rt?.isCustomOpenAi != true) {
+          ref.read(authProvider.notifier).markAuthenticatedFromTurn();
+        }
         if (evt.model != null && evt.model!.isNotEmpty) {
           _turnModelId[assistantId] = evt.model!;
         }
@@ -1202,11 +1299,21 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     _completeStreaming(session, assistantId);
   }
 
+  bool _markCompletedAssistant(String assistantId) {
+    if (!_completedAssistantIds.add(assistantId)) return false;
+    _completedAssistantOrder.add(assistantId);
+    while (_completedAssistantOrder.length > _maxCompletedAssistantHistory) {
+      final oldest = _completedAssistantOrder.removeAt(0);
+      _completedAssistantIds.remove(oldest);
+    }
+    return true;
+  }
+
   Future<void> _completeStreaming(
     AgySessionSummary session,
     String assistantId,
   ) async {
-    if (!_completedAssistantIds.add(assistantId)) return;
+    if (!_markCompletedAssistant(assistantId)) return;
     _wakeupFinalizeTimers.remove(session.id)?.cancel();
     _wakeupAssistantIds.remove(session.id);
     final rt = _sessionRuntimes.remove(session.id);
@@ -1368,6 +1475,9 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       } catch (_) {}
       try {
         await SshAgyRunner.instance.cancelActive(turnId: turnId);
+      } catch (_) {}
+      try {
+        await OpenAiCompatRunner.instance.cancelActive(turnId: turnId);
       } catch (_) {}
     }
 
@@ -1610,7 +1720,13 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     state = state.copyWith(clearPermission: true);
     if (perm != null && turnId != null) {
       try {
-        if (rt?.isSsh == true) {
+        if (rt?.isCustomOpenAi == true) {
+          await OpenAiCompatRunner.instance.resolvePermission(
+            turnId: turnId,
+            requestId: perm.requestId,
+            optionId: optionId,
+          );
+        } else if (rt?.isSsh == true) {
           await SshAgyRunner.instance.respondToPermission(
             turnId: turnId,
             requestId: perm.requestId,
@@ -1774,8 +1890,11 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     if (!ref.mounted) return (ok: false, message: 'Cancelled');
 
     final settings = ref.read(settingsProvider);
+    final activeCustom = ref.read(activeCustomProviderProvider);
+    final activeModelId = activeCustom?.modelId ?? settings.selectedModelId;
+    final activeEffort = activeCustom != null ? '' : settings.reasoningEffort;
 
-    if (sshHost == null && !runtime.status.isReady) {
+    if (activeCustom == null && sshHost == null && !runtime.status.isReady) {
       final fallback = HarnessContextMonitor.buildFallbackCompactionSummary(
         turns,
         compactedMessages: compactCount,
@@ -1787,7 +1906,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         text: fallback,
         createdAt: DateTime.now(),
         completedAt: DateTime.now(),
-        modelId: settings.selectedModelId,
+        modelId: activeModelId,
         isCompactionSummary: true,
       );
       final updated = [...msgs, summaryMsg];
@@ -1807,8 +1926,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       role: ChatRole.assistant,
       text: '',
       createdAt: now,
-      modelId: settings.selectedModelId,
-      reasoningEffort: settings.reasoningEffort,
+      modelId: activeModelId,
+      reasoningEffort: activeEffort,
       isStreaming: true,
       isCompactionSummary: true,
     );
@@ -1818,8 +1937,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     _sessionTurnTokens[resetSession.id] = streamToken;
     _loadedSessionId = resetSession.id;
     _turnStartedAt[assistantId] = now;
-    _turnModelId[assistantId] = settings.selectedModelId;
-    _turnEffort[assistantId] = settings.reasoningEffort;
+    _turnModelId[assistantId] = activeModelId;
+    _turnEffort[assistantId] = activeEffort;
     _inFlightMessages[resetSession.id] = nextMessages;
     _pendingCompactions[assistantId] = (
       turns: turns,
@@ -1828,7 +1947,11 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       tempRemoteId: null,
     );
 
-    final rt = _SessionTurnRuntime(turnId: turnId, isSsh: sshHost != null);
+    final rt = _SessionTurnRuntime(
+      turnId: turnId,
+      isSsh: activeCustom == null && sshHost != null,
+      isCustomOpenAi: activeCustom != null,
+    );
     _sessionRuntimes.remove(resetSession.id)?.dispose();
     _sessionRuntimes[resetSession.id] = rt;
 
@@ -1846,11 +1969,6 @@ class ChatNotifier extends Notifier<ChatThreadState> {
 
     final project = ref.read(projectsProvider).activeProject;
     final perms = ref.read(permissionsProvider);
-    final apiKey = await ref.read(authServiceProvider).readGeminiApiKey();
-    if (!ref.mounted || _sessionTurnTokens[resetSession.id] != streamToken) {
-      return (ok: false, message: 'Cancelled');
-    }
-
     final effectiveWorkspace = resetSession.workspacePath.isNotEmpty
         ? resetSession.workspacePath
         : (project.primaryFolder.isNotEmpty
@@ -1863,46 +1981,69 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       focusInstructions: cleanInstructions,
     );
 
-    final request = AgyPromptRequest(
-      prompt: compactPrompt,
-      workspacePath: effectiveWorkspace,
-      extraDirs: [
-        ...project.folders,
-        if (perms.allFilesAccess) perms.externalStorageRoot,
-        if (perms.allFilesAccess) '/sdcard',
-      ],
-      conversationId: null,
-      modelId: settings.selectedModelId,
-      effortCliValue: settings.reasoningEffort,
-      mode: sshHost != null
-          ? AgyExecutionMode.plan
-          : AgyExecutionMode.plan.androidSafe,
-      dangerouslySkipPermissions: true,
-      allowNonWorkspaceAccess: true,
-      geminiApiKey: apiKey,
-      continueLast: false,
-      remoteAgent: settings.remoteAgent.isEmpty ? null : settings.remoteAgent,
-    );
-
     final Stream<AgyChatEvent> stream;
-    if (sshHost != null) {
-      final (pwd, key) =
-          await ref.read(hostsProvider.notifier).readCredentials(sshHost.id);
+    if (activeCustom != null) {
+      final customKey = await ref
+          .read(customProvidersProvider.notifier)
+          .readApiKey(activeCustom.id);
       if (!ref.mounted || _sessionTurnTokens[resetSession.id] != streamToken) {
         return (ok: false, message: 'Cancelled');
       }
-      stream = SshAgyRunner.instance.runPrompt(
-        host: sshHost,
-        request: request,
+      stream = OpenAiCompatRunner.instance.runPrompt(
+        profile: activeCustom.copyWith(supportsTools: false),
+        apiKey: customKey,
         turnId: turnId,
-        password: pwd,
-        privateKeyPem: key,
+        prompt: compactPrompt,
+        workspacePath: effectiveWorkspace,
+        dangerouslySkipPermissions: true,
       );
+      rt.activeLocalRequest = null;
     } else {
-      stream = RuntimeBridge.instance.runPrompt(request, turnId);
-    }
+      final apiKey = await ref.read(authServiceProvider).readGeminiApiKey();
+      if (!ref.mounted || _sessionTurnTokens[resetSession.id] != streamToken) {
+        return (ok: false, message: 'Cancelled');
+      }
 
-    rt.activeLocalRequest = sshHost == null ? request : null;
+      final request = AgyPromptRequest(
+        prompt: compactPrompt,
+        workspacePath: effectiveWorkspace,
+        extraDirs: [
+          ...project.folders,
+          if (perms.allFilesAccess) perms.externalStorageRoot,
+          if (perms.allFilesAccess) '/sdcard',
+        ],
+        conversationId: null,
+        modelId: settings.selectedModelId,
+        effortCliValue: settings.reasoningEffort,
+        mode: sshHost != null
+            ? AgyExecutionMode.plan
+            : AgyExecutionMode.plan.androidSafe,
+        dangerouslySkipPermissions: true,
+        allowNonWorkspaceAccess: true,
+        geminiApiKey: apiKey,
+        continueLast: false,
+        remoteAgent: settings.remoteAgent.isEmpty ? null : settings.remoteAgent,
+      );
+
+      if (sshHost != null) {
+        final (pwd, key) =
+            await ref.read(hostsProvider.notifier).readCredentials(sshHost.id);
+        if (!ref.mounted ||
+            _sessionTurnTokens[resetSession.id] != streamToken) {
+          return (ok: false, message: 'Cancelled');
+        }
+        stream = SshAgyRunner.instance.runPrompt(
+          host: sshHost,
+          request: request,
+          turnId: turnId,
+          password: pwd,
+          privateKeyPem: key,
+        );
+      } else {
+        stream = RuntimeBridge.instance.runPrompt(request, turnId);
+      }
+      rt.activeLocalRequest = sshHost == null ? request : null;
+    }
     _resetWatchdog(resetSession.id);
 
     rt.sub = stream.listen(

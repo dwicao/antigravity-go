@@ -358,10 +358,13 @@ class HarnessContextMonitor {
   static int effectiveBudgetForModel(String? modelId) {
     final m = (modelId ?? '').trim().toLowerCase();
     if (m.contains('1m') ||
+        m.contains('gemini-5') ||
         m.contains('gemini-4') ||
         m.contains('gemini-3.8') ||
         m.contains('gemini-3') ||
         m.contains('gemini-2.5') ||
+        m.contains('gemini-2') ||
+        m.contains('gpt-4.1') ||
         m.contains('orchestrator') ||
         m.contains('neon') ||
         m.contains('carbon') ||
@@ -369,13 +372,16 @@ class HarnessContextMonitor {
         m.contains('hydrogen')) {
       return 1000000;
     }
-    if (m.contains('claude') || m.contains('opus') || m.contains('sonnet')) {
+    if (m.contains('claude') ||
+        m.contains('opus') ||
+        m.contains('sonnet') ||
+        m.contains('o3') ||
+        m.contains('o4')) {
       return 200000;
     }
     if (m.contains('gpt-5') ||
         m.contains('gpt-oss') ||
-        m.contains('codex') ||
-        m.contains('o3')) {
+        m.contains('codex')) {
       return 160000;
     }
     return 128000;

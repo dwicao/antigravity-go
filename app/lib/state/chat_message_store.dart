@@ -100,4 +100,21 @@ class ChatMessageStore {
       }
     }
   }
+
+  Future<void> delete(String sessionId) async {
+    final dir = await _sessionsDir();
+    if (dir != null) {
+      final safeId = _safeFileName(sessionId);
+      final target = File('${dir.path}/$safeId.json');
+      try {
+        if (target.existsSync()) target.deleteSync();
+      } catch (_) {}
+      final tmp = File('${dir.path}/.$safeId.tmp');
+      try {
+        if (tmp.existsSync()) tmp.deleteSync();
+      } catch (_) {}
+    }
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('$_legacyPrefix$sessionId');
+  }
 }

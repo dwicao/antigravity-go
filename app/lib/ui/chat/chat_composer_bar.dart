@@ -3,12 +3,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../state/chat_state.dart';
+import '../../state/custom_providers_state.dart';
 import '../../state/hosts_state.dart';
 import '../../state/settings_state.dart';
 import '../../state/update_state.dart';
 import '../../theme/app_theme.dart';
 import '../cli/cli_manager_page.dart';
 import '../harness/harness_page.dart';
+import '../remote/custom_providers_page.dart';
 import '../update/update_sheet.dart';
 
 class ChatPickerPill<T> extends StatelessWidget {
@@ -101,6 +103,8 @@ class ChatComposerBar extends ConsumerWidget {
     final semantic = AgySemanticColors.of(context);
     final settings = ref.watch(settingsProvider);
     final hosts = ref.watch(hostsProvider);
+    final customState = ref.watch(customProvidersProvider);
+    final activeCustom = customState.activeProfile;
     final activeModel = AgyModelCatalog.resolve(settings.selectedModelId);
 
     return SafeArea(
@@ -288,20 +292,67 @@ class ChatComposerBar extends ConsumerWidget {
               child: Row(
                 children: [
                   ChatPickerPill<String>(
-                    icon: Icons.auto_awesome,
-                    label: activeModel.displayName,
-                    items: AgyModelCatalog.builtIn
-                        .map(
-                          (m) => PopupMenuItem(
-                            value: m.id,
-                            child: Text(m.displayName),
+                    icon: activeCustom != null ? Icons.hub_outlined : Icons.auto_awesome,
+                    label: activeCustom != null
+                        ? '${activeCustom.name} (${activeCustom.modelId})'
+                        : activeModel.displayName,
+                    items: [
+                      for (final m in AgyModelCatalog.builtIn)
+                        PopupMenuItem(
+                          value: 'builtin:${m.id}',
+                          child: Text(m.displayName),
+                        ),
+                      if (customState.profiles.isNotEmpty) const PopupMenuDivider(),
+                      for (final p in customState.profiles)
+                        PopupMenuItem(
+                          value: 'custom:${p.id}',
+                          child: Row(
+                            children: [
+                              const Icon(Icons.hub_outlined, size: 15),
+                              const SizedBox(width: 6),
+                              Flexible(
+                                child: Text(
+                                  '${p.name} · ${p.modelId}',
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
                           ),
-                        )
-                        .toList(),
-                    onSelected: (v) =>
-                        ref.read(settingsProvider.notifier).setModel(v),
+                        ),
+                      const PopupMenuDivider(),
+                      const PopupMenuItem(
+                        value: 'manage_custom',
+                        child: Row(
+                          children: [
+                            Icon(Icons.add_circle_outline, size: 15),
+                            SizedBox(width: 6),
+                            Text('Configure External /v1 Models…'),
+                          ],
+                        ),
+                      ),
+                    ],
+                    onSelected: (v) async {
+                      if (v == 'manage_custom') {
+                        await Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => const CustomProvidersPage(),
+                          ),
+                        );
+                      } else if (v.startsWith('custom:')) {
+                        await ref
+                            .read(customProvidersProvider.notifier)
+                            .selectProvider(v.substring(7));
+                      } else if (v.startsWith('builtin:')) {
+                        await ref
+                            .read(customProvidersProvider.notifier)
+                            .selectProvider(null);
+                        await ref
+                            .read(settingsProvider.notifier)
+                            .setModel(v.substring(8));
+                      }
+                    },
                   ),
-                  if (activeModel.supportsEffort) ...[
+                  if (activeCustom == null && activeModel.supportsEffort) ...[
                     const SizedBox(width: 6),
                     ChatPickerPill<String>(
                       icon: Icons.psychology_outlined,

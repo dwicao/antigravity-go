@@ -12,6 +12,7 @@ import '../../runtime/runtime_bridge.dart';
 import '../../state/auth_state.dart';
 import '../../state/background_tasks_state.dart';
 import '../../state/chat_state.dart';
+import '../../state/custom_providers_state.dart';
 import '../../state/draft_store.dart';
 import '../../state/harness_state.dart';
 import '../../state/hosts_state.dart';
@@ -555,6 +556,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final project = ref.watch(projectsProvider).activeProject;
     final runtime = ref.watch(runtimeProvider);
     final settings = ref.watch(settingsProvider);
+    final activeCustom = ref.watch(activeCustomProviderProvider);
     final perms = ref.watch(permissionsProvider);
     final sidePanel = ref.watch(sidePanelProvider);
 
@@ -655,7 +657,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   children: [
                     Text(project.name, overflow: TextOverflow.ellipsis),
                     Text(
-                      '$hostLabel · ${activeModel.displayName}',
+                      activeCustom != null
+                          ? 'Custom /v1 · ${activeCustom.name}'
+                          : '$hostLabel · ${activeModel.displayName}',
                       overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.labelSmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
@@ -842,8 +846,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             ],
           ],
         ),
-        if (!auth.isAuthenticated ||
-            (!runtime.status.isReady && hosts.isLocalActive))
+        if (activeCustom == null &&
+            (!auth.isAuthenticated ||
+                (!runtime.status.isReady && hosts.isLocalActive)))
           wrapCentered(
             ChatOnboardingBanner(
               isAuthenticated: auth.isAuthenticated,

@@ -45,6 +45,13 @@ object RuntimeInstaller {
 
         val platform = platformKey(abis)
         val manifestUrl = customManifestUrl ?: "$DEFAULT_BASE_URL/manifests/$platform.json"
+        val parsedManifestUri = runCatching { java.net.URI(manifestUrl) }.getOrNull()
+        val schemeOk = parsedManifestUri?.scheme?.lowercase() == "https" ||
+            (parsedManifestUri?.scheme?.lowercase() == "http" &&
+                (parsedManifestUri.host == "127.0.0.1" || parsedManifestUri.host == "localhost"))
+        if (!schemeOk) {
+            throw IllegalArgumentException("Unsupported manifest URL scheme: $manifestUrl")
+        }
         onProgress(0.05, "Fetching manifest for $platform…")
 
         val manifestRaw = downloadText(manifestUrl)

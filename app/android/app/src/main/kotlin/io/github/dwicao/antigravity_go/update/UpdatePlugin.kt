@@ -103,6 +103,14 @@ class UpdatePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChanne
                     result.error("bad_url", "Missing APK URL", null)
                     return
                 }
+                val parsedUri = runCatching { java.net.URI(urlStr) }.getOrNull()
+                val validScheme = parsedUri?.scheme?.lowercase() == "https" ||
+                    (parsedUri?.scheme?.lowercase() == "http" &&
+                        (parsedUri.host == "127.0.0.1" || parsedUri.host == "localhost"))
+                if (!validScheme) {
+                    result.error("bad_url", "Update URL must use HTTPS", null)
+                    return
+                }
                 if (!downloadActive.compareAndSet(false, true)) {
                     result.error("update_busy", "An update download is already in progress", null)
                     return

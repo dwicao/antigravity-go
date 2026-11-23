@@ -12,6 +12,7 @@ import '../../theme/app_theme.dart';
 import '../auth/google_login_sheet.dart';
 import '../cli/cli_manager_page.dart';
 import '../phone/phone_control_page.dart';
+import '../remote/custom_providers_page.dart';
 import '../remote/ssh_hosts_page.dart';
 import '../update/update_sheet.dart';
 import '../usage/usage_page.dart';
@@ -91,6 +92,18 @@ class SettingsPage extends ConsumerWidget {
                     onTap: () => Navigator.of(context).push(
                       MaterialPageRoute<void>(
                         builder: (_) => const SshHostsPage(),
+                      ),
+                    ),
+                  ),
+                  const Divider(height: 1),
+                  ListTile(
+                    leading: const Icon(Icons.hub_outlined),
+                    title: const Text('External /v1 Models'),
+                    subtitle: const Text('OpenAI-compatible APIs, Ollama, OpenRouter'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const CustomProvidersPage(),
                       ),
                     ),
                   ),

@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../runtime/runtime_bridge.dart';
 import 'chat_state.dart';
+import 'custom_providers_state.dart';
 import 'projects_state.dart';
 import 'runtime_state.dart';
 import 'sessions_state.dart';
@@ -104,6 +105,7 @@ final contextBudgetProvider = Provider<HarnessContextSnapshot>((ref) {
   final messages = ref.watch(chatProvider.select((s) => s.messages));
   final selectedModelId =
       ref.watch(settingsProvider.select((s) => s.selectedModelId));
+  final activeCustom = ref.watch(activeCustomProviderProvider);
   final lastCompactIdx = messages.lastIndexWhere((m) => m.isCompactionSummary);
   final activeMessages =
       lastCompactIdx >= 0 ? messages.sublist(lastCompactIdx) : messages;
@@ -113,6 +115,12 @@ final contextBudgetProvider = Provider<HarnessContextSnapshot>((ref) {
           .lastOrNull
           ?.modelId ??
       selectedModelId;
+  final overrideBudget = (activeCustom != null &&
+          (threadModelId == activeCustom.modelId ||
+              activeMessages.isEmpty ||
+              threadModelId == selectedModelId))
+      ? activeCustom.contextWindowTokens
+      : null;
   const monitor = HarnessContextMonitor();
   final estimated = monitor.evaluate(
     // Historical completed turns' internal thoughts are excluded from
@@ -127,6 +135,7 @@ final contextBudgetProvider = Provider<HarnessContextSnapshot>((ref) {
       return '${t.toolName} $params ${t.output ?? ''} ${t.error ?? ''}';
     }),
     modelId: threadModelId,
+    overrideBudgetTokens: overrideBudget,
     compactedMessages: compactedCount,
     activeMessages: activeMessages.length,
   );

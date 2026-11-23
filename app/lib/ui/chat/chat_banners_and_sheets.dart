@@ -3,8 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../state/chat_state.dart';
+import '../../state/custom_providers_state.dart';
 import '../../state/sessions_state.dart';
 import '../../state/settings_state.dart';
+import '../remote/custom_providers_page.dart';
 
 class ChatOnboardingBanner extends StatelessWidget {
   const ChatOnboardingBanner({
@@ -159,6 +161,7 @@ Future<void> showChatModelPickerSheet(
   WidgetRef ref,
 ) async {
   final currentId = ref.read(settingsProvider).selectedModelId;
+  final customState = ref.read(customProvidersProvider);
   await showModalBottomSheet<void>(
     context: context,
     showDragHandle: true,
@@ -178,7 +181,7 @@ Future<void> showChatModelPickerSheet(
             ListTile(
               dense: true,
               leading: Icon(
-                m.id == currentId
+                customState.activeProviderId == null && m.id == currentId
                     ? Icons.radio_button_checked
                     : Icons.radio_button_unchecked,
               ),
@@ -186,12 +189,61 @@ Future<void> showChatModelPickerSheet(
               subtitle: Text(m.id),
               onTap: () async {
                 Navigator.of(ctx).pop();
+                await ref
+                    .read(customProvidersProvider.notifier)
+                    .selectProvider(null);
                 await ref.read(settingsProvider.notifier).setModel(m.id);
                 await ref.read(chatProvider.notifier).appendSystemFeedback(
                       'Switched active model to **${m.displayName}**.',
                     );
               },
             ),
+          if (customState.profiles.isNotEmpty) ...[
+            const Divider(),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Text(
+                'External /v1 Models',
+                style: Theme.of(ctx).textTheme.labelMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+              ),
+            ),
+            for (final p in customState.profiles)
+              ListTile(
+                dense: true,
+                leading: Icon(
+                  customState.activeProviderId == p.id
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_unchecked,
+                ),
+                title: Text('${p.name} (${p.modelId})'),
+                subtitle: Text(p.normalizedBaseUrl),
+                onTap: () async {
+                  Navigator.of(ctx).pop();
+                  await ref
+                      .read(customProvidersProvider.notifier)
+                      .selectProvider(p.id);
+                  await ref.read(chatProvider.notifier).appendSystemFeedback(
+                        'Switched to external `/v1` model **${p.name} (${p.modelId})**.',
+                      );
+                },
+              ),
+          ],
+          const Divider(),
+          ListTile(
+            dense: true,
+            leading: const Icon(Icons.hub_outlined),
+            title: const Text('Configure External /v1 Models…'),
+            onTap: () {
+              Navigator.of(ctx).pop();
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => const CustomProvidersPage(),
+                ),
+              );
+            },
+          ),
         ],
       ),
     ),
