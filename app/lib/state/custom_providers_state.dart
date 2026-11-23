@@ -52,35 +52,40 @@ class CustomProvidersNotifier extends Notifier<CustomProvidersState> {
   static const _activeKey = 'agy_active_openai_provider_id';
   static const _secure = FlutterSecureStorage();
   final Map<String, String> _memoryKeyFallback = {};
+  Future<void>? _loadFuture;
 
   @override
   CustomProvidersState build() {
-    Future.microtask(_load);
+    _loadFuture = _load();
     return const CustomProvidersState();
   }
 
   Future<void> _load() async {
-    final prefs = await SharedPreferences.getInstance();
-    if (!ref.mounted) return;
-    final raw = prefs.getString(_profilesKey);
-    final active = prefs.getString(_activeKey);
-    final list = <OpenAiProviderConfig>[];
-    if (raw != null && raw.isNotEmpty) {
-      try {
-        final decoded = jsonDecode(raw) as List<dynamic>;
-        for (final item in decoded.whereType<Map<String, dynamic>>()) {
-          final parsed = OpenAiProviderConfig.fromJson(item);
-          if (parsed.id.isNotEmpty) list.add(parsed);
-        }
-      } catch (_) {}
-    }
-    final validActive = (active != null && list.any((p) => p.id == active))
-        ? active
-        : null;
-    state = CustomProvidersState(profiles: list, activeProviderId: validActive);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (!ref.mounted) return;
+      final raw = prefs.getString(_profilesKey);
+      final active = prefs.getString(_activeKey);
+      final list = <OpenAiProviderConfig>[];
+      if (raw != null && raw.isNotEmpty) {
+        try {
+          final decoded = jsonDecode(raw) as List<dynamic>;
+          for (final item in decoded.whereType<Map<String, dynamic>>()) {
+            final parsed = OpenAiProviderConfig.fromJson(item);
+            if (parsed.id.isNotEmpty) list.add(parsed);
+          }
+        } catch (_) {}
+      }
+      final validActive = (active != null && list.any((p) => p.id == active))
+          ? active
+          : null;
+      state = CustomProvidersState(profiles: list, activeProviderId: validActive);
+    } catch (_) {}
   }
 
   Future<void> selectProvider(String? providerId) async {
+    await _loadFuture;
+    if (!ref.mounted) return;
     final valid = providerId != null &&
             providerId.isNotEmpty &&
             state.profiles.any((p) => p.id == providerId)
@@ -103,6 +108,7 @@ class CustomProvidersNotifier extends Notifier<CustomProvidersState> {
     String? apiKey,
     bool activate = false,
   }) async {
+    await _loadFuture;
     final normalized = profile.id.isEmpty
         ? OpenAiProviderConfig(
             id: const Uuid().v4(),
@@ -134,7 +140,9 @@ class CustomProvidersNotifier extends Notifier<CustomProvidersState> {
     }
 
     final nextActive = activate ? normalized.id : state.activeProviderId;
-    state = CustomProvidersState(profiles: list, activeProviderId: nextActive);
+    if (ref.mounted) {
+      state = CustomProvidersState(profiles: list, activeProviderId: nextActive);
+    }
     await _saveList(list);
     if (activate) {
       final prefs = await SharedPreferences.getInstance();
@@ -144,12 +152,15 @@ class CustomProvidersNotifier extends Notifier<CustomProvidersState> {
   }
 
   Future<void> removeProfile(String id) async {
+    await _loadFuture;
     final next = state.profiles.where((p) => p.id != id).toList();
     final clearActive = state.activeProviderId == id;
-    state = state.copyWith(
-      profiles: next,
-      clearActiveProvider: clearActive,
-    );
+    if (ref.mounted) {
+      state = state.copyWith(
+        profiles: next,
+        clearActiveProvider: clearActive,
+      );
+    }
     await _deleteKey(id);
     await _saveList(next);
     if (clearActive) {
