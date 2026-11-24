@@ -150,7 +150,7 @@ SECCOMPEOF
         --without-bash-malloc \
         --disable-nls \
         --with-curses
-      make -j"$(nproc)" LOCAL_LDFLAGS="-Wl,--wrap=faccessat /tmp/seccomp_compat.o"
+      make -j"$(nproc)" LOCAL_LDFLAGS="-Wl,--wrap=faccessat -Wl,-u,__wrap_faccessat -L/tmp -lseccomp_compat"
       strip bash
       cp bash /out/libbash.so
 
