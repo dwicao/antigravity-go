@@ -2,6 +2,14 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.30] - 2026-11-25
+
+### Added
+- **Multi-Account Vault & Multi-File Credential Import:** Added `MultiAccountVault` (`runtime/accounts/` with owner-only `0600`/`0700` permissions) and updated `GoogleLoginSheet` & `SessionsDrawer` so users can import one or multiple `.agycreds.json` backups, automatically preserve any already signed-in account, switch accounts in one tap without re-running Google OAuth, export individual saved accounts, or remove accounts cleanly.
+
+### Improved
+- **Automatic Local Runtime Startup:** Automatically starts `AgyService` when opening or resuming the app whenever the local `agy` runtime is installed and stopped (while respecting explicit manual stops), removing the `"Local runtime is stopped"` startup warning.
+
 ## [1.0.29] - 2026-11-25
 
 ### Added

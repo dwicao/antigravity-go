@@ -1,7 +1,7 @@
 {
-  "version": "1.0.29",
+  "version": "1.0.30",
   "buildNumber": 1,
-  "tag": "v1.0.29",
+  "tag": "v1.0.30",
   "changelogUrl": "https://github.com/dwicao/antigravity-go/blob/main/CHANGELOG.md",
-  "releaseNotes": "### Added\n- **Encrypted Credential Transfer (Export & Import):** Added `CredentialTransferHelper` (`AES-256-GCM` + `PBKDF2WithHmacSHA256`, 120,000 iterations) in Kotlin alongside `exportCredentials` / `importCredentials` bridges and UI controls inside `GoogleLoginSheet` (`Transfer Credentials`). Signed-in users can export all `.gemini` OAuth tokens (`antigravity-oauth-token`, `acp-auth-state.json`, `settings.json`, `jetski_state.pbtxt`, `antigravity-go-auth.json`), optional Gemini API keys, and account metadata into a passphrase-protected `.agycreds.json` file (Save to Downloads, Share, or Copy), and import it on any other Android phone via File Picker or paste to sign in immediately without repeating Google OAuth."
+  "releaseNotes": "### Added\n- **Multi-Account Vault & Multi-File Credential Import:** Added `MultiAccountVault` (`runtime/accounts/` with owner-only `0600`/`0700` permissions) and updated `GoogleLoginSheet` & `SessionsDrawer` so users can import one or multiple `.agycreds.json` backups, automatically preserve any already signed-in account, switch accounts in one tap without re-running Google OAuth, export individual saved accounts, or remove accounts cleanly.\n\n### Improved\n- **Automatic Local Runtime Startup:** Automatically starts `AgyService` when opening or resuming the app whenever the local `agy` runtime is installed and stopped (while respecting explicit manual stops), removing the `\"Local runtime is stopped\"` startup warning."
 }
