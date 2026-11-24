@@ -186,7 +186,22 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     });
     if (hasNativeBgTask) return true;
     final ciWatches = ref.read(ciWatchProvider);
-    return ciWatches.any((w) => w.sessionId == null || w.sessionId == sessionId);
+    return ciWatches.any(
+      (w) => w.sessionId.isEmpty || w.sessionId == sessionId,
+    );
+  }
+
+  void _refreshActiveWatchdogsForBackgroundWork() {
+    for (final sid in _sessionRuntimes.keys.toList()) {
+      if (_hasActiveBackgroundWork(sid)) {
+        _resetWatchdog(sid);
+        if (_sessionStallWarnings.remove(sid) != null &&
+            _loadedSessionId == sid &&
+            state.stallWarning != null) {
+          state = state.copyWith(clearStallWarning: true);
+        }
+      }
+    }
   }
 
   @visibleForTesting
@@ -323,33 +338,13 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     ref.listen<List<NativeBackgroundTask>>(
       runtimeProvider.select((r) => r.backgroundTasks),
       (prev, next) {
-        if (next.isEmpty) return;
-        for (final sid in _sessionRuntimes.keys.toList()) {
-          if (_hasActiveBackgroundWork(sid)) {
-            _resetWatchdog(sid);
-            if (_sessionStallWarnings.remove(sid) != null &&
-                _loadedSessionId == sid &&
-                state.stallWarning != null) {
-              state = state.copyWith(clearStallWarning: true);
-            }
-          }
-        }
+        if (next.isNotEmpty) _refreshActiveWatchdogsForBackgroundWork();
       },
     );
-    ref.listen<List<CiWatchEntry>>(
+    ref.listen<List<CiWatchItem>>(
       ciWatchProvider,
       (prev, next) {
-        if (next.isEmpty) return;
-        for (final sid in _sessionRuntimes.keys.toList()) {
-          if (_hasActiveBackgroundWork(sid)) {
-            _resetWatchdog(sid);
-            if (_sessionStallWarnings.remove(sid) != null &&
-                _loadedSessionId == sid &&
-                state.stallWarning != null) {
-              state = state.copyWith(clearStallWarning: true);
-            }
-          }
-        }
+        if (next.isNotEmpty) _refreshActiveWatchdogsForBackgroundWork();
       },
     );
     final activeId = ref.read(sessionsProvider).activeSessionId;
