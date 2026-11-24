@@ -7,7 +7,6 @@ import 'package:antigravity_go/state/runtime_state.dart';
 import 'package:antigravity_go/state/sessions_state.dart';
 import 'package:antigravity_go/ui/chat/chat_screen.dart';
 import 'package:antigravity_go/ui/chat/message_bubble.dart';
-import 'package:antigravity_go/ui/chat/milestone_stack_card.dart';
 import 'package:antigravity_go/ui/chat/subagents_activity_banner.dart';
 import 'package:antigravity_go/ui/shell/background_tasks_sheet.dart';
 import 'package:flutter/material.dart';
@@ -635,6 +634,13 @@ void main() {
           state: ToolCallState.completed,
         ),
       ],
+      steps: const [
+        ChatMilestoneStep(
+          id: 'ms-sub-1',
+          kind: ChatMilestoneKind.tool,
+          toolId: 'tool-sub-1',
+        ),
+      ],
     );
 
     final active = [
@@ -652,12 +658,7 @@ void main() {
       MaterialApp(
         home: Scaffold(
           body: SingleChildScrollView(
-            child: Column(
-              children: [
-                MilestoneStackCard(message: msg),
-                MessageBubble(message: msg, activeSubagents: active),
-              ],
-            ),
+            child: MessageBubble(message: msg, activeSubagents: active),
           ),
         ),
       ),
