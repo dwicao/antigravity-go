@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -639,16 +638,11 @@ class _GoogleLoginSheetState extends ConsumerState<GoogleLoginSheet> {
     if (sourceChoice == null || !mounted) return;
 
     if (sourceChoice == 'file') {
-      final files = await FilePicker.pickFiles(
-        type: FileType.any,
-        withData: true,
-      );
+      final files = await FilePicker.pickFiles(type: FileType.any);
       if (files.isEmpty || !mounted) return;
-      final file = files.first;
-      if (file.bytes != null) {
-        bundleJson = utf8.decode(file.bytes!, allowMalformed: true);
-      } else if (file.path != null) {
-        bundleJson = await File(file.path!).readAsString();
+      final path = files.first.path;
+      if (path != null && path.isNotEmpty) {
+        bundleJson = await File(path).readAsString();
       }
     } else {
       final ctrl = TextEditingController();
