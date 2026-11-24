@@ -5,7 +5,9 @@ import io.github.dwicao.antigravity_go.performance.RefreshRateCoordinator
 import io.github.dwicao.antigravity_go.phone.PhoneControlCoordinator
 import io.github.dwicao.antigravity_go.phone.SafetyGate
 import io.github.dwicao.antigravity_go.runtime.CrashRecorder
+import io.github.dwicao.antigravity_go.runtime.CredentialTransferHelper
 import io.github.dwicao.antigravity_go.runtime.UrlSafetyGuard
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -108,5 +110,49 @@ class DshAdoptFeaturesTest {
         assertTrue(content.contains("Crash @"))
         assertTrue(content.contains("thread=worker-1"))
         assertFalse(content.contains("sk-proj-supersecret123456"))
+    }
+
+    @Test
+    fun credentialTransferHelperExportsAndImportsEncryptedBundleSafely() {
+        val srcHome = tempFolder.newFolder("src-home")
+        val tokenFile = File(srcHome, ".gemini/antigravity-cli/antigravity-oauth-token")
+        tokenFile.parentFile?.mkdirs()
+        tokenFile.writeText("""{"access_token":"secret-oauth-token"}""")
+
+        val settingsFile = File(srcHome, ".gemini/antigravity-cli/settings.json")
+        settingsFile.writeText("""{"model":"gemini-4-neon-high"}""")
+
+        val bundle = CredentialTransferHelper.exportEncryptedBundle(
+            homeDir = srcHome,
+            passphrase = "my-strong-passphrase",
+            geminiApiKey = "AIzaTestKey123",
+            authProfileJson = """{"isAuthenticated":true,"email":"user@gmail.com"}""",
+        )
+        assertFalse(bundle.contains("secret-oauth-token"))
+        assertFalse(bundle.contains("AIzaTestKey123"))
+
+        var wrongPassFailed = false
+        try {
+            CredentialTransferHelper.importEncryptedBundle(srcHome, bundle, "wrong-pass")
+        } catch (_: IllegalArgumentException) {
+            wrongPassFailed = true
+        }
+        assertTrue(wrongPassFailed)
+
+        val dstHome = tempFolder.newFolder("dst-home")
+        val restored = CredentialTransferHelper.importEncryptedBundle(
+            homeDir = dstHome,
+            bundleJson = bundle,
+            passphrase = "my-strong-passphrase",
+        )
+        assertEquals(2, restored["restoredFiles"])
+        assertEquals("AIzaTestKey123", restored["geminiApiKey"])
+        assertTrue(File(dstHome, ".gemini/antigravity-cli/antigravity-oauth-token").readText().contains("secret-oauth-token"))
+        assertTrue(File(dstHome, ".gemini/antigravity-go-auth.json").exists())
+
+        assertFalse(CredentialTransferHelper.isAllowedRelativePath("../etc/passwd"))
+        assertFalse(CredentialTransferHelper.isAllowedRelativePath("/data/local/tmp/foo"))
+        assertFalse(CredentialTransferHelper.isAllowedRelativePath(".ssh/id_rsa"))
+        assertTrue(CredentialTransferHelper.isAllowedRelativePath(".gemini/antigravity-cli/antigravity-oauth-token"))
     }
 }

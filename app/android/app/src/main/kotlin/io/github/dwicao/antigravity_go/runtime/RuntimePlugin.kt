@@ -120,6 +120,17 @@ class RuntimePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChann
                 ctrl.logout()
                 null
             }
+            "exportCredentials" -> {
+                val passphrase = call.argument<String>("passphrase") ?: ""
+                val apiKey = call.argument<String>("geminiApiKey")
+                val authProfile = call.argument<String>("authProfileJson")
+                runAsync(result) { ctrl.exportCredentials(passphrase, apiKey, authProfile) }
+            }
+            "importCredentials" -> {
+                val bundleJson = call.argument<String>("bundleJson") ?: ""
+                val passphrase = call.argument<String>("passphrase") ?: ""
+                runAsync(result) { ctrl.importCredentials(bundleJson, passphrase) }
+            }
             "runCapture" -> {
                 val args = call.argument<List<String>>("args") ?: emptyList()
                 val cwd = call.argument<String>("cwd")

@@ -2,6 +2,11 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.29] - 2026-11-25
+
+### Added
+- **Encrypted Credential Transfer (Export & Import):** Added `CredentialTransferHelper` (`AES-256-GCM` + `PBKDF2WithHmacSHA256`, 120,000 iterations) in Kotlin alongside `exportCredentials` / `importCredentials` bridges and UI controls inside `GoogleLoginSheet` (`Transfer Credentials`). Signed-in users can export all `.gemini` OAuth tokens (`antigravity-oauth-token`, `acp-auth-state.json`, `settings.json`, `jetski_state.pbtxt`, `antigravity-go-auth.json`), optional Gemini API keys, and account metadata into a passphrase-protected `.agycreds.json` file (Save to Downloads, Share, or Copy), and import it on any other Android phone via File Picker or paste to sign in immediately without repeating Google OAuth.
+
 ## [1.0.28] - 2026-11-25
 
 ### Improved

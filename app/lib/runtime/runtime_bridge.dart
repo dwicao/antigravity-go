@@ -113,6 +113,35 @@ class RuntimeBridge {
     }
   }
 
+  Future<String> exportCredentials({
+    required String passphrase,
+    String? geminiApiKey,
+    String? authProfileJson,
+  }) async {
+    final res = await _method.invokeMethod<String>('exportCredentials', {
+      'passphrase': passphrase,
+      if (geminiApiKey != null) 'geminiApiKey': geminiApiKey,
+      if (authProfileJson != null) 'authProfileJson': authProfileJson,
+    });
+    if (res == null || res.isEmpty) {
+      throw StateError('Failed to create credentials bundle');
+    }
+    return res;
+  }
+
+  Future<Map<String, dynamic>> importCredentials({
+    required String bundleJson,
+    required String passphrase,
+  }) async {
+    final raw =
+        await _method.invokeMethod<Map<Object?, Object?>>('importCredentials', {
+      'bundleJson': bundleJson,
+      'passphrase': passphrase,
+    });
+    if (raw == null) return const {};
+    return raw.map((k, v) => MapEntry(k.toString(), v));
+  }
+
   Future<String> probeUsage() async {
     try {
       return await _method.invokeMethod<String>('probeUsage') ?? '';

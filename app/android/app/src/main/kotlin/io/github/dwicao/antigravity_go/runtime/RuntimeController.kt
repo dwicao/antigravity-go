@@ -1018,6 +1018,35 @@ am start -a android.intent.action.VIEW -d "${'$'}url" >/dev/null 2>&1 || echo "[
         log("Cleared cached Google credentials")
     }
 
+    fun exportCredentials(
+        passphrase: String,
+        geminiApiKey: String? = null,
+        authProfileJson: String? = null,
+    ): String {
+        val bundle = CredentialTransferHelper.exportEncryptedBundle(
+            homeDir = homeDir,
+            passphrase = passphrase,
+            geminiApiKey = geminiApiKey,
+            authProfileJson = authProfileJson,
+        )
+        log("Exported encrypted credentials bundle")
+        return bundle
+    }
+
+    fun importCredentials(
+        bundleJson: String,
+        passphrase: String,
+    ): Map<String, Any?> {
+        val res = CredentialTransferHelper.importEncryptedBundle(
+            homeDir = homeDir,
+            bundleJson = bundleJson,
+            passphrase = passphrase,
+        )
+        val count = res["restoredFiles"] ?: 0
+        log("Imported encrypted credentials bundle ($count file(s) restored)")
+        return res
+    }
+
     fun runCapture(
         args: List<String>,
         cwd: String?,
@@ -1154,8 +1183,8 @@ am start -a android.intent.action.VIEW -d "${'$'}url" >/dev/null 2>&1 || echo "[
     }
 
     private fun appVersionName(): String = runCatching {
-        appContext.packageManager.getPackageInfo(appContext.packageName, 0).versionName ?: "1.0.28"
-    }.getOrDefault("1.0.28")
+        appContext.packageManager.getPackageInfo(appContext.packageName, 0).versionName ?: "1.0.29"
+    }.getOrDefault("1.0.29")
 
     fun startTurn(
         turnId: String,

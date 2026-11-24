@@ -9,6 +9,7 @@ import 'package:antigravity_go/state/sessions_state.dart';
 import 'package:antigravity_go/state/settings_state.dart';
 import 'package:antigravity_go/state/usage_state.dart';
 import 'package:antigravity_go/theme/app_theme.dart';
+import 'package:antigravity_go/ui/auth/google_login_sheet.dart';
 import 'package:antigravity_go/ui/chat/chat_composer_bar.dart';
 import 'package:antigravity_go/ui/chat/chat_screen.dart';
 import 'package:antigravity_go/ui/chat/message_metrics_footer.dart';
@@ -507,5 +508,48 @@ Weekly limit: 70% remaining (resets in 5d)
     expect(find.text('Customizations'), findsOneWidget);
     expect(find.text('Usage Limits'), findsOneWidget);
     expect(find.text('Settings'), findsOneWidget);
+  });
+
+  testWidgets('GoogleLoginSheet renders Export & Import credential transfer actions', (tester) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          theme: _testTheme(),
+          home: const Scaffold(body: GoogleLoginSheet()),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Transfer Credentials'), findsOneWidget);
+    expect(find.text('Import Credentials'), findsOneWidget);
+    expect(find.text('Export'), findsNothing);
+
+    SharedPreferences.setMockInitialValues({
+      'agy_auth_profile_json': jsonEncode(
+        const AgyAuthStatus(
+          isAuthenticated: true,
+          email: 'user@gmail.com',
+          displayName: 'user@gmail.com',
+        ).toJson(),
+      ),
+    });
+    final signedInContainer = ProviderContainer();
+    addTearDown(signedInContainer.dispose);
+    await signedInContainer.read(authProvider.notifier).refresh();
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: signedInContainer,
+        child: MaterialApp(
+          theme: _testTheme(),
+          home: const Scaffold(body: GoogleLoginSheet()),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Export'), findsOneWidget);
+    expect(find.text('Import Credentials'), findsOneWidget);
   });
 }

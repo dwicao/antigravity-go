@@ -137,7 +137,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   ),
                 ),
               ),
-            if (_matches('google account sign in gemini enterprise plan tier'))
+            if (_matches('google account sign in gemini enterprise plan tier export import credentials backup transfer'))
             Card(
               child: ListTile(
                 leading: Icon(
@@ -153,8 +153,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 ),
                 subtitle: Text(
                   auth.isAuthenticated
-                      ? '${auth.method.label} · ${auth.planTier.label}'
-                      : 'Connect your personal Google or Gemini Enterprise account',
+                      ? '${auth.method.label} · ${auth.planTier.label} · Export / Import'
+                      : 'Connect Google / Enterprise, or Import credentials backup',
                 ),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => GoogleLoginSheet.show(context),

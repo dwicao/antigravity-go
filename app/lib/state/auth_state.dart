@@ -131,4 +131,26 @@ class AuthNotifier extends Notifier<AgyAuthStatus> {
     await ref.read(authServiceProvider).signOut();
     state = const AgyAuthStatus.signedOut(initialized: true);
   }
+
+  Future<String> exportCredentialsBundle(String passphrase) {
+    return ref.read(authServiceProvider).exportCredentialsBundle(
+          passphrase: passphrase,
+          currentStatus: state,
+        );
+  }
+
+  Future<({int restoredFiles, String? email})> importCredentialsBundle({
+    required String bundleJson,
+    required String passphrase,
+  }) async {
+    final res = await ref.read(authServiceProvider).importCredentialsBundle(
+          bundleJson: bundleJson,
+          passphrase: passphrase,
+        );
+    await refresh(verifyWithCli: false);
+    if (state.isAuthenticated) {
+      await ref.read(usageProvider.notifier).refreshFromRuntime();
+    }
+    return res;
+  }
 }

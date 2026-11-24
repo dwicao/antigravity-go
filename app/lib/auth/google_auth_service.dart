@@ -137,7 +137,60 @@ class GoogleAuthService {
   }
 
   Future<String?> readGeminiApiKey() {
-    return _secureStorage.read(key: _apiKeyStorageKey);
+    return _readApiKeySafely();
+  }
+
+  Future<String> exportCredentialsBundle({
+    required String passphrase,
+    AgyAuthStatus? currentStatus,
+  }) async {
+    final apiKey = await _readApiKeySafely();
+    String? profileJson;
+    if (currentStatus != null && currentStatus.isAuthenticated) {
+      profileJson = jsonEncode(currentStatus.toJson());
+    } else {
+      final cached = await readCachedStatus();
+      if (cached != null) {
+        profileJson = jsonEncode(cached.toJson());
+      }
+    }
+    return _runtime.exportCredentials(
+      passphrase: passphrase,
+      geminiApiKey: apiKey,
+      authProfileJson: profileJson,
+    );
+  }
+
+  Future<({int restoredFiles, String? email})> importCredentialsBundle({
+    required String bundleJson,
+    required String passphrase,
+  }) async {
+    final res = await _runtime.importCredentials(
+      bundleJson: bundleJson,
+      passphrase: passphrase,
+    );
+    final apiKey = res['geminiApiKey']?.toString();
+    if (apiKey != null && apiKey.isNotEmpty) {
+      try {
+        await _secureStorage.write(key: _apiKeyStorageKey, value: apiKey);
+      } catch (_) {}
+    }
+    String? email;
+    final profileJson = res['authProfileJson']?.toString();
+    if (profileJson != null && profileJson.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(profileJson);
+        if (decoded is Map<String, dynamic>) {
+          final parsed = AgyAuthStatus.fromJson(decoded);
+          email = parsed.email ?? parsed.displayName;
+          if (parsed.isAuthenticated) {
+            await cacheStatus(parsed.copyWith(initialized: true));
+          }
+        }
+      } catch (_) {}
+    }
+    final restoredFiles = (res['restoredFiles'] as num?)?.toInt() ?? 0;
+    return (restoredFiles: restoredFiles, email: email);
   }
 
   Future<void> configureEnterpriseGcp({
