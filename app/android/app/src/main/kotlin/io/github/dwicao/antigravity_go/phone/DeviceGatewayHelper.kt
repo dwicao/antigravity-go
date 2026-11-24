@@ -22,6 +22,7 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import android.widget.Toast
 import io.github.dwicao.antigravity_go.runtime.CommandSafetyGuard
+import io.github.dwicao.antigravity_go.runtime.UrlSafetyGuard
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -256,10 +257,9 @@ object DeviceGatewayHelper {
 
     fun openUrl(context: Context, url: String): JSONObject {
         val clean = url.trim()
-        val parsed = runCatching { URI(clean) }.getOrNull()
-        val scheme = parsed?.scheme?.lowercase()
-        if (clean.isEmpty() || (scheme != "https" && scheme != "http")) {
-            return JSONObject().put("allowed", false).put("error", "Only http/https URLs are supported")
+        val guard = UrlSafetyGuard.evaluateUrl(clean)
+        if (!guard.allowed) {
+            return JSONObject().put("allowed", false).put("error", guard.reason)
         }
         return runCatching {
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse(clean)).apply {

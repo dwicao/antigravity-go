@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:agy_client/agy_client.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -9,6 +11,9 @@ import 'package:share_plus/share_plus.dart';
 
 import '../../remote/ssh_agy_runner.dart';
 import '../../runtime/runtime_bridge.dart';
+import '../../runtime/runtime_models.dart';
+import '../../state/session_export_helper.dart';
+import 'secret_mask.dart';
 import '../../state/auth_state.dart';
 import '../../state/background_tasks_state.dart';
 import '../../state/chat_state.dart';
@@ -147,6 +152,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     if (mounted) _onScroll();
   }
 
+  final Map<String, GlobalKey> _turnKeys = {};
+  int? _turnCursor;
+  bool _reconnectDismissed = false;
+
   void _toggleFollowLatest() {
     final next = !_followLatest;
     _userActivelyScrollingUp = false;
@@ -158,6 +167,184 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         }
       });
     }
+  }
+
+  Future<void> _jumpUserTurn(
+    List<ChatMessage> messages, {
+    required int delta,
+  }) async {
+    final userIndices = <int>[
+      for (var i = 0; i < messages.length; i++)
+        if (messages[i].role == ChatRole.user) i,
+    ];
+    if (userIndices.isEmpty || !_scrollController.hasClients) return;
+    final current = _turnCursor ?? (delta < 0 ? userIndices.length : -1);
+    final nextIdx = (current + delta).clamp(0, userIndices.length - 1);
+    setState(() {
+      _turnCursor = nextIdx;
+      _followLatest = false;
+    });
+    final msgIndex = userIndices[nextIdx];
+    final targetId = messages[msgIndex].id;
+    final keyCtx = _turnKeys[targetId]?.currentContext;
+    if (keyCtx != null) {
+      await Scrollable.ensureVisible(
+        keyCtx,
+        duration: const Duration(milliseconds: 240),
+        curve: Curves.easeOutCubic,
+        alignment: 0.08,
+      );
+      return;
+    }
+    final maxExtent = _scrollController.position.maxScrollExtent;
+    final ratio = messages.length <= 1
+        ? 0.0
+        : (msgIndex / (messages.length - 1)).clamp(0.0, 1.0);
+    await _scrollController.animateTo(
+      maxExtent * ratio,
+      duration: const Duration(milliseconds: 240),
+      curve: Curves.easeOutCubic,
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctxAfter = _turnKeys[targetId]?.currentContext;
+      if (ctxAfter != null && mounted) {
+        Scrollable.ensureVisible(
+          ctxAfter,
+          duration: const Duration(milliseconds: 160),
+          curve: Curves.easeOut,
+          alignment: 0.08,
+        );
+      }
+    });
+  }
+
+  Future<void> _showMultiSelectCopySheet(
+    BuildContext context,
+    List<ChatMessage> messages,
+  ) async {
+    if (messages.isEmpty) return;
+    final selected = <String>{
+      for (final m in messages)
+        if (m.text.trim().isNotEmpty) m.id,
+    };
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) {
+          final selectedCount = selected.length;
+          return SafeArea(
+            child: SizedBox(
+              height: MediaQuery.of(ctx).size.height * 0.72,
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Select & Copy ($selectedCount)',
+                            style: Theme.of(ctx)
+                                .textTheme
+                                .titleMedium
+                                ?.copyWith(fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: () => setSheetState(() {
+                            if (selected.length == messages.length) {
+                              selected.clear();
+                            } else {
+                              selected.addAll(messages.map((m) => m.id));
+                            }
+                          }),
+                          child: Text(
+                            selected.length == messages.length
+                                ? 'None'
+                                : 'All',
+                          ),
+                        ),
+                        FilledButton.icon(
+                          onPressed: selected.isEmpty
+                              ? null
+                              : () {
+                                  final buf = StringBuffer();
+                                  for (final m in messages) {
+                                    if (!selected.contains(m.id)) continue;
+                                    final role = switch (m.role) {
+                                      ChatRole.user => '## User',
+                                      ChatRole.assistant => '## Antigravity',
+                                      ChatRole.system => '## System',
+                                    };
+                                    buf.writeln(role);
+                                    buf.writeln(
+                                      AgySecretMask.mask(m.text.trim()),
+                                    );
+                                    buf.writeln();
+                                  }
+                                  Clipboard.setData(
+                                    ClipboardData(
+                                      text: buf.toString().trimRight(),
+                                    ),
+                                  );
+                                  Navigator.of(ctx).pop();
+                                  if (context.mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text(
+                                          'Copied $selectedCount message(s)',
+                                        ),
+                                      ),
+                                    );
+                                  }
+                                },
+                          icon: const Icon(Icons.copy_all, size: 16),
+                          label: const Text('Copy'),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Divider(height: 1),
+                  Expanded(
+                    child: ListView.builder(
+                      itemCount: messages.length,
+                      itemBuilder: (_, i) {
+                        final m = messages[i];
+                        final checked = selected.contains(m.id);
+                        final preview = AgySecretMask.mask(m.text.trim())
+                            .replaceAll('\n', ' ');
+                        return CheckboxListTile(
+                          value: checked,
+                          dense: true,
+                          title: Text(
+                            m.role == ChatRole.user ? 'User' : 'Antigravity',
+                            style: const TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                          subtitle: Text(
+                            preview.isEmpty ? '(tools / thinking)' : preview,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          onChanged: (v) => setSheetState(() {
+                            if (v == true) {
+                              selected.add(m.id);
+                            } else {
+                              selected.remove(m.id);
+                            }
+                          }),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
   }
 
   @override
@@ -769,6 +956,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       final md =
                           ref.read(chatProvider.notifier).exportMarkdown();
                       SharePlus.instance.share(ShareParams(text: md));
+                    case 'multi_copy':
+                      _showMultiSelectCopySheet(context, chat.messages);
                   }
                 },
                 itemBuilder: (_) => [
@@ -835,7 +1024,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       title: Text('Toggle Side Panel'),
                     ),
                   ),
-                  if (chat.messages.isNotEmpty)
+                  if (chat.messages.isNotEmpty) ...[
+                    const PopupMenuItem(
+                      value: 'multi_copy',
+                      child: ListTile(
+                        dense: true,
+                        leading: Icon(Icons.checklist_rtl),
+                        title: Text('Select & Copy Messages'),
+                      ),
+                    ),
                     const PopupMenuItem(
                       value: 'share',
                       child: ListTile(
@@ -844,6 +1041,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                         title: Text('Share Transcript'),
                       ),
                     ),
+                  ],
                 ],
               ),
             ],
@@ -947,7 +1145,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                               final isLastAssistant = !chat.isStreaming &&
                                   m.role == ChatRole.assistant &&
                                   index == chat.messages.length - 1;
-                              return wrapCentered(
+                              final turnKey = m.role == ChatRole.user
+                                  ? _turnKeys.putIfAbsent(
+                                      m.id,
+                                      GlobalKey.new,
+                                    )
+                                  : null;
+                              final bubble = wrapCentered(
                                 MessageBubble(
                                   message: m,
                                   tokensPerSecond:
@@ -982,6 +1186,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                       ),
                                 ),
                               );
+                              return turnKey == null
+                                  ? bubble
+                                  : KeyedSubtree(key: turnKey, child: bubble);
                             },
                           ),
                         ),
@@ -991,71 +1198,193 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   Positioned(
                       right: 16,
                       bottom: 12,
-                      child: (!_isAtBottom && !_followLatest)
-                          ? FloatingActionButton.small(
-                              heroTag: 'jump-to-latest-chat',
-                              tooltip: 'Jump to latest',
-                              onPressed: () => _jumpToBottom(animate: true),
-                              child: const Icon(Icons.arrow_downward_rounded),
-                            )
-                          : Tooltip(
-                              message: _followLatest
-                                  ? 'Following latest messages (tap to pause)'
-                                  : 'Follow chat (always scroll to latest)',
-                              child: Material(
-                                elevation: 3,
-                                color: _followLatest
-                                    ? theme.colorScheme.primary
-                                    : theme.colorScheme.surfaceContainerHigh,
-                                borderRadius: BorderRadius.circular(20),
-                                clipBehavior: Clip.antiAlias,
-                                child: InkWell(
-                                  onTap: _toggleFollowLatest,
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 12,
-                                      vertical: 8,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (chat.messages
+                                  .where((m) => m.role == ChatRole.user)
+                                  .length >=
+                              2) ...[
+                            Material(
+                              elevation: 3,
+                              color: theme.colorScheme.surfaceContainerHigh,
+                              borderRadius: BorderRadius.circular(20),
+                              clipBehavior: Clip.antiAlias,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  IconButton(
+                                    visualDensity: VisualDensity.compact,
+                                    constraints: const BoxConstraints(
+                                      minWidth: 32,
+                                      minHeight: 32,
                                     ),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Icon(
-                                          Icons.vertical_align_bottom_rounded,
-                                          size: 16,
-                                          color: _followLatest
-                                              ? theme.colorScheme.onPrimary
-                                              : theme.colorScheme
-                                                  .onSurfaceVariant,
+                                    padding: EdgeInsets.zero,
+                                    tooltip: 'Previous user turn',
+                                    iconSize: 18,
+                                    onPressed: () => _jumpUserTurn(
+                                      chat.messages,
+                                      delta: -1,
+                                    ),
+                                    icon: const Icon(
+                                      Icons.keyboard_arrow_up_rounded,
+                                    ),
+                                  ),
+                                  IconButton(
+                                    visualDensity: VisualDensity.compact,
+                                    constraints: const BoxConstraints(
+                                      minWidth: 32,
+                                      minHeight: 32,
+                                    ),
+                                    padding: EdgeInsets.zero,
+                                    tooltip: 'Next user turn',
+                                    iconSize: 18,
+                                    onPressed: () => _jumpUserTurn(
+                                      chat.messages,
+                                      delta: 1,
+                                    ),
+                                    icon: const Icon(
+                                      Icons.keyboard_arrow_down_rounded,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                          ],
+                          (!_isAtBottom && !_followLatest)
+                              ? FloatingActionButton.small(
+                                  heroTag: 'jump-to-latest-chat',
+                                  tooltip: 'Jump to latest',
+                                  onPressed: () => _jumpToBottom(animate: true),
+                                  child: const Icon(Icons.arrow_downward_rounded),
+                                )
+                              : Tooltip(
+                                  message: _followLatest
+                                      ? 'Following latest messages (tap to pause)'
+                                      : 'Follow chat (always scroll to latest)',
+                                  child: Material(
+                                    elevation: 3,
+                                    color: _followLatest
+                                        ? theme.colorScheme.primary
+                                        : theme.colorScheme.surfaceContainerHigh,
+                                    borderRadius: BorderRadius.circular(20),
+                                    clipBehavior: Clip.antiAlias,
+                                    child: InkWell(
+                                      onTap: _toggleFollowLatest,
+                                      child: Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 12,
+                                          vertical: 8,
                                         ),
-                                        const SizedBox(width: 6),
-                                        Text(
-                                          _followLatest
-                                              ? 'Following'
-                                              : 'Follow',
-                                          style: theme.textTheme.labelMedium
-                                              ?.copyWith(
-                                            fontWeight: FontWeight.w600,
-                                            color: _followLatest
-                                                ? theme.colorScheme.onPrimary
-                                                : theme.colorScheme
-                                                    .onSurfaceVariant,
-                                          ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(
+                                              Icons.vertical_align_bottom_rounded,
+                                              size: 16,
+                                              color: _followLatest
+                                                  ? theme.colorScheme.onPrimary
+                                                  : theme.colorScheme
+                                                      .onSurfaceVariant,
+                                            ),
+                                            const SizedBox(width: 6),
+                                            Text(
+                                              _followLatest
+                                                  ? 'Following'
+                                                  : 'Follow',
+                                              style: theme.textTheme.labelMedium
+                                                  ?.copyWith(
+                                                fontWeight: FontWeight.w600,
+                                                color: _followLatest
+                                                    ? theme.colorScheme.onPrimary
+                                                    : theme.colorScheme
+                                                        .onSurfaceVariant,
+                                              ),
+                                            ),
+                                          ],
                                         ),
-                                      ],
+                                      ),
                                     ),
                                   ),
                                 ),
-                              ),
-                            ),
+                        ],
+                      ),
                     ),
                   ],
                 ),
         ),
+        if (hosts.activeSshHost == null &&
+            !_reconnectDismissed &&
+            !isCurrentSessionBusy &&
+            (runtime.status.phase == RuntimePhase.stopped ||
+                runtime.status.phase == RuntimePhase.error))
+          wrapCentered(
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: runtime.status.phase == RuntimePhase.error
+                    ? theme.colorScheme.errorContainer.withOpacity(0.75)
+                    : semantic.warningContainer,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    runtime.status.phase == RuntimePhase.error
+                        ? Icons.error_outline
+                        : Icons.power_settings_new_rounded,
+                    size: 16,
+                    color: runtime.status.phase == RuntimePhase.error
+                        ? theme.colorScheme.onErrorContainer
+                        : semantic.onWarningContainer,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      runtime.status.phase == RuntimePhase.error
+                          ? (runtime.status.errorMessage?.trim().isNotEmpty == true
+                              ? 'Runtime error: ${runtime.status.errorMessage}'
+                              : 'Local runtime disconnected')
+                          : 'Local runtime is stopped — start service to run prompts',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        fontWeight: FontWeight.w600,
+                        color: runtime.status.phase == RuntimePhase.error
+                            ? theme.colorScheme.onErrorContainer
+                            : semantic.onWarningContainer,
+                      ),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: runtime.busy
+                        ? null
+                        : () => ref.read(runtimeProvider.notifier).start(),
+                    child: Text(
+                      runtime.status.phase == RuntimePhase.error
+                          ? 'Retry'
+                          : 'Start',
+                    ),
+                  ),
+                  IconButton(
+                    iconSize: 16,
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () =>
+                        setState(() => _reconnectDismissed = true),
+                    icon: const Icon(Icons.close),
+                  ),
+                ],
+              ),
+            ),
+          ),
         if (isCurrentSessionBusy)
           wrapCentered(
             _StreamingAgentStatusBar(
               key: const ValueKey('bottom-agent-working-bar'),
               tokensPerSecond: chat.tokensPerSecond,
+              messages: chat.messages,
             ),
           ),
         if (chat.stallWarning != null)
@@ -1450,19 +1779,78 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 }
 
-class _StreamingAgentStatusBar extends StatelessWidget {
+class _StreamingAgentStatusBar extends StatefulWidget {
   const _StreamingAgentStatusBar({
     super.key,
     required this.tokensPerSecond,
+    this.messages = const [],
   });
 
   final double tokensPerSecond;
+  final List<ChatMessage> messages;
+
+  @override
+  State<_StreamingAgentStatusBar> createState() =>
+      _StreamingAgentStatusBarState();
+}
+
+class _StreamingAgentStatusBarState extends State<_StreamingAgentStatusBar> {
+  final Stopwatch _stopwatch = Stopwatch()..start();
+  Timer? _ticker;
+
+  @override
+  void initState() {
+    super.initState();
+    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _ticker?.cancel();
+    _stopwatch.stop();
+    super.dispose();
+  }
+
+  String _formatElapsed(Duration d) {
+    final mins = d.inMinutes.toString().padLeft(2, '0');
+    final secs = (d.inSeconds % 60).toString().padLeft(2, '0');
+    return '$mins:$secs';
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final semantic = AgySemanticColors.of(context);
-    final hasSpeed = tokensPerSecond > 0.5;
+    final hasSpeed = widget.tokensPerSecond > 0.5;
+    final rounds = widget.messages.where((m) => m.role == ChatRole.user).length;
+    var toolCalls = 0;
+    var totalTokens = 0;
+    var cacheRead = 0;
+    var inputTokens = 0;
+    for (final m in widget.messages) {
+      toolCalls += m.tools.length;
+      final u = m.usage;
+      if (u != null) {
+        totalTokens += u.totalTokens;
+        cacheRead += u.cacheReadTokens;
+        inputTokens += u.inputTokens;
+      }
+    }
+    final cacheDenom = inputTokens + cacheRead;
+    final statusParts = <String>[
+      _formatElapsed(_stopwatch.elapsed),
+      if (hasSpeed) '${widget.tokensPerSecond.toStringAsFixed(0)} tok/s' else 'Working…',
+      if (rounds > 0) '$rounds rd',
+      if (toolCalls > 0) '$toolCalls tools',
+      if (totalTokens > 0)
+        totalTokens >= 1000
+            ? '${(totalTokens / 1000).toStringAsFixed(1)}k tok'
+            : '$totalTokens tok',
+      if (cacheRead > 0 && cacheDenom > 0)
+        '${((cacheRead / cacheDenom) * 100).round()}% hit',
+    ];
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -1501,9 +1889,7 @@ class _StreamingAgentStatusBar extends StatelessWidget {
           const SizedBox(width: 8),
           Flexible(
             child: Text(
-              hasSpeed
-                  ? '${tokensPerSecond.toStringAsFixed(0)} tok/s'
-                  : 'Working…',
+              statusParts.join(' · '),
               overflow: TextOverflow.ellipsis,
               style: theme.textTheme.labelSmall?.copyWith(
                 color: semantic.textSecondary,

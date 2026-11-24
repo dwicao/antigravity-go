@@ -1,8 +1,14 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gpt_markdown/gpt_markdown.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../state/projects_state.dart';
+import '../../../state/runtime_state.dart';
+import '../../../state/session_export_helper.dart';
 import '../../../theme/app_theme.dart';
 
 /// Modeled on DSH-Go's `stream_repair.dart`: closes unfinished inline delimiters
@@ -202,6 +208,123 @@ class _AgyCodeBlock extends StatelessWidget {
   final String language;
   final String code;
 
+  static String _extensionFor(String lang) {
+    final normalized = lang.trim().toLowerCase();
+    return switch (normalized) {
+      'dart' => 'dart',
+      'kotlin' || 'kt' => 'kt',
+      'python' || 'py' => 'py',
+      'javascript' || 'js' => 'js',
+      'typescript' || 'ts' => 'ts',
+      'json' => 'json',
+      'yaml' || 'yml' => 'yaml',
+      'bash' || 'sh' || 'zsh' => 'sh',
+      'markdown' || 'md' => 'md',
+      'xml' || 'html' => normalized,
+      'sql' => 'sql',
+      'rust' || 'rs' => 'rs',
+      'go' => 'go',
+      _ => 'txt',
+    };
+  }
+
+  Future<void> _saveToFile(BuildContext context) async {
+    var baseDir = '';
+    try {
+      final container = ProviderScope.containerOf(context, listen: false);
+      final projDir =
+          container.read(projectsProvider).activeProject.primaryFolder;
+      final wsDir = container.read(runtimeProvider).status.workspaceRoot ?? '';
+      baseDir = projDir.isNotEmpty ? projDir : wsDir;
+    } catch (_) {
+      // Allows widget testing without ProviderScope.
+    }
+    final ext = _extensionFor(language);
+    final suggested =
+        baseDir.isNotEmpty ? '$baseDir/snippet.$ext' : 'snippet.$ext';
+    final ctrl = TextEditingController(text: suggested);
+    final chosen = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Save Code Block'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'Destination file path or filename',
+            isDense: true,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (chosen == null || chosen.isEmpty || !context.mounted) return;
+
+    var savedNotice = '';
+    final isPath = chosen.contains('/') || chosen.contains('\\');
+    if (isPath) {
+      final target = File(chosen);
+      if (await target.exists()) {
+        if (!context.mounted) return;
+        final overwrite = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Overwrite existing file?'),
+            content: Text('$chosen already exists.'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: const Text('Overwrite'),
+              ),
+            ],
+          ),
+        );
+        if (overwrite != true) return;
+      }
+      try {
+        await target.parent.create(recursive: true);
+        await target.writeAsString(code);
+        savedNotice = 'Saved to $chosen';
+      } catch (_) {
+        final name = chosen.split(RegExp(r'[/\\]')).last;
+        final dl = await SessionExportHelper.saveTextToDownloads(
+          filename: name,
+          content: code,
+          mimeType: 'text/plain',
+        );
+        savedNotice =
+            dl != null ? 'Saved to $dl' : 'Could not write $chosen';
+      }
+    } else {
+      final dl = await SessionExportHelper.saveTextToDownloads(
+        filename: chosen,
+        content: code,
+        mimeType: 'text/plain',
+      );
+      savedNotice =
+          dl != null ? 'Saved to $dl' : 'Save unavailable on this device';
+    }
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(savedNotice)),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final semantic = AgySemanticColors.of(context);
@@ -234,6 +357,33 @@ class _AgyCodeBlock extends StatelessWidget {
                   ),
                 ),
                 const Spacer(),
+                InkWell(
+                  borderRadius: BorderRadius.circular(6),
+                  onTap: () => _saveToFile(context),
+                  child: Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.save_alt_outlined,
+                          size: 13,
+                          color: semantic.textSecondary,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          'Save',
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            color: semantic.textSecondary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
                 InkWell(
                   borderRadius: BorderRadius.circular(6),
                   onTap: () {

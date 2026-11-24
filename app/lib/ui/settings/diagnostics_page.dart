@@ -25,6 +25,7 @@ class DiagnosticsPage extends ConsumerStatefulWidget {
 class _DiagnosticsPageState extends ConsumerState<DiagnosticsPage> {
   String _report = '';
   bool _building = true;
+  bool _hasCrashLog = false;
 
   @override
   void initState() {
@@ -88,8 +89,19 @@ class _DiagnosticsPageState extends ConsumerState<DiagnosticsPage> {
       buf.writeln('```');
     }
 
+    final crashLog = await SessionExportHelper.getRecentCrashLog();
+    if (crashLog.trim().isNotEmpty) {
+      buf.writeln();
+      buf.writeln('## Recent Native Crash Log (Redacted)');
+      buf.writeln('```');
+      buf.writeln(AgySecretMask.mask(crashLog.trim()));
+      buf.writeln('```');
+    }
+
+    if (!mounted) return;
     setState(() {
       _report = buf.toString();
+      _hasCrashLog = crashLog.trim().isNotEmpty;
       _building = false;
     });
   }
@@ -165,6 +177,17 @@ class _DiagnosticsPageState extends ConsumerState<DiagnosticsPage> {
                           label: const Text('Save .md'),
                         ),
                       ),
+                      if (_hasCrashLog) ...[
+                        const SizedBox(width: 8),
+                        IconButton(
+                          tooltip: 'Clear saved crash log',
+                          onPressed: () async {
+                            await SessionExportHelper.clearCrashLog();
+                            await _buildReport();
+                          },
+                          icon: const Icon(Icons.delete_sweep_outlined),
+                        ),
+                      ],
                     ],
                   ),
                 ),

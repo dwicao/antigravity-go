@@ -435,6 +435,22 @@ class ChatComposerBar extends ConsumerWidget {
                         .setExecutionMode(v),
                   ),
                   const SizedBox(width: 6),
+                  ChatPickerPill<InferenceSpeedTier>(
+                    icon: Icons.bolt_rounded,
+                    label: settings.speedTier.label,
+                    items: InferenceSpeedTier.values
+                        .map(
+                          (tier) => PopupMenuItem(
+                            value: tier,
+                            child: Text(tier.label),
+                          ),
+                        )
+                        .toList(),
+                    onSelected: (tier) => ref
+                        .read(settingsProvider.notifier)
+                        .setSpeedTier(tier),
+                  ),
+                  const SizedBox(width: 6),
                   Tooltip(
                     message:
                         '~${ctxSnap.usedTokens} / ${ctxSnap.budgetTokens} tokens (${ctxSnap.statusLabel}) — tap for Harness & /compact',
@@ -461,16 +477,28 @@ class ChatComposerBar extends ConsumerWidget {
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(
-                              Icons.engineering_outlined,
-                              size: 13,
-                              color: ctxSnap.shouldCompact
-                                  ? theme.colorScheme.onErrorContainer
-                                  : ctxSnap.needsWarning
-                                      ? semantic.onWarningContainer
-                                      : theme.colorScheme.onSurfaceVariant,
+                            SizedBox(
+                              width: 13,
+                              height: 13,
+                              child: CircularProgressIndicator(
+                                value: (ctxSnap.percentage / 100.0).clamp(0.0, 1.0),
+                                strokeWidth: 2.2,
+                                backgroundColor: (ctxSnap.shouldCompact
+                                        ? theme.colorScheme.onErrorContainer
+                                        : ctxSnap.needsWarning
+                                            ? semantic.onWarningContainer
+                                            : theme.colorScheme.onSurfaceVariant)
+                                    .withOpacity(0.22),
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  ctxSnap.shouldCompact
+                                      ? theme.colorScheme.onErrorContainer
+                                      : ctxSnap.needsWarning
+                                          ? semantic.onWarningContainer
+                                          : theme.colorScheme.primary,
+                                ),
+                              ),
                             ),
-                            const SizedBox(width: 4),
+                            const SizedBox(width: 5),
                             Text(
                               '${ctxSnap.percentage}% ctx',
                               style: theme.textTheme.labelSmall?.copyWith(

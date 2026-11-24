@@ -420,14 +420,10 @@ class _WindowHeroTile extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 8),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: LinearProgressIndicator(
-              value: progress ?? (tokensUsed > 0 ? 0.15 : 1.0),
-              minHeight: 8,
-              color: barColor,
-              backgroundColor: barColor.withOpacity(0.16),
-            ),
+          _SegmentedQuotaBar(
+            value: progress ?? (tokensUsed > 0 ? 0.15 : 1.0),
+            color: barColor,
+            height: 8,
           ),
           const SizedBox(height: 8),
           Row(
@@ -629,16 +625,47 @@ class _QuotaWindowRow extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 4),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(6),
-          child: LinearProgressIndicator(
-            value: (pct / 100.0).clamp(0.0, 1.0),
-            minHeight: 7,
-            color: barColor,
-            backgroundColor: barColor.withOpacity(0.18),
-          ),
+        _SegmentedQuotaBar(
+          value: (pct / 100.0).clamp(0.0, 1.0),
+          color: barColor,
+          height: 7,
         ),
       ],
+    );
+  }
+}
+
+class _SegmentedQuotaBar extends StatelessWidget {
+  const _SegmentedQuotaBar({
+    required this.value,
+    required this.color,
+    this.height = 7,
+    this.segments = 10,
+  });
+
+  final double value;
+  final Color color;
+  final double height;
+  final int segments;
+
+  @override
+  Widget build(BuildContext context) {
+    final clamped = value.clamp(0.0, 1.0);
+    final activeCount = (clamped * segments).round();
+    return Row(
+      children: List.generate(segments, (i) {
+        final filled = i < activeCount;
+        return Expanded(
+          child: Container(
+            height: height,
+            margin: EdgeInsets.only(right: i == segments - 1 ? 0 : 3),
+            decoration: BoxDecoration(
+              color: filled ? color : color.withOpacity(0.16),
+              borderRadius: BorderRadius.circular(3),
+            ),
+          ),
+        );
+      }),
     );
   }
 }

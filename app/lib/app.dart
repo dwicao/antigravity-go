@@ -48,6 +48,7 @@ class AntigravityGoApp extends ConsumerWidget {
     return MaterialApp(
       title: 'Antigravity Go',
       debugShowCheckedModeBanner: false,
+      locale: Locale(settings.localeCode),
       themeMode: settings.themeMode,
       theme: applyMotion(
         AgyTheme.build(
@@ -65,7 +66,9 @@ class AntigravityGoApp extends ConsumerWidget {
       ),
       supportedLocales: const [
         Locale('en'),
+        Locale('id'),
         Locale('zh'),
+        Locale('es'),
       ],
       localizationsDelegates: const [
         GlobalMaterialLocalizations.delegate,

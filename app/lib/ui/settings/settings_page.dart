@@ -1,5 +1,8 @@
+import 'dart:convert';
+
 import 'package:agy_client/agy_client.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -315,7 +318,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               ),
             ),
             const SizedBox(height: 12),
-            if (_matches('appearance theme dark light accent workspace layout haptic wallpaper dynamic color'))
+            if (_matches('appearance theme dark light accent workspace layout haptic wallpaper dynamic color language locale'))
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(14),
@@ -413,6 +416,34 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                       onChanged: (v) => ref
                           .read(settingsProvider.notifier)
                           .setFollowWallpaperColor(v),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      'App Language',
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: const [
+                        ('en', 'English'),
+                        ('id', 'Bahasa Indonesia'),
+                        ('zh', '中文'),
+                        ('es', 'Español'),
+                      ]
+                          .map(
+                            (item) => ChoiceChip(
+                              label: Text(item.$2),
+                              selected: settings.localeCode == item.$1,
+                              onSelected: (_) => ref
+                                  .read(settingsProvider.notifier)
+                                  .setLocaleCode(item.$1),
+                            ),
+                          )
+                          .toList(),
                     ),
                   ],
                 ),
@@ -651,10 +682,25 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               ),
             ),
             const SizedBox(height: 12),
-            if (_matches('updates check release notes version apk install'))
+            if (_matches('updates check release notes changelog whats new version apk install'))
             Card(
               child: Column(
                 children: [
+                  ListTile(
+                    leading: const Icon(Icons.new_releases_outlined),
+                    title: const Text("What's New"),
+                    subtitle: Text(
+                      'Highlights & changelog for v${update.currentVersion}',
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => _showWhatsNewDialog(
+                      context,
+                      currentVersion: update.currentVersion,
+                      latestNotes: update.latest?.releaseNotes,
+                      changelogUrl: update.latest?.htmlUrl,
+                    ),
+                  ),
+                  const Divider(height: 1),
                   ListTile(
                     leading: const Icon(Icons.system_update_alt),
                     title: const Text('Check for Updates'),
@@ -750,6 +796,55 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Future<void> _showWhatsNewDialog(
+    BuildContext context, {
+    required String currentVersion,
+    String? latestNotes,
+    String? changelogUrl,
+  }) async {
+    var notes = latestNotes?.trim() ?? '';
+    var versionLabel = currentVersion;
+    var url = changelogUrl ??
+        'https://github.com/dwicao/antigravity-go/blob/main/CHANGELOG.md';
+    if (notes.isEmpty) {
+      try {
+        final raw = await rootBundle.loadString('assets/version.json');
+        final decoded = jsonDecode(raw);
+        if (decoded is Map<String, dynamic>) {
+          versionLabel = decoded['version']?.toString() ?? versionLabel;
+          notes = decoded['releaseNotes']?.toString().trim() ?? '';
+          url = decoded['changelogUrl']?.toString() ?? url;
+        }
+      } catch (_) {
+        // Fallback below if asset unavailable in unit tests.
+      }
+    }
+    if (!context.mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text("What's New in v$versionLabel"),
+        content: SingleChildScrollView(
+          child: SelectableText(
+            notes.isEmpty
+                ? 'See CHANGELOG.md for complete release history.'
+                : notes,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => launchUrl(Uri.parse(url)),
+            child: const Text('Full Changelog'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Close'),
+          ),
+        ],
       ),
     );
   }

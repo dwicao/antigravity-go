@@ -17,6 +17,7 @@ class AgySessionSummary {
     this.messageCount = 0,
     this.lastPreview,
     this.pinned = false,
+    this.archived = false,
     this.folder = '',
   });
 
@@ -33,6 +34,7 @@ class AgySessionSummary {
   final int messageCount;
   final String? lastPreview;
   final bool pinned;
+  final bool archived;
   final String folder;
 
   AgySessionSummary copyWith({
@@ -46,6 +48,7 @@ class AgySessionSummary {
     int? messageCount,
     String? lastPreview,
     bool? pinned,
+    bool? archived,
     String? folder,
   }) {
     return AgySessionSummary(
@@ -64,6 +67,7 @@ class AgySessionSummary {
       messageCount: messageCount ?? this.messageCount,
       lastPreview: lastPreview ?? this.lastPreview,
       pinned: pinned ?? this.pinned,
+      archived: archived ?? this.archived,
       folder: folder ?? this.folder,
     );
   }
@@ -83,6 +87,7 @@ class AgySessionSummary {
         'messageCount': messageCount,
         if (lastPreview != null) 'lastPreview': lastPreview,
         if (pinned) 'pinned': true,
+        if (archived) 'archived': true,
         if (folder.isNotEmpty) 'folder': folder,
       };
 
@@ -102,6 +107,7 @@ class AgySessionSummary {
       messageCount: (json['messageCount'] as num?)?.toInt() ?? 0,
       lastPreview: json['lastPreview'] as String?,
       pinned: json['pinned'] == true,
+      archived: json['archived'] == true,
       folder: json['folder'] as String? ?? '',
     );
   }

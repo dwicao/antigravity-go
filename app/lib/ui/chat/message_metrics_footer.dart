@@ -82,6 +82,14 @@ class MessageMetricsFooter extends StatelessWidget {
         icon: Icons.toll_outlined,
         label: '${formatTokenCount(usage.totalTokens)} tok$detail',
       ));
+      final cacheDenom = usage.inputTokens + usage.cacheReadTokens;
+      if (usage.cacheReadTokens > 0 && cacheDenom > 0) {
+        final hitPct = ((usage.cacheReadTokens / cacheDenom) * 100).round();
+        items.add((
+          icon: Icons.cached_rounded,
+          label: '$hitPct% hit',
+        ));
+      }
     } else {
       final estChars =
           message.text.trim().length + message.thoughts.trim().length;

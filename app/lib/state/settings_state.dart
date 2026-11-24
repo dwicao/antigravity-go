@@ -19,6 +19,16 @@ enum DesktopLayoutOverride {
   final String label;
 }
 
+enum InferenceSpeedTier {
+  regular('Regular'),
+  fast('Fast'),
+  ultrafast('Ultrafast');
+
+  const InferenceSpeedTier(this.label);
+
+  final String label;
+}
+
 class AppSettings {
   const AppSettings({
     this.themeMode = ThemeMode.dark,
@@ -29,6 +39,7 @@ class AppSettings {
     this.notifyOnApproval = true,
     this.notifyBackgroundOnly = true,
     this.localeCode = 'en',
+    this.speedTier = InferenceSpeedTier.regular,
     this.useG1Credits = false,
     this.permissionPreset = AntigravityPermissionPreset.turbo,
     this.allowNonWorkspaceAccess = true,
@@ -53,6 +64,7 @@ class AppSettings {
   final bool notifyOnApproval;
   final bool notifyBackgroundOnly;
   final String localeCode;
+  final InferenceSpeedTier speedTier;
   final bool useG1Credits;
   final AntigravityPermissionPreset permissionPreset;
   final bool allowNonWorkspaceAccess;
@@ -80,6 +92,7 @@ class AppSettings {
     bool? notifyOnApproval,
     bool? notifyBackgroundOnly,
     String? localeCode,
+    InferenceSpeedTier? speedTier,
     bool? useG1Credits,
     AntigravityPermissionPreset? permissionPreset,
     bool? allowNonWorkspaceAccess,
@@ -104,6 +117,7 @@ class AppSettings {
       notifyOnApproval: notifyOnApproval ?? this.notifyOnApproval,
       notifyBackgroundOnly: notifyBackgroundOnly ?? this.notifyBackgroundOnly,
       localeCode: localeCode ?? this.localeCode,
+      speedTier: speedTier ?? this.speedTier,
       useG1Credits: useG1Credits ?? this.useG1Credits,
       permissionPreset: permissionPreset ?? this.permissionPreset,
       allowNonWorkspaceAccess:
@@ -177,7 +191,15 @@ class SettingsNotifier extends Notifier<AppSettings> {
         (a) => a.name == accentName,
         orElse: () => AgyAccentPreset.indigo,
       ),
-      localeCode: prefs.getString('agy_locale') ?? 'en',
+      localeCode: _dirtyKeys.contains('agy_locale')
+          ? state.localeCode
+          : (prefs.getString('agy_locale') ?? 'en'),
+      speedTier: _dirtyKeys.contains('agy_speed_tier')
+          ? state.speedTier
+          : InferenceSpeedTier.values.firstWhere(
+              (s) => s.name == prefs.getString('agy_speed_tier'),
+              orElse: () => InferenceSpeedTier.regular,
+            ),
       useG1Credits: prefs.getBool('agy_use_g1_credits') ?? false,
       permissionPreset: resolvedPreset,
       allowNonWorkspaceAccess:
@@ -236,9 +258,17 @@ class SettingsNotifier extends Notifier<AppSettings> {
   }
 
   Future<void> setLocaleCode(String code) async {
+    _dirtyKeys.add('agy_locale');
     state = state.copyWith(localeCode: code);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('agy_locale', code);
+  }
+
+  Future<void> setSpeedTier(InferenceSpeedTier tier) async {
+    _dirtyKeys.add('agy_speed_tier');
+    state = state.copyWith(speedTier: tier);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('agy_speed_tier', tier.name);
   }
 
   Future<void> setUseG1Credits(bool enabled) async {

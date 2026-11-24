@@ -42,12 +42,19 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
     final bgSessionIds = ref.watch(
       chatProvider.select((c) => c.activeBackgroundSessionIds),
     );
+    final activeSubagentCount = ref.watch(
+      chatProvider.select(
+        (c) => c.activeSubagents.where((a) => a.isActive).length,
+      ),
+    );
+    final archivedCount = sessions.sessions.where((s) => s.archived).length;
     final hosts = ref.watch(hostsProvider);
     final projects = ref.watch(projectsProvider);
     final auth = ref.watch(authProvider);
     final theme = Theme.of(context);
 
     final folders = sessions.sessions
+        .where((s) => !s.archived)
         .map((s) => s.folder.trim())
         .where((f) => f.isNotEmpty)
         .toSet()
@@ -55,11 +62,16 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
       ..sort();
 
     final filtered = sessions.sessions.where((s) {
-      if (_folderFilter == '__pinned__' && !s.pinned) return false;
-      if (_folderFilter.isNotEmpty &&
-          _folderFilter != '__pinned__' &&
-          s.folder != _folderFilter) {
-        return false;
+      if (_folderFilter == '__archived__') {
+        if (!s.archived) return false;
+      } else {
+        if (s.archived) return false;
+        if (_folderFilter == '__pinned__' && !s.pinned) return false;
+        if (_folderFilter.isNotEmpty &&
+            _folderFilter != '__pinned__' &&
+            s.folder != _folderFilter) {
+          return false;
+        }
       }
       if (_query.isEmpty) return true;
       final q = _query.toLowerCase();
@@ -293,7 +305,9 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
                 ],
               ),
             ),
-            if (folders.isNotEmpty || sessions.sessions.any((s) => s.pinned))
+            if (folders.isNotEmpty ||
+                sessions.sessions.any((s) => s.pinned) ||
+                archivedCount > 0)
               SizedBox(
                 height: 36,
                 child: ListView(
@@ -331,6 +345,20 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
                           visualDensity: VisualDensity.compact,
                           onSelected: (_) => setState(
                             () => _folderFilter = _folderFilter == f ? '' : f,
+                          ),
+                        ),
+                      ),
+                    if (archivedCount > 0)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 6),
+                        child: ChoiceChip(
+                          label: Text('Archived ($archivedCount)'),
+                          selected: _folderFilter == '__archived__',
+                          visualDensity: VisualDensity.compact,
+                          onSelected: (_) => setState(
+                            () => _folderFilter = _folderFilter == '__archived__'
+                                ? ''
+                                : '__archived__',
                           ),
                         ),
                       ),
@@ -392,12 +420,22 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
           Widget buildSessionTile(AgySessionSummary s) {
             final active = s.id == sessions.activeSessionId;
             final isRunning = bgSessionIds.contains(s.id);
+            final subCount = active ? activeSubagentCount : 0;
+            final triageLabel = s.archived
+                ? 'Archived'
+                : isRunning
+                    ? (subCount > 0 ? 'Running · $subCount sub' : 'Running')
+                    : null;
             final menuItems = [
               PopupMenuItem(
                 value: 'pin',
                 child: Text(s.pinned ? 'Unpin' : 'Pin'),
               ),
               const PopupMenuItem(value: 'folder', child: Text('Folder')),
+              PopupMenuItem(
+                value: 'archive',
+                child: Text(s.archived ? 'Restore' : 'Archive'),
+              ),
               const PopupMenuItem(
                 value: 'replay',
                 child: Text('Replay & Export'),
@@ -434,17 +472,50 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
                         ),
                       )
                     : Icon(
-                        s.pinned
-                            ? Icons.push_pin
-                            : (s.hostKind == AgyHostKind.ssh
-                                ? Icons.computer
-                                : Icons.chat_bubble_outline),
+                        s.archived
+                            ? Icons.inventory_2_outlined
+                            : s.pinned
+                                ? Icons.push_pin
+                                : (s.hostKind == AgyHostKind.ssh
+                                    ? Icons.computer
+                                    : Icons.chat_bubble_outline),
                         size: 16,
                       ),
-                title: Text(
-                  s.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                title: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        s.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (triageLabel != null) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 1.5,
+                        ),
+                        decoration: BoxDecoration(
+                          color: isRunning
+                              ? theme.colorScheme.primaryContainer
+                              : theme.colorScheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          triageLabel,
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            color: isRunning
+                                ? theme.colorScheme.onPrimaryContainer
+                                : theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
                 subtitle: Text(
                   [
@@ -589,6 +660,10 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
       await ref.read(sessionsProvider.notifier).togglePinSession(s.id);
     } else if (action == 'folder') {
       await _promptFolder(context, s);
+    } else if (action == 'archive') {
+      await ref
+          .read(sessionsProvider.notifier)
+          .archiveSession(s.id, archived: !s.archived);
     } else if (action == 'replay') {
       await Navigator.of(context).push(
         MaterialPageRoute<void>(

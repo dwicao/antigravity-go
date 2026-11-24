@@ -109,4 +109,20 @@ class SessionExportHelper {
       return null;
     }
   }
+
+  static Future<String> getRecentCrashLog() async {
+    try {
+      return await _perfChannel.invokeMethod<String>('recentCrashLog') ?? '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  static Future<void> clearCrashLog() async {
+    try {
+      await _perfChannel.invokeMethod<bool>('clearCrashLog');
+    } catch (_) {
+      // Safe no-op on non-Android/test environments.
+    }
+  }
 }

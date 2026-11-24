@@ -16,6 +16,7 @@ import io.github.dwicao.antigravity_go.performance.RefreshRateCoordinator
 import io.github.dwicao.antigravity_go.permissions.PermissionsPlugin
 import io.github.dwicao.antigravity_go.phone.PhonePlugin
 import io.github.dwicao.antigravity_go.runtime.AutomationPlugin
+import io.github.dwicao.antigravity_go.runtime.CrashRecorder
 import io.github.dwicao.antigravity_go.runtime.RuntimePlugin
 import io.github.dwicao.antigravity_go.theme.DynamicColorPlugin
 import io.github.dwicao.antigravity_go.update.UpdatePlugin
@@ -30,6 +31,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CrashRecorder.install(applicationContext)
         captureRouteAction(intent)
         RefreshRateCoordinator.onModeChanged = {
             runOnUiThread { applyRefreshRate() }

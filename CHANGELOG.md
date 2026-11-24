@@ -2,6 +2,14 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.26] - 2026-11-24
+
+### Added
+- **Native Crash Safety & URL SSRF Guard:** Added `CrashRecorder` to capture, redact (`LogRedactor`), and expose recent uncaught JVM crashes inside Diagnostics, plus `UrlSafetyGuard` in `DeviceGatewayHelper.openUrl` to block non-HTTP schemes and cloud/link-local metadata endpoints (`169.254.*`, `metadata.google.internal`, `100.100.100.200`).
+- **Context Ring, Turn Stopwatch & Session Triage:** Added a circular context-usage ring (`% ctx`) and **Inference Speed Tier (`Regular / Fast / Ultrafast`)** selector in the composer, upgraded the bottom streaming bar with a live `mm:ss` stopwatch + session stats (`rd · tools · tok · % hit`), added cache-hit % pills in `MessageMetricsFooter`, and added running/subagent/archived triage badges in `SessionsDrawer`.
+- **Archive & Navigation Upgrade:** Added `archived` session filtering (`Archived (N)` chip + `Archive` / `Restore` actions), docked **Previous / Next User Turn (`↑` / `↓`)** navigation buttons, **Runtime Reconnect Banner**, and **Select & Copy Messages** multi-select export sheet in `ChatScreen`.
+- **Code Save, Segmented Quota Gauges, Localization & What's New:** Added **Save** to workspace/Downloads on markdown code blocks (`_AgyCodeBlock`), replaced plain linear usage bars with 10-segment `_SegmentedQuotaBar` gauges, wired live in-app locale switching (`English`, `Bahasa Indonesia`, `中文`, `Español`), and added an in-app **What's New** dialog in Settings.
+
 ## [1.0.25] - 2026-11-24
 
 ### Added

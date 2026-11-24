@@ -76,9 +76,10 @@ class SessionsNotifier extends Notifier<SessionsState> {
     }
 
     loaded.sort(_compareSessions);
+    final active = loaded.where((s) => !s.archived).firstOrNull ?? loaded.first;
     state = SessionsState(
       sessions: loaded,
-      activeSessionId: loaded.first.id,
+      activeSessionId: active.id,
     );
   }
 
@@ -142,6 +143,21 @@ class SessionsNotifier extends Notifier<SessionsState> {
     final target = state.sessions.where((s) => s.id == id).firstOrNull;
     if (target == null) return;
     await updateSession(target.copyWith(folder: folder.trim()));
+  }
+
+  Future<void> archiveSession(String id, {bool archived = true}) async {
+    final target = state.sessions.where((s) => s.id == id).firstOrNull;
+    if (target == null) return;
+    await updateSession(target.copyWith(archived: archived));
+    if (archived && state.activeSessionId == id) {
+      final nextActive =
+          state.sessions.where((s) => !s.archived && s.id != id).firstOrNull;
+      if (nextActive != null) {
+        selectSession(nextActive.id);
+      } else {
+        await createSession();
+      }
+    }
   }
 
   Future<void> renameSession(String id, String title) async {

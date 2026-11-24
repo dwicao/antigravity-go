@@ -14,6 +14,7 @@ import android.view.WindowManager
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import io.github.dwicao.antigravity_go.runtime.CrashRecorder
 import java.io.File
 
 /**
@@ -102,6 +103,11 @@ class PerformancePlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
                     ?: call.argument<String>("text")?.toByteArray(Charsets.UTF_8)
                     ?: ByteArray(0)
                 result.success(saveBytesToDownloads(filename, mime, bytes))
+            }
+            "recentCrashLog" -> result.success(CrashRecorder.readRecent(appContext))
+            "clearCrashLog" -> {
+                CrashRecorder.clear(appContext)
+                result.success(null)
             }
             else -> result.notImplemented()
         }
