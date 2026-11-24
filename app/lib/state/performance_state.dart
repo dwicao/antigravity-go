@@ -94,6 +94,7 @@ final performanceProvider =
 
 class PerformanceNotifier extends Notifier<PerformanceState> {
   static const MethodChannel _channel = MethodChannel('agy/performance');
+  final Set<String> _dirtyKeys = <String>{};
 
   @override
   PerformanceState build() {
@@ -112,11 +113,17 @@ class PerformanceNotifier extends Notifier<PerformanceState> {
     final reduceMotion = prefs.getBool('agy_reduce_motion') ?? false;
     final reduceBlur = prefs.getBool('agy_reduce_blur') ?? false;
     state = state.copyWith(
-      refreshRateMode: mode,
-      reduceMotion: reduceMotion,
-      reduceBlur: reduceBlur,
+      refreshRateMode: _dirtyKeys.contains('agy_refresh_rate_mode')
+          ? state.refreshRateMode
+          : mode,
+      reduceMotion: _dirtyKeys.contains('agy_reduce_motion')
+          ? state.reduceMotion
+          : reduceMotion,
+      reduceBlur: _dirtyKeys.contains('agy_reduce_blur')
+          ? state.reduceBlur
+          : reduceBlur,
     );
-    await _syncNativeRefreshRate(mode);
+    await _syncNativeRefreshRate(state.refreshRateMode);
     await refreshSnapshot();
   }
 
@@ -140,6 +147,7 @@ class PerformanceNotifier extends Notifier<PerformanceState> {
   }
 
   Future<void> setRefreshRateMode(RefreshRateMode mode) async {
+    _dirtyKeys.add('agy_refresh_rate_mode');
     state = state.copyWith(refreshRateMode: mode);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('agy_refresh_rate_mode', mode.name);
@@ -148,12 +156,14 @@ class PerformanceNotifier extends Notifier<PerformanceState> {
   }
 
   Future<void> setReduceMotion(bool enabled) async {
+    _dirtyKeys.add('agy_reduce_motion');
     state = state.copyWith(reduceMotion: enabled);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('agy_reduce_motion', enabled);
   }
 
   Future<void> setReduceBlur(bool enabled) async {
+    _dirtyKeys.add('agy_reduce_blur');
     state = state.copyWith(reduceBlur: enabled);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('agy_reduce_blur', enabled);

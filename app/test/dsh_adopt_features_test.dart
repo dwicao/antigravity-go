@@ -279,9 +279,13 @@ void main() {
     );
     await tester.pump();
 
+    await tester.scrollUntilVisible(find.text('Display & Performance'), 200);
     expect(find.text('Display & Performance'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('Notifications & Background Alerts'), 200);
     expect(find.text('Notifications & Background Alerts'), findsOneWidget);
 
+    await tester.tap(find.byTooltip('Search settings'));
+    await tester.pump();
     await tester.enterText(find.byType(TextField).first, 'wallpaper');
     await tester.pump();
     expect(find.text('Follow wallpaper color (Android 12+)'), findsOneWidget);

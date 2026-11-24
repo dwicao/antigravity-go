@@ -30,6 +30,7 @@ class SettingsPage extends ConsumerStatefulWidget {
 
 class _SettingsPageState extends ConsumerState<SettingsPage> {
   String _searchQuery = '';
+  bool _searchOpen = false;
 
   bool _matches(String keywords) {
     final q = _searchQuery.trim().toLowerCase();
@@ -47,28 +48,71 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     final theme = Theme.of(context);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
+      appBar: AppBar(
+        title: _searchOpen
+            ? TextField(
+                autofocus: true,
+                onChanged: (v) => setState(() => _searchQuery = v),
+                decoration: const InputDecoration(
+                  hintText: 'Search settings, performance, wallpaper…',
+                  border: InputBorder.none,
+                  filled: false,
+                ),
+              )
+            : const Text('Settings'),
+        actions: [
+          IconButton(
+            tooltip: _searchOpen ? 'Close search' : 'Search settings',
+            icon: Icon(_searchOpen ? Icons.close : Icons.search),
+            onPressed: () => setState(() {
+              _searchOpen = !_searchOpen;
+              if (!_searchOpen) _searchQuery = '';
+            }),
+          ),
+        ],
+      ),
       body: Scrollbar(
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: TextField(
-                onChanged: (v) => setState(() => _searchQuery = v),
-                decoration: InputDecoration(
-                  hintText: 'Search settings, performance, wallpaper, diagnostics…',
-                  prefixIcon: const Icon(Icons.search, size: 18),
-                  isDense: true,
-                  suffixIcon: _searchQuery.isEmpty
-                      ? null
-                      : IconButton(
-                          icon: const Icon(Icons.close, size: 18),
-                          onPressed: () => setState(() => _searchQuery = ''),
+            if (!_searchOpen)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: InkWell(
+                  key: const ValueKey('settings-search-trigger'),
+                  borderRadius: BorderRadius.circular(14),
+                  onTap: () => setState(() => _searchOpen = true),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 10,
+                    ),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.surfaceContainerHighest
+                          .withOpacity(0.55),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.search,
+                          size: 18,
+                          color: theme.colorScheme.onSurfaceVariant,
                         ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Search settings, performance, wallpaper…',
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
               ),
-            ),
             if (_matches('google account sign in gemini enterprise plan tier'))
             Card(
               child: ListTile(
