@@ -24,10 +24,11 @@ enum ReasoningEffort {
 
 /// Quota bucket used by Antigravity's 5-hour and weekly model limits.
 enum QuotaGroup {
+  gemini('gemini', 'Gemini Models'),
   geminiArgon('gemini_argon', 'Gemini 4 Argon'),
   geminiPro('gemini_pro', 'Gemini Pro (Neon / Carbon / 3.1 Pro)'),
   geminiFlash('gemini_flash', 'Gemini Flash & Hydrogen'),
-  claudeAndGpt('claude_gpt', 'Claude & GPT'),
+  claudeAndGpt('claude_gpt', 'Claude and GPT models'),
   orchestrator('orchestrator', 'Orchestrator');
 
   const QuotaGroup(this.id, this.displayName);
@@ -90,19 +91,39 @@ class AgyModelCatalog {
       id: 'Orchestrator (Neon)',
       displayName: 'Orchestrator (Neon)',
       provider: 'Google DeepMind',
-      quotaGroup: QuotaGroup.orchestrator,
-      description: 'Plans with Gemini 4 Neon and executes with Gemini 4 Hydrogen',
+      quotaGroup: QuotaGroup.gemini,
+      description: 'Plans with Gemini 4 Neon and executes with Gemini 4 Hydrogen (shared Gemini Models quota)',
       supportsEffort: false,
       contextWindow: '1M',
       isDefault: true,
       requiresPaidPlan: true,
     ),
     AgyModelInfo(
+      id: 'gemini-pro-orchestrator',
+      displayName: 'Orchestrator (Carbon)',
+      provider: 'Google DeepMind',
+      quotaGroup: QuotaGroup.gemini,
+      description: 'Carbon orchestrator workflow sharing the Gemini Models quota',
+      supportsEffort: false,
+      contextWindow: '1M',
+      requiresPaidPlan: true,
+    ),
+    AgyModelInfo(
+      id: 'gemini-pro-orchestrator-argon',
+      displayName: 'Orchestrator (Argon)',
+      provider: 'Google DeepMind',
+      quotaGroup: QuotaGroup.gemini,
+      description: 'Argon orchestrator workflow sharing the Gemini Models quota',
+      supportsEffort: false,
+      contextWindow: '1M',
+      requiresPaidPlan: true,
+    ),
+    AgyModelInfo(
       id: 'gemini-4-neon',
       displayName: 'Gemini 4 Neon',
       provider: 'Google DeepMind',
-      quotaGroup: QuotaGroup.geminiPro,
-      description: 'Frontier reasoning model for architecture & multi-step coding',
+      quotaGroup: QuotaGroup.gemini,
+      description: 'Frontier reasoning model for architecture & multi-step coding (Low / Medium / High / XHigh)',
       supportsExtraEffort: true,
       contextWindow: '1M',
       requiresPaidPlan: true,
@@ -111,8 +132,8 @@ class AgyModelCatalog {
       id: 'gemini-4-carbon',
       displayName: 'Gemini 4 Carbon',
       provider: 'Google DeepMind',
-      quotaGroup: QuotaGroup.geminiPro,
-      description: 'Deep reasoning model for Ultra & Enterprise plans',
+      quotaGroup: QuotaGroup.gemini,
+      description: 'Deep reasoning model sharing the Gemini Models quota (Low / Medium / High)',
       contextWindow: '1M',
       requiresPaidPlan: true,
     ),
@@ -120,8 +141,8 @@ class AgyModelCatalog {
       id: 'gemini-4-argon',
       displayName: 'Gemini 4 Argon',
       provider: 'Google DeepMind',
-      quotaGroup: QuotaGroup.geminiArgon,
-      description: 'High-precision Gemini 4 Argon reasoning model',
+      quotaGroup: QuotaGroup.gemini,
+      description: 'High-precision Gemini 4 Argon model merged into Gemini Models quota (Low / Medium / High)',
       contextWindow: '1M',
       requiresPaidPlan: true,
     ),
@@ -129,8 +150,8 @@ class AgyModelCatalog {
       id: 'gemini-4-hydrogen',
       displayName: 'Gemini 4 Hydrogen',
       provider: 'Google DeepMind',
-      quotaGroup: QuotaGroup.geminiFlash,
-      description: 'Fast everyday coding, refactoring, and execution model',
+      quotaGroup: QuotaGroup.gemini,
+      description: 'Fast everyday coding, refactoring, and execution model (Low / Medium / High / XHigh)',
       supportsExtraEffort: true,
       contextWindow: '1M',
       requiresPaidPlan: true,
@@ -139,48 +160,58 @@ class AgyModelCatalog {
       id: 'gemini-3.8-flash',
       displayName: 'Gemini 3.8 Flash',
       provider: 'Google DeepMind',
-      quotaGroup: QuotaGroup.geminiFlash,
+      quotaGroup: QuotaGroup.gemini,
       description: 'Included on all plans (Free, Pro, Ultra, Enterprise)',
       contextWindow: '1M',
     ),
     AgyModelInfo(
-      id: 'claude-opus-5.5-thinking',
-      displayName: 'Claude Opus 5.5 (thinking)',
+      id: 'claude-opus-5-5-medium',
+      displayName: 'Claude Opus 5.5',
       provider: 'Anthropic',
       quotaGroup: QuotaGroup.claudeAndGpt,
-      description: 'Partner frontier model sharing the Claude & GPT quota pool',
+      description: 'Partner frontier model sharing the Claude and GPT models quota pool',
       requiresPaidPlan: true,
     ),
     AgyModelInfo(
-      id: 'claude-sonnet-5.5-thinking',
-      displayName: 'Claude Sonnet 5.5 (thinking)',
+      id: 'claude-sonnet-5-5-medium',
+      displayName: 'Claude Sonnet 5.5',
       provider: 'Anthropic',
       quotaGroup: QuotaGroup.claudeAndGpt,
-      description: 'Balanced partner coding model sharing the Claude & GPT pool',
+      description: 'Balanced partner coding model sharing the Claude and GPT models pool',
       requiresPaidPlan: true,
     ),
     AgyModelInfo(
-      id: 'claude-sonnet-4.6-thinking',
-      displayName: 'Claude Sonnet 4.6 (thinking)',
-      provider: 'Anthropic',
-      quotaGroup: QuotaGroup.claudeAndGpt,
-      description: 'Claude 4.6 thinking model',
-    ),
-    AgyModelInfo(
-      id: 'gpt-oss-120b',
-      displayName: 'GPT-OSS-120b',
+      id: 'gpt-oss-120b-medium',
+      displayName: 'GPT-OSS 120B',
       provider: 'OpenAI / Partner',
       quotaGroup: QuotaGroup.claudeAndGpt,
-      description: 'Partner open-weight model sharing the Claude & GPT pool',
+      description: 'Partner open-weight model sharing the Claude and GPT models pool',
+      supportsEffort: false,
     ),
   ];
 
-  static AgyModelInfo resolve(String modelId) {
+  static AgyModelInfo resolve(String modelId, {String? displayName}) {
     final normalized = modelId.toLowerCase().trim();
+    if (normalized == 'gemini-pro-orchestrator-neon') {
+      return builtIn.first;
+    }
     for (final m in builtIn) {
       if (m.id.toLowerCase() == normalized ||
           m.displayName.toLowerCase() == normalized) {
-        return m;
+        return displayName != null && displayName.trim().isNotEmpty
+            ? AgyModelInfo(
+                id: modelId,
+                displayName: displayName.trim(),
+                provider: m.provider,
+                quotaGroup: m.quotaGroup,
+                description: m.description,
+                supportsExtraEffort: m.supportsExtraEffort,
+                supportsEffort: m.supportsEffort,
+                contextWindow: m.contextWindow,
+                isDefault: m.isDefault,
+                requiresPaidPlan: m.requiresPaidPlan,
+              )
+            : m;
       }
     }
     final inferredContext = (normalized.contains('gemini') ||
@@ -195,10 +226,14 @@ class AgyModelCatalog {
             : '160K';
     return AgyModelInfo(
       id: modelId,
-      displayName: modelId,
+      displayName: (displayName != null && displayName.trim().isNotEmpty)
+          ? displayName.trim()
+          : modelId,
       provider: inferProvider(modelId),
       quotaGroup: inferQuotaGroup(modelId),
       description: 'Discovered model from active Antigravity account',
+      supportsExtraEffort:
+          normalized.contains('neon') || normalized.contains('hydrogen'),
       contextWindow: inferredContext,
     );
   }
@@ -212,14 +247,9 @@ class AgyModelCatalog {
 
   static QuotaGroup inferQuotaGroup(String modelId) {
     final lower = modelId.toLowerCase();
-    if (lower.contains('orchestrator')) return QuotaGroup.orchestrator;
-    if (lower.contains('argon')) return QuotaGroup.geminiArgon;
     if (lower.contains('claude') || lower.contains('gpt')) {
       return QuotaGroup.claudeAndGpt;
     }
-    if (lower.contains('hydrogen') || lower.contains('flash')) {
-      return QuotaGroup.geminiFlash;
-    }
-    return QuotaGroup.geminiPro;
+    return QuotaGroup.gemini;
   }
 }

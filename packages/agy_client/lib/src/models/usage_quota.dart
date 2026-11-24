@@ -244,6 +244,7 @@ class UsageQuotaSnapshot {
     this.discoveredModels = const [],
     this.aiCreditsRemaining,
     this.aiCreditsUsedThisCycle,
+    this.upgradeUrl,
     this.useG1Credits = false,
     this.overallFiveHourRemainingPct,
     this.overallWeeklyRemainingPct,
@@ -263,6 +264,7 @@ class UsageQuotaSnapshot {
   final List<AgyModelInfo> discoveredModels;
   final double? aiCreditsRemaining;
   final double? aiCreditsUsedThisCycle;
+  final String? upgradeUrl;
   final bool useG1Credits;
   final double? overallFiveHourRemainingPct;
   final double? overallWeeklyRemainingPct;
@@ -281,28 +283,17 @@ class UsageQuotaSnapshot {
       fetchedAt: DateTime.now(),
       entries: const [
         ModelQuotaEntry(
-          id: 'gemini-4-argon',
-          label: 'Gemini 4 Argon',
-          group: QuotaGroup.geminiArgon,
-          statusNote: '5h & Weekly window',
-        ),
-        ModelQuotaEntry(
-          id: 'gemini-pro',
-          label: 'Gemini 4 Neon & Carbon',
-          group: QuotaGroup.geminiPro,
-          statusNote: 'Shared Gemini Pro limit',
-        ),
-        ModelQuotaEntry(
-          id: 'gemini-flash',
-          label: 'Gemini 4 Hydrogen & 3.8 Flash',
-          group: QuotaGroup.geminiFlash,
-          statusNote: 'Fast & Flash limit',
+          id: 'gemini-models',
+          label: 'Gemini Models',
+          group: QuotaGroup.gemini,
+          statusNote:
+              'Neon, Carbon, Argon, Hydrogen, Orchestrator & 3.8 Flash',
         ),
         ModelQuotaEntry(
           id: 'claude-gpt',
-          label: 'Claude (5.5 / 4.6) & GPT-OSS-120b',
+          label: 'Claude and GPT models',
           group: QuotaGroup.claudeAndGpt,
-          statusNote: 'Partner models shared limit',
+          statusNote: 'Claude Opus 5.5, Sonnet 5.5 & GPT-OSS 120B',
         ),
       ],
     );

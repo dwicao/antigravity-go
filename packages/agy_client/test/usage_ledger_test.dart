@@ -37,9 +37,10 @@ void main() {
       expect(snapshot.weeklyLedgerTokens.totalTokens, 6500);
       expect(snapshot.useG1Credits, isTrue);
 
-      final argon = snapshot.entries.firstWhere((e) => e.id == 'gemini-4-argon');
-      expect(argon.fiveHourTokensUsed, 1500);
-      expect(argon.fiveHourRequests, 1);
+      final gemini = snapshot.entries.firstWhere((e) => e.id == 'gemini-models');
+      expect(gemini.fiveHourTokensUsed, 1500);
+      expect(gemini.fiveHourRequests, 1);
+      expect(gemini.weeklyTokensUsed, 1500);
 
       final claudeGpt =
           snapshot.entries.firstWhere((e) => e.id == 'claude-gpt');

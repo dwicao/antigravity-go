@@ -135,6 +135,7 @@ class UsageOutputParser {
       }
       final parts = trimmed.split(RegExp(r'\s{2,}|\t'));
       final slug = parts.first.trim();
+      final explicitDisplay = parts.length > 1 ? parts[1].trim() : null;
       if (slug.isEmpty || slug.length < 3) continue;
       final lower = slug.toLowerCase();
       final looksLikeModelSlug = lower.startsWith('gemini-') ||
@@ -143,7 +144,7 @@ class UsageOutputParser {
           lower.contains('orchestrator');
       if (!looksLikeModelSlug) continue;
       if (seen.add(lower)) {
-        results.add(AgyModelCatalog.resolve(slug));
+        results.add(AgyModelCatalog.resolve(slug, displayName: explicitDisplay));
       }
     }
     return results;
@@ -203,6 +204,18 @@ class UsageOutputParser {
     final discoveredModels = parseModelsOutput(modelLookupText.toString());
 
     final entriesById = <String, ModelQuotaEntry>{
+      'gemini-models': const ModelQuotaEntry(
+        id: 'gemini-models',
+        label: 'Gemini Models',
+        group: QuotaGroup.gemini,
+        statusNote: 'Neon, Carbon, Argon, Hydrogen, Orchestrator & 3.8 Flash',
+      ),
+      'claude-gpt': const ModelQuotaEntry(
+        id: 'claude-gpt',
+        label: 'Claude and GPT models',
+        group: QuotaGroup.claudeAndGpt,
+        statusNote: 'Claude Opus 5.5, Sonnet 5.5 & GPT-OSS 120B',
+      ),
       'gemini-4-argon': const ModelQuotaEntry(
         id: 'gemini-4-argon',
         label: 'Gemini 4 Argon',
@@ -218,12 +231,9 @@ class UsageOutputParser {
         label: 'Gemini 4 Hydrogen & 3.8 Flash',
         group: QuotaGroup.geminiFlash,
       ),
-      'claude-gpt': const ModelQuotaEntry(
-        id: 'claude-gpt',
-        label: 'Claude & GPT',
-        group: QuotaGroup.claudeAndGpt,
-      ),
     };
+    var sawMergedGeminiPool = false;
+    var sawLegacyGeminiSplit = false;
 
     double? overall5h;
     double? overallWeekly;
@@ -232,6 +242,7 @@ class UsageOutputParser {
     DateTime? overall5hResetAt;
     DateTime? overallWeeklyResetAt;
     double? creditsRemaining;
+    String? upgradeUrl;
 
     // Prefer structured `agy -p /usage --output-format json` & `/credits` payloads when present.
     for (final envelope in jsonCommands) {
@@ -258,6 +269,16 @@ class UsageOutputParser {
             targetIds = _matchQuotaEntryIds(groupDesc.toLowerCase());
           }
           if (targetIds.isEmpty) continue;
+          if (targetIds.contains('gemini-models')) {
+            sawMergedGeminiPool = true;
+          } else if (targetIds.any(
+            (id) =>
+                id == 'gemini-4-argon' ||
+                id == 'gemini-pro' ||
+                id == 'gemini-flash',
+          )) {
+            sawLegacyGeminiSplit = true;
+          }
 
           final buckets = g['buckets'];
           if (buckets is! List) continue;
@@ -329,7 +350,25 @@ class UsageOutputParser {
         creditsRemaining = double.tryParse(creditMatch.group(1)!);
       }
 
+      final upgradeMatch = RegExp(
+        r'^\s*upgrade\b.*?(https?://\S+)',
+        caseSensitive: false,
+      ).firstMatch(line);
+      if (upgradeMatch != null) {
+        upgradeUrl = upgradeMatch.group(1)?.trim();
+      }
+
       final targetIds = _matchQuotaEntryIds(lower);
+      if (targetIds.contains('gemini-models')) {
+        sawMergedGeminiPool = true;
+      } else if (targetIds.any(
+        (id) =>
+            id == 'gemini-4-argon' ||
+            id == 'gemini-pro' ||
+            id == 'gemini-flash',
+      )) {
+        sawLegacyGeminiSplit = true;
+      }
       final lineIso = _extractIsoTimestamp(line);
       final lineResetText = lineIso != null
           ? formatResetCountdown(lineIso, now: currentNow)
@@ -419,10 +458,21 @@ class UsageOutputParser {
       }
     }
 
-    // Derive overall 5h & weekly summary from per-group quotas if no standalone header existed.
+    final visibleIds = (sawMergedGeminiPool || !sawLegacyGeminiSplit)
+        ? const ['gemini-models', 'claude-gpt']
+        : const [
+            'gemini-4-argon',
+            'gemini-pro',
+            'gemini-flash',
+            'claude-gpt',
+          ];
+    final visibleEntries =
+        visibleIds.map((id) => entriesById[id]!).toList();
+
+    // Derive overall 5h & weekly summary from visible groups if no standalone header existed.
     if (overall5h == null) {
       ModelQuotaEntry? min5hEntry;
-      for (final entry in entriesById.values) {
+      for (final entry in visibleEntries) {
         final pct = entry.fiveHourRemainingPct;
         if (pct == null) continue;
         if (min5hEntry == null ||
@@ -438,7 +488,7 @@ class UsageOutputParser {
     }
     if (overallWeekly == null) {
       ModelQuotaEntry? minWeeklyEntry;
-      for (final entry in entriesById.values) {
+      for (final entry in visibleEntries) {
         final pct = entry.weeklyRemainingPct;
         if (pct == null) continue;
         if (minWeeklyEntry == null ||
@@ -453,14 +503,14 @@ class UsageOutputParser {
       }
     }
 
-    // Check availability of each quota group against discovered `agy models` when present.
+    // Check availability of each visible quota group against discovered `agy models` when present.
     if (discoveredModels.isNotEmpty) {
-      for (final key in entriesById.keys.toList()) {
-        final entry = entriesById[key]!;
+      for (var i = 0; i < visibleEntries.length; i++) {
+        final entry = visibleEntries[i];
         final matchingModels = discoveredModels
             .where((m) => m.quotaGroup == entry.group)
             .toList();
-        entriesById[key] = entry.copyWith(
+        visibleEntries[i] = entry.copyWith(
           isAvailable: matchingModels.isNotEmpty ||
               entry.fiveHourRemainingPct != null ||
               entry.weeklyRemainingPct != null,
@@ -473,7 +523,7 @@ class UsageOutputParser {
     }
 
     return ParsedUsageReport(
-      entries: entriesById.values.toList(),
+      entries: visibleEntries,
       discoveredModels: discoveredModels,
       overallFiveHourRemainingPct: overall5h,
       overallWeeklyRemainingPct: overallWeekly,
@@ -482,6 +532,7 @@ class UsageOutputParser {
       overallFiveHourResetAt: overall5hResetAt,
       overallWeeklyResetAt: overallWeeklyResetAt,
       aiCreditsRemaining: creditsRemaining,
+      upgradeUrl: upgradeUrl,
     );
   }
 
@@ -504,14 +555,14 @@ class UsageOutputParser {
   }
 
   static List<String> _matchQuotaEntryIds(String lower) {
-    if (lower.contains('argon') && !lower.contains('gemini models')) {
-      return const ['gemini-4-argon'];
-    }
     if (lower.contains('claude') || lower.contains('gpt')) {
       return const ['claude-gpt'];
     }
     if (lower.contains('gemini models')) {
-      return const ['gemini-4-argon', 'gemini-pro', 'gemini-flash'];
+      return const ['gemini-models'];
+    }
+    if (lower.contains('argon')) {
+      return const ['gemini-4-argon'];
     }
     if (lower.contains('neon') ||
         lower.contains('carbon') ||
@@ -555,6 +606,7 @@ class ParsedUsageReport {
     this.overallFiveHourResetAt,
     this.overallWeeklyResetAt,
     this.aiCreditsRemaining,
+    this.upgradeUrl,
   });
 
   final List<ModelQuotaEntry> entries;
@@ -566,4 +618,5 @@ class ParsedUsageReport {
   final DateTime? overallFiveHourResetAt;
   final DateTime? overallWeeklyResetAt;
   final double? aiCreditsRemaining;
+  final String? upgradeUrl;
 }

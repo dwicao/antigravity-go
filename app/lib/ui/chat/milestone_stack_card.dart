@@ -121,7 +121,8 @@ class _FoldedToolsBarState extends State<FoldedToolsBar> {
           children: _expanded
               ? tools.map((t) {
                   final cmdOrParam = _formatCommandOrParams(t);
-                  final dur = t.durationSeconds != null
+                    final displayTool = _MilestoneStackCardState._toolActionVerb(t);
+                    final dur = t.durationSeconds != null
                       ? ' · ${formatDurationSeconds(t.durationSeconds!)}'
                       : '';
                   return Padding(
@@ -130,7 +131,7 @@ class _FoldedToolsBarState extends State<FoldedToolsBar> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          '• ${AgySecretMask.mask(t.toolName)} (${t.state.name}$dur)',
+                          '• ${AgySecretMask.mask(displayTool)} (${t.state.name}$dur)',
                           style: theme.textTheme.labelSmall?.copyWith(
                             fontWeight: FontWeight.w700,
                             color: semantic.textPrimary,
@@ -229,7 +230,8 @@ class _MilestoneStackCardState extends State<MilestoneStackCard> {
   static String _firstLine(String raw) =>
       raw.trim().replaceAll(RegExp(r'\s+'), ' ');
 
-  static String _toolActionVerb(String toolName) {
+  static String _toolActionVerb(ChatToolStep tool) {
+    final toolName = tool.toolName.trim();
     final lower = toolName.toLowerCase();
     if (lower.contains('invoke_subagent') ||
         lower.contains('invoking subagent')) {
@@ -249,6 +251,11 @@ class _MilestoneStackCardState extends State<MilestoneStackCard> {
     if (lower.contains('run_workflow') || lower.contains('workflow')) {
       return 'Workflow';
     }
+    if (lower.contains('command_status') ||
+        lower.contains('send_command_input') ||
+        lower.contains('read_terminal')) {
+      return 'Terminal';
+    }
     if (lower.contains('run') ||
         lower.contains('command') ||
         lower.contains('terminal') ||
@@ -258,14 +265,34 @@ class _MilestoneStackCardState extends State<MilestoneStackCard> {
     }
     if (lower.contains('write') ||
         lower.contains('edit') ||
-        lower.contains('replace')) {
+        lower.contains('replace') ||
+        lower.contains('patch')) {
       return 'Edit';
     }
-    if (lower.contains('read') || lower.contains('view')) return 'Read';
+    if (lower == 'file' ||
+        lower.startsWith('file ') ||
+        lower.contains('read') ||
+        lower.contains('view') ||
+        lower.contains('analyz')) {
+      final p = tool.parameters;
+      final isEdit = p.containsKey('Replacement') ||
+          p.containsKey('ReplacementContent') ||
+          p.containsKey('oldText') ||
+          p.containsKey('newText');
+      return isEdit ? 'Edit' : 'Read';
+    }
+    if (lower.contains('list_dir') || lower.contains('list_resources')) {
+      return 'List';
+    }
+    if (lower.contains('find_by_name')) return 'Find';
+    if (lower.contains('read_url') || lower.contains('fetch')) return 'Fetch';
     if (lower.contains('grep') ||
         lower.contains('find') ||
         lower.contains('search')) {
       return 'Search';
+    }
+    if (lower.contains('../') || lower.contains('/')) {
+      return 'File';
     }
     return toolName;
   }
@@ -279,11 +306,62 @@ class _MilestoneStackCardState extends State<MilestoneStackCard> {
     if (lower.contains('send_message') || lower.contains('sending message')) {
       return Icons.send_outlined;
     }
-    return Icons.terminal;
+    final verb = _toolActionVerb(tool);
+    return switch (verb) {
+      'Read' || 'File' => Icons.description_outlined,
+      'Edit' => Icons.edit_note_rounded,
+      'Search' || 'Find' => Icons.search_rounded,
+      'List' => Icons.folder_open_outlined,
+      'Fetch' => Icons.language_rounded,
+      _ => Icons.terminal,
+    };
   }
 
   static String _toolCommandOrTarget(ChatToolStep step) =>
       ChatTurnHelpers.formatToolTarget(step);
+
+  static String _summarizeCompletedHeader(List<ChatToolStep> tools) {
+    var commands = 0;
+    var reads = 0;
+    var edits = 0;
+    var searches = 0;
+    var others = 0;
+    for (final t in tools) {
+      switch (_toolActionVerb(t)) {
+        case 'Run' || 'Terminal':
+          commands++;
+        case 'Read' || 'File' || 'List' || 'Fetch':
+          reads++;
+        case 'Edit':
+          edits++;
+        case 'Search' || 'Find':
+          searches++;
+        default:
+          others++;
+      }
+    }
+    final total = tools.length;
+    if (commands == total) {
+      return 'Ran $commands command${commands == 1 ? '' : 's'}';
+    }
+    if (reads == total) {
+      return 'Read $reads file${reads == 1 ? '' : 's'}';
+    }
+    if (edits == total) {
+      return 'Edited $edits file${edits == 1 ? '' : 's'}';
+    }
+    if (searches == total) {
+      return '$searches search${searches == 1 ? '' : 'es'}';
+    }
+    final parts = <String>[
+      if (reads > 0) '$reads read',
+      if (edits > 0) '$edits edited',
+      if (searches > 0) '$searches search',
+      if (commands > 0) '$commands ran',
+      if (others > 0) '$others other',
+    ];
+    return 'Completed $total step${total == 1 ? '' : 's'} · ${parts.join(', ')}';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -313,13 +391,20 @@ class _MilestoneStackCardState extends State<MilestoneStackCard> {
       headerLabel =
           'Spawning $runningSubagentCount subagent${runningSubagentCount == 1 ? '' : 's'} ($cmdCount total)';
     } else if (runningCount > 0) {
+      final allRunningCommands = widget.tools
+          .where((t) => t.state == ToolCallState.running)
+          .every((t) {
+        final v = _toolActionVerb(t);
+        return v == 'Run' || v == 'Terminal';
+      });
+      final unit = allRunningCommands ? 'command' : 'step';
       headerLabel =
-          'Running $runningCount command${runningCount == 1 ? '' : 's'} ($cmdCount total)';
+          'Running $runningCount $unit${runningCount == 1 ? '' : 's'} ($cmdCount total)';
     } else if (subagentSpawnCount > 0) {
       headerLabel =
           'Spawned $subagentSpawnCount subagent${subagentSpawnCount == 1 ? '' : 's'} ($cmdCount step${cmdCount == 1 ? '' : 's'})';
     } else if (cmdCount > 0) {
-      headerLabel = 'Ran $cmdCount command${cmdCount == 1 ? '' : 's'}';
+      headerLabel = _summarizeCompletedHeader(widget.tools);
     } else {
       headerLabel = '$thoughtCount thinking step${thoughtCount == 1 ? '' : 's'}';
     }
@@ -439,7 +524,7 @@ class _MilestoneStackCardState extends State<MilestoneStackCard> {
 
     final tool = toolsById[step.toolId];
     if (tool == null) return const SizedBox.shrink();
-    final verb = _toolActionVerb(tool.toolName);
+    final verb = _toolActionVerb(tool);
     final arg = _toolCommandOrTarget(tool);
     final label = arg.isEmpty ? verb : '$verb — $arg';
 

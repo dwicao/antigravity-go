@@ -77,24 +77,65 @@ Gemini 4 Argon\tGemini 4 Argon Weekly Limit\t100%\t2026-11-30T00:42:20Z
       expect(parsed.overallFiveHourResetText, '4h 48m');
       expect(parsed.overallWeeklyResetText, '6d 13h');
 
-      final pro = parsed.entries.firstWhere((e) => e.id == 'gemini-pro');
-      expect(pro.fiveHourRemainingPct, 100);
-      expect(pro.weeklyRemainingPct, 96);
-      expect(pro.fiveHourResetText, '4h 48m');
-      expect(pro.weeklyResetText, '6d 13h');
-
-      final flash = parsed.entries.firstWhere((e) => e.id == 'gemini-flash');
-      expect(flash.weeklyRemainingPct, 96);
+      final gemini = parsed.entries.firstWhere((e) => e.id == 'gemini-models');
+      expect(gemini.fiveHourRemainingPct, 100);
+      expect(gemini.weeklyRemainingPct, 96);
+      expect(gemini.fiveHourResetText, '4h 48m');
+      expect(gemini.weeklyResetText, '6d 13h');
 
       final claude = parsed.entries.firstWhere((e) => e.id == 'claude-gpt');
       expect(claude.fiveHourRemainingPct, 100);
       expect(claude.weeklyRemainingPct, 100);
       expect(claude.fiveHourResetText, '5h');
       expect(claude.weeklyResetText, '7d');
+    });
 
-      final argon = parsed.entries.firstWhere((e) => e.id == 'gemini-4-argon');
-      expect(argon.weeklyRemainingPct, 100);
-      expect(argon.weeklyResetText, '7d');
+    test('parses merged Gemini Models, Claude and GPT models, credits, upgrade URL, and 27 model display names', () {
+      const mergedReport = '''
+gemini-4-neon-high\tGemini 4 Neon (High)
+gemini-4-neon-xhigh\tGemini 4 Neon (XHigh)
+gemini-4-carbon-high\tGemini 4 Carbon (High)
+gemini-4-argon-high\tGemini 4 Argon (High)
+gemini-4-hydrogen-high\tGemini 4 Hydrogen (High)
+gemini-pro-orchestrator-neon\tOrchestrator (Neon)
+gemini-pro-orchestrator\tOrchestrator (Carbon)
+gemini-pro-orchestrator-argon\tOrchestrator (Argon)
+gemini-3.8-flash-high\tGemini 3.8 Flash (High)
+claude-opus-5-5-medium\tClaude Opus 5.5 (Medium)
+claude-sonnet-5-5-high\tClaude Sonnet 5.5 (High)
+gpt-oss-120b-medium\tGPT-OSS 120B (Medium)
+Gemini Models\tWeekly Limit Remaining\t73%\t2026-11-30T20:36:41Z
+Gemini Models\tFive Hour Limit Remaining\t27%\t2026-11-24T13:56:44Z
+Claude and GPT models\tWeekly Limit Remaining\t100%\t2026-12-01T13:50:18Z
+Claude and GPT models\tFive Hour Limit Remaining\t100%\t2026-11-24T18:50:18Z
+Remaining credits\t0
+Upgrade\thttps://antigravity.google/g1-upgrade
+''';
+      final now = DateTime.utc(2026, 11, 24, 13, 50, 0);
+      final parsed = UsageOutputParser.parseUsageText(mergedReport, now: now);
+
+      expect(parsed.entries, hasLength(2));
+      expect(parsed.overallFiveHourRemainingPct, 27);
+      expect(parsed.overallWeeklyRemainingPct, 73);
+      expect(parsed.aiCreditsRemaining, 0);
+      expect(parsed.upgradeUrl, 'https://antigravity.google/g1-upgrade');
+      expect(parsed.discoveredModels, hasLength(12));
+      expect(
+        parsed.discoveredModels.firstWhere((m) => m.id == 'gemini-pro-orchestrator').displayName,
+        'Orchestrator (Carbon)',
+      );
+      expect(
+        parsed.discoveredModels.firstWhere((m) => m.id == 'claude-opus-5-5-medium').quotaGroup,
+        QuotaGroup.claudeAndGpt,
+      );
+
+      final gemini = parsed.entries.firstWhere((e) => e.id == 'gemini-models');
+      expect(gemini.fiveHourRemainingPct, 27);
+      expect(gemini.weeklyRemainingPct, 73);
+
+      final claude = parsed.entries.firstWhere((e) => e.id == 'claude-gpt');
+      expect(claude.fiveHourRemainingPct, 100);
+      expect(claude.weeklyRemainingPct, 100);
     });
 
     test('parses JSON /usage & /credits output, avoids agy models bleed, and strips glog noise', () {
@@ -118,9 +159,9 @@ ERROR: logging before google.Init: I1124 03:36:07.747640       1 server_zerog.go
       expect(parsed.overallWeeklyRemainingPct, closeTo(99.6, 0.01));
       expect(parsed.aiCreditsRemaining, 0);
 
-      final argon = parsed.entries.firstWhere((e) => e.id == 'gemini-4-argon');
-      expect(argon.fiveHourRemainingPct, closeTo(97.9499, 0.01));
-      expect(argon.weeklyRemainingPct, closeTo(99.6, 0.01));
+      final gemini = parsed.entries.firstWhere((e) => e.id == 'gemini-models');
+      expect(gemini.fiveHourRemainingPct, closeTo(97.9499, 0.01));
+      expect(gemini.weeklyRemainingPct, closeTo(99.6, 0.01));
 
       final claude = parsed.entries.firstWhere((e) => e.id == 'claude-gpt');
       expect(claude.fiveHourRemainingPct, 100);

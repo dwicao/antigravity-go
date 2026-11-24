@@ -123,4 +123,50 @@ Remaining credits\t0
     expect(container.read(usageProvider).rawProbeOutput,
         isNot(contains('ERROR: logging before google.Init')));
   });
+
+  testWidgets('UsagePage renders merged Gemini Models, Claude & GPT pools, and Upgrade button', (tester) async {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final future5h = DateTime.now().toUtc().add(const Duration(hours: 2));
+    final futureWeek = DateTime.now().toUtc().add(const Duration(days: 6));
+    container.read(usageProvider.notifier).applyRawProbeOutput('''
+gemini-4-neon-high\tGemini 4 Neon (High)
+gemini-pro-orchestrator\tOrchestrator (Carbon)
+claude-opus-5-5-medium\tClaude Opus 5.5 (Medium)
+Gemini Models\tWeekly Limit Remaining\t73%\t${futureWeek.toIso8601String()}
+Gemini Models\tFive Hour Limit Remaining\t27%\t${future5h.toIso8601String()}
+Claude and GPT models\tWeekly Limit Remaining\t100%\t${futureWeek.toIso8601String()}
+Claude and GPT models\tFive Hour Limit Remaining\t100%\t${future5h.toIso8601String()}
+Remaining credits\t0
+Upgrade\thttps://antigravity.google/g1-upgrade
+''');
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(
+          home: UsagePage(autoRefreshOnOpen: false),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Gemini Models'), findsOneWidget);
+    expect(find.text('Claude and GPT models'), findsOneWidget);
+    expect(find.text('27%'), findsOneWidget);
+    expect(find.text('73%'), findsOneWidget);
+
+    final listScrollable = find.descendant(
+      of: find.byType(ListView),
+      matching: find.byType(Scrollable),
+    ).first;
+    await tester.scrollUntilVisible(
+      find.text('Upgrade'),
+      200,
+      scrollable: listScrollable,
+    );
+    expect(find.text('Upgrade'), findsOneWidget);
+    expect(find.text('0 credits'), findsOneWidget);
+  });
 }

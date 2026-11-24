@@ -358,11 +358,18 @@ class AcpCodec {
                   extracted.diffPreview;
           final rawParams = _asMap(update['rawInput']);
           final locs = _asList(update['locations']);
-          final paramsWithLoc = rawParams.isNotEmpty || locs.isEmpty
-              ? rawParams
-              : <String, dynamic>{
-                  'path': _asMap(locs.first)['path']?.toString() ?? '',
-                };
+          final locPath = locs.isNotEmpty
+              ? _asMap(locs.first)['path']?.toString() ?? ''
+              : '';
+          final hasExplicitPath = rawParams.containsKey('TargetFile') ||
+              rawParams.containsKey('AbsolutePath') ||
+              rawParams.containsKey('Path') ||
+              rawParams.containsKey('path') ||
+              rawParams.containsKey('file_path') ||
+              rawParams.containsKey('DirectoryPath');
+          final paramsWithLoc = !hasExplicitPath && locPath.isNotEmpty
+              ? <String, dynamic>{...rawParams, 'path': locPath}
+              : rawParams;
           return AgyToolCallEvent(
             callId: update['toolCallId']?.toString() ?? '',
             toolName: update['title']?.toString() ??

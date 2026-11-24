@@ -1,6 +1,7 @@
 import 'package:agy_client/agy_client.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../state/auth_state.dart';
 import '../../state/usage_state.dart';
@@ -240,6 +241,15 @@ class _UsagePageState extends ConsumerState<UsagePage> {
                               color: theme.colorScheme.primary,
                             ),
                           ),
+                        if (usage.upgradeUrl != null) ...[
+                          const SizedBox(width: 8),
+                          OutlinedButton.icon(
+                            onPressed: () =>
+                                launchUrl(Uri.parse(usage.upgradeUrl!)),
+                            icon: const Icon(Icons.open_in_new, size: 15),
+                            label: const Text('Upgrade'),
+                          ),
+                        ],
                       ],
                     ),
                     const SizedBox(height: 6),
@@ -456,7 +466,7 @@ class _ModelQuotaCard extends StatelessWidget {
     final theme = Theme.of(context);
     final semantic = AgySemanticColors.of(context);
     final icon = switch (entry.group) {
-      QuotaGroup.geminiArgon => Icons.auto_awesome,
+      QuotaGroup.gemini || QuotaGroup.geminiArgon => Icons.auto_awesome,
       QuotaGroup.geminiPro => Icons.diamond_outlined,
       QuotaGroup.geminiFlash => Icons.bolt_rounded,
       QuotaGroup.claudeAndGpt => Icons.hub_outlined,
@@ -483,11 +493,26 @@ class _ModelQuotaCard extends StatelessWidget {
                 Icon(icon, size: 20, color: theme.colorScheme.primary),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: Text(
-                    entry.label,
-                    style: theme.textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        entry.label,
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      if (entry.statusNote != null &&
+                          entry.statusNote!.trim().isNotEmpty)
+                        Text(
+                          entry.statusNote!,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: semantic.textSecondary,
+                          ),
+                        ),
+                    ],
                   ),
                 ),
                 if (!entry.isAvailable)

@@ -2,6 +2,14 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.22] - 2026-11-24
+
+### Updated
+- **Merged Gemini Models quota & catalog:** Updated `UsagePage`, `UsageOutputParser`, `UsageLedger`, and `AgyModelCatalog` for Antigravity's unified **Gemini Models** quota pool (`Neon`, `Carbon`, `Argon`, `Hydrogen`, `Orchestrator`, `3.8 Flash`) alongside **Claude and GPT models** (`Claude Opus 5.5`, `Sonnet 5.5`, `GPT-OSS 120B`), preserved clean tab-separated model display names, and surfaced the `Upgrade` link on the credits card.
+
+### Fixed
+- **Meaningful step summaries in chat milestones:** Cleaned noisy `file ../../../../../../...` paths in `MilestoneStackCard` & `FoldedToolsBar` via `ChatTurnHelpers.formatDisplayPath` so file reads, searches, and edits display concise repo-relative filenames with optional line ranges and accurate step summary headers (`Read N files`, `Completed X steps · ...`).
+
 ## [1.0.21] - 2026-11-24
 
 ### Fixed

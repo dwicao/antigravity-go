@@ -216,37 +216,150 @@ class ChatTurnHelpers {
     return 'Subagent';
   }
 
-  static String formatToolTarget(ChatToolStep step) {
-    if (step.parameters.isEmpty) return '';
-    final p = step.parameters;
-    final direct = p['CommandLine'] ??
-        p['command'] ??
-        p['TargetFile'] ??
-        p['AbsolutePath'] ??
-        p['Path'] ??
-        p['path'] ??
-        p['Query'];
-    if (direct != null && direct.toString().trim().isNotEmpty) {
-      return direct.toString().trim().replaceAll(RegExp(r'\s+'), ' ');
+  /// Formats noisy relative (`../../../../../../...`) or long device paths into
+  /// a concise, meaningful path where the filename & parent context stay visible.
+  static String formatDisplayPath(String rawPath) {
+    var clean = rawPath.trim().replaceAll(RegExp(r'\s+'), ' ');
+    if (clean.isEmpty) return '';
+    if (clean.startsWith('file://')) {
+      clean = clean.substring('file://'.length);
     }
-    final role = (p['Role'] ?? p['role'])?.toString().trim() ?? '';
-    final typeName = (p['TypeName'] ?? p['typeName'])?.toString().trim() ?? '';
-    if (role.isNotEmpty && typeName.isNotEmpty) {
-      return '$role ($typeName)';
-    }
-    if (role.isNotEmpty) return role;
-    if (typeName.isNotEmpty) return typeName;
 
-    final subagentMeta = p['Name'] ??
-        p['name'] ??
-        p['Description'] ??
-        p['description'] ??
-        p['Action'] ??
-        p['action'] ??
-        p['Recipient'] ??
-        p['recipient'];
-    if (subagentMeta != null && subagentMeta.toString().trim().isNotEmpty) {
-      return subagentMeta.toString().trim().replaceAll(RegExp(r'\s+'), ' ');
+    // Resolve `.` / `..` segments cleanly and drop meaningless leading `..` escapes.
+    final rawSegments = clean.split('/');
+    final normalized = <String>[];
+    for (final seg in rawSegments) {
+      if (seg.isEmpty || seg == '.') continue;
+      if (seg == '..') {
+        if (normalized.isNotEmpty) normalized.removeLast();
+        continue;
+      }
+      normalized.add(seg);
+    }
+    if (normalized.isEmpty) return '';
+
+    // Strip verbose Android storage / app-private prefixes when deeper path exists.
+    List<String> trimmed = normalized;
+    final projectsIdx = trimmed.indexOf('Projects');
+    if (projectsIdx >= 0 && projectsIdx + 2 < trimmed.length) {
+      trimmed = trimmed.sublist(projectsIdx + 2);
+    } else if (trimmed.length > 3 &&
+        trimmed[0] == 'storage' &&
+        trimmed[1] == 'emulated' &&
+        trimmed[2] == '0') {
+      trimmed = trimmed.sublist(3);
+    } else if (trimmed.length > 1 && trimmed[0] == 'sdcard') {
+      trimmed = trimmed.sublist(1);
+    } else {
+      final runtimeIdx = trimmed.indexOf('runtime');
+      if (runtimeIdx >= 0 &&
+          runtimeIdx + 2 < trimmed.length &&
+          trimmed[runtimeIdx + 1] == 'workspace') {
+        trimmed = trimmed.sublist(runtimeIdx + 2);
+      }
+    }
+
+    if (trimmed.length > 4) {
+      return '…/${trimmed.sublist(trimmed.length - 3).join('/')}';
+    }
+    return trimmed.join('/');
+  }
+
+  static String formatToolTarget(ChatToolStep step) {
+    final p = step.parameters;
+    if (p.isNotEmpty) {
+      final directCmd = p['CommandLine'] ?? p['command'] ?? p['cmd'];
+      if (directCmd != null && directCmd.toString().trim().isNotEmpty) {
+        return directCmd.toString().trim().replaceAll(RegExp(r'\s+'), ' ');
+      }
+
+      final startLine = p['StartLine'] ?? p['start_line'] ?? p['line'];
+      final endLine = p['EndLine'] ?? p['end_line'];
+      final lineSuffix = startLine != null
+          ? (endLine != null && endLine != startLine
+              ? ':$startLine-$endLine'
+              : ':$startLine')
+          : '';
+
+      final rawFilePath = p['TargetFile'] ??
+          p['AbsolutePath'] ??
+          p['Path'] ??
+          p['path'] ??
+          p['file_path'] ??
+          p['filePath'] ??
+          p['File'] ??
+          p['file'] ??
+          p['ItemPath'];
+      if (rawFilePath != null && rawFilePath.toString().trim().isNotEmpty) {
+        final formatted = formatDisplayPath(rawFilePath.toString());
+        if (formatted.isNotEmpty) return '$formatted$lineSuffix';
+      }
+
+      final nodePaths = p['NodePaths'];
+      if (nodePaths is List && nodePaths.isNotEmpty) {
+        final items = nodePaths
+            .map((e) => formatDisplayPath(e.toString()))
+            .where((s) => s.isNotEmpty)
+            .take(2)
+            .toList();
+        if (items.isNotEmpty) return items.join(', ');
+      }
+
+      final dirPath = p['DirectoryPath'] ?? p['SearchDirectory'];
+      final query = (p['Query'] ?? p['query'])?.toString().trim() ?? '';
+      final pattern = (p['Pattern'] ?? p['pattern'])?.toString().trim() ?? '';
+      if (query.isNotEmpty) {
+        final inDir = dirPath != null
+            ? formatDisplayPath(dirPath.toString())
+            : (p['SearchPath'] != null
+                ? formatDisplayPath(p['SearchPath'].toString())
+                : '');
+        return inDir.isNotEmpty ? '"$query" in $inDir' : '"$query"';
+      }
+      if (pattern.isNotEmpty) {
+        final inDir = dirPath != null
+            ? formatDisplayPath(dirPath.toString())
+            : '';
+        return inDir.isNotEmpty ? '$pattern in $inDir' : pattern;
+      }
+      if (dirPath != null && dirPath.toString().trim().isNotEmpty) {
+        final formattedDir = formatDisplayPath(dirPath.toString());
+        if (formattedDir.isNotEmpty) return formattedDir;
+      }
+
+      final url = (p['Url'] ?? p['url'])?.toString().trim() ?? '';
+      if (url.isNotEmpty) return url;
+
+      final role = (p['Role'] ?? p['role'])?.toString().trim() ?? '';
+      final typeName = (p['TypeName'] ?? p['typeName'])?.toString().trim() ?? '';
+      if (role.isNotEmpty && typeName.isNotEmpty) {
+        return '$role ($typeName)';
+      }
+      if (role.isNotEmpty) return role;
+      if (typeName.isNotEmpty) return typeName;
+
+      final subagentMeta = p['Name'] ??
+          p['name'] ??
+          p['Description'] ??
+          p['description'] ??
+          p['Action'] ??
+          p['action'] ??
+          p['Recipient'] ??
+          p['recipient'] ??
+          p['CommandId'];
+      if (subagentMeta != null && subagentMeta.toString().trim().isNotEmpty) {
+        return subagentMeta.toString().trim().replaceAll(RegExp(r'\s+'), ' ');
+      }
+    }
+
+    // Fallback when ACP puts `file ../../../../../../...` directly into toolName.
+    final titleMatch = RegExp(
+      r'^(?:file|read|view|edit|write|analy[sz]e)\s+(.+)$',
+      caseSensitive: false,
+    ).firstMatch(step.toolName.trim());
+    if (titleMatch != null) {
+      final candidate = formatDisplayPath(titleMatch.group(1)!);
+      if (candidate.isNotEmpty) return candidate;
     }
     return '';
   }

@@ -754,4 +754,74 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     await tester.pump(const Duration(milliseconds: 500));
   });
+
+  testWidgets(
+      'MilestoneStackCard formats noisy ../../../../ file steps meaningfully and summarizes mixed tool steps',
+      (tester) async {
+    expect(
+      ChatTurnHelpers.formatDisplayPath(
+        '../../../../../../storage/emulated/0/Projects/antigravity-go/app/lib/ui/chat/chat_screen.dart',
+      ),
+      'app/lib/ui/chat/chat_screen.dart',
+    );
+    expect(ChatTurnHelpers.formatDisplayPath('../../../../../../'), '');
+
+    final msg = ChatMessage(
+      id: 'm-tools-clean',
+      role: ChatRole.assistant,
+      text: 'Inspected codebase.',
+      createdAt: DateTime(2026, 11, 24, 14, 0),
+      completedAt: DateTime(2026, 11, 24, 14, 1),
+      tools: const [
+        ChatToolStep(
+          id: 't-read-rel',
+          toolName: 'file ../../../../../../storage/emulated/0/Projects/antigravity-go/app/lib/state/chat_state.dart',
+          parameters: {},
+          state: ToolCallState.completed,
+        ),
+        ChatToolStep(
+          id: 't-read-empty',
+          toolName: 'file ../../../../../../',
+          parameters: {
+            'AbsolutePath':
+                '/storage/emulated/0/Projects/antigravity-go/app/lib/ui/usage/usage_page.dart',
+            'StartLine': 10,
+            'EndLine': 50,
+          },
+          state: ToolCallState.completed,
+        ),
+        ChatToolStep(
+          id: 't-grep',
+          toolName: 'grep_search',
+          parameters: {
+            'Query': 'QuotaGroup',
+            'SearchPath': '../../../../../../storage/emulated/0/Projects/antigravity-go/packages/agy_client',
+          },
+          state: ToolCallState.completed,
+        ),
+      ],
+      steps: const [
+        ChatMilestoneStep(id: 'ms-1', kind: ChatMilestoneKind.tool, toolId: 't-read-rel'),
+        ChatMilestoneStep(id: 'ms-2', kind: ChatMilestoneKind.tool, toolId: 't-read-empty'),
+        ChatMilestoneStep(id: 'ms-3', kind: ChatMilestoneKind.tool, toolId: 't-grep'),
+      ],
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: MessageBubble(message: msg),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Completed 3 steps · 2 read, 1 search'), findsOneWidget);
+    expect(find.textContaining('file ../../../../../../'), findsNothing);
+    expect(find.text('Read — app/lib/state/chat_state.dart'), findsOneWidget);
+    expect(find.text('Read — app/lib/ui/usage/usage_page.dart:10-50'), findsOneWidget);
+    expect(find.text('Search — "QuotaGroup" in packages/agy_client'), findsOneWidget);
+  });
 }

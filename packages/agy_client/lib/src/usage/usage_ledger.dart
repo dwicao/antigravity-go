@@ -103,15 +103,37 @@ class UsageLedger {
     final baseEntries = liveProbe?.entries ?? UsageQuotaSnapshot.initial().entries;
 
     final enriched = baseEntries.map((entry) {
-      final fiveH = sumWindow(fiveHourWindow, group: entry.group, now: current);
-      final week = sumWindow(weeklyWindow, group: entry.group, now: current);
-      final fiveHReqs =
-          countRequests(fiveHourWindow, group: entry.group, now: current);
-      final weekReqs =
-          countRequests(weeklyWindow, group: entry.group, now: current);
+      bool matchesGroup(QuotaGroup recordGroup) {
+        if (recordGroup == entry.group) return true;
+        if (entry.group == QuotaGroup.gemini) {
+          return recordGroup == QuotaGroup.geminiArgon ||
+              recordGroup == QuotaGroup.geminiPro ||
+              recordGroup == QuotaGroup.geminiFlash ||
+              recordGroup == QuotaGroup.orchestrator;
+        }
+        return false;
+      }
+
+      final fiveHCutoff = current.subtract(fiveHourWindow);
+      final weekCutoff = current.subtract(weeklyWindow);
+      var fiveHTotal = const TokenUsage();
+      var weekTotal = const TokenUsage();
+      var fiveHReqs = 0;
+      var weekReqs = 0;
+      for (final r in _records) {
+        if (!matchesGroup(r.quotaGroup)) continue;
+        if (!r.timestamp.isBefore(weekCutoff)) {
+          weekTotal = weekTotal + r.usage;
+          weekReqs++;
+        }
+        if (!r.timestamp.isBefore(fiveHCutoff)) {
+          fiveHTotal = fiveHTotal + r.usage;
+          fiveHReqs++;
+        }
+      }
       return entry.copyWith(
-        fiveHourTokensUsed: fiveH.totalTokens,
-        weeklyTokensUsed: week.totalTokens,
+        fiveHourTokensUsed: fiveHTotal.totalTokens,
+        weeklyTokensUsed: weekTotal.totalTokens,
         fiveHourRequests: fiveHReqs,
         weeklyRequests: weekReqs,
       );
@@ -122,6 +144,7 @@ class UsageLedger {
       fetchedAt: current,
       discoveredModels: liveProbe?.discoveredModels ?? const [],
       aiCreditsRemaining: liveProbe?.aiCreditsRemaining,
+      upgradeUrl: liveProbe?.upgradeUrl,
       useG1Credits: useG1Credits,
       overallFiveHourRemainingPct: liveProbe?.overallFiveHourRemainingPct,
       overallWeeklyRemainingPct: liveProbe?.overallWeeklyRemainingPct,
