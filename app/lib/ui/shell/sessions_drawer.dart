@@ -426,8 +426,12 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
                           ),
                           Text(
                             auth.isAuthenticated
-                                ? auth.planTier.label
-                                : 'Connect Google Account',
+                                ? (auth.savedAccounts.length > 1
+                                    ? '${auth.planTier.label} · ${auth.savedAccounts.length} accounts'
+                                    : auth.planTier.label)
+                                : (auth.savedAccounts.isNotEmpty
+                                    ? '${auth.savedAccounts.length} saved account(s)'
+                                    : 'Connect Google Account'),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: theme.textTheme.labelSmall?.copyWith(

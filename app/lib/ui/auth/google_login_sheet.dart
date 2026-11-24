@@ -1,5 +1,7 @@
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:agy_client/agy_client.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -94,6 +96,56 @@ class _GoogleLoginSheetState extends ConsumerState<GoogleLoginSheet> {
               ],
             ),
             const SizedBox(height: 16),
+            if (auth.savedAccounts.isNotEmpty) ...[
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.people_alt_outlined,
+                            size: 18,
+                            color: theme.colorScheme.primary,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Saved Accounts (${auth.savedAccounts.length})',
+                              style: theme.textTheme.titleSmall?.copyWith(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                          TextButton.icon(
+                            onPressed: _submitting ? null : _handleImport,
+                            icon: const Icon(Icons.person_add_alt_1, size: 16),
+                            label: const Text('Add'),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      for (final acct in auth.savedAccounts)
+                        _SavedAccountTile(
+                          account: acct,
+                          busy: _submitting,
+                          onSwitch: acct.isActive
+                              ? null
+                              : () => _handleSwitchAccount(acct),
+                          onExport: () => _handleExport(
+                            accountId: acct.id,
+                            accountLabel: acct.displayName,
+                          ),
+                          onRemove: () => _handleRemoveAccount(acct),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
             if (auth.isAuthenticated) ...[
               Card(
                 child: Padding(
@@ -392,7 +444,7 @@ class _GoogleLoginSheetState extends ConsumerState<GoogleLoginSheet> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      'Export an AES-256 encrypted backup to sign in instantly on another Android device without repeating Google OAuth.',
+                      'Export an AES-256 encrypted backup or import one or multiple `.agycreds.json` files to switch between accounts without repeating Google OAuth.',
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
                       ),
@@ -403,7 +455,9 @@ class _GoogleLoginSheetState extends ConsumerState<GoogleLoginSheet> {
                         if (auth.isAuthenticated) ...[
                           Expanded(
                             child: FilledButton.tonalIcon(
-                              onPressed: _submitting ? null : _handleExport,
+                              onPressed: _submitting
+                                  ? null
+                                  : () => _handleExport(),
                               icon: const Icon(
                                 Icons.file_upload_outlined,
                                 size: 18,
@@ -435,18 +489,26 @@ class _GoogleLoginSheetState extends ConsumerState<GoogleLoginSheet> {
     );
   }
 
-  Future<String?> _promptPassphrase({required bool isExport}) async {
+  Future<String?> _promptPassphrase({
+    required bool isExport,
+    String? subjectLabel,
+    String? initialError,
+  }) async {
     final passCtrl = TextEditingController();
     final confirmCtrl = TextEditingController();
     var obscure = true;
-    String? errorText;
+    String? errorText = initialError;
 
     final result = await showDialog<String>(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialogState) => AlertDialog(
           title: Text(
-            isExport ? 'Protect Credentials Backup' : 'Decrypt Credentials',
+            isExport
+                ? 'Protect Credentials Backup'
+                : (subjectLabel != null
+                    ? 'Decrypt $subjectLabel'
+                    : 'Decrypt Credentials'),
           ),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -454,8 +516,8 @@ class _GoogleLoginSheetState extends ConsumerState<GoogleLoginSheet> {
             children: [
               Text(
                 isExport
-                    ? 'Enter a passphrase (min 4 characters) to encrypt your OAuth tokens with AES-256-GCM.'
-                    : 'Enter the passphrase used when exporting this credentials backup.',
+                    ? 'Enter a passphrase (min 4 characters) to encrypt ${subjectLabel ?? "your OAuth tokens"} with AES-256-GCM.'
+                    : 'Enter the passphrase used when exporting ${subjectLabel ?? "this credentials backup"}.',
                 style: Theme.of(ctx).textTheme.bodySmall,
               ),
               const SizedBox(height: 12),
@@ -520,21 +582,84 @@ class _GoogleLoginSheetState extends ConsumerState<GoogleLoginSheet> {
     return result;
   }
 
-  Future<void> _handleExport() async {
-    final passphrase = await _promptPassphrase(isExport: true);
+  Future<void> _handleSwitchAccount(SavedAccount account) async {
+    setState(() => _submitting = true);
+    try {
+      await ref.read(authProvider.notifier).switchAccount(account.id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Switched to ${account.displayName}')),
+      );
+    } catch (e) {
+      if (mounted) {
+        final msg = e is PlatformException ? (e.message ?? e.code) : '$e';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Switch failed: $msg')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  Future<void> _handleRemoveAccount(SavedAccount account) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove Saved Account'),
+        content: Text(
+          'Remove ${account.displayName} from saved accounts on this device?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+    setState(() => _submitting = true);
+    try {
+      await ref.read(authProvider.notifier).removeAccount(account.id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Removed ${account.displayName}')),
+      );
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  Future<void> _handleExport({
+    String? accountId,
+    String? accountLabel,
+  }) async {
+    final passphrase = await _promptPassphrase(
+      isExport: true,
+      subjectLabel: accountLabel,
+    );
     if (passphrase == null || !mounted) return;
     setState(() => _submitting = true);
     try {
       final bundle = await ref
           .read(authProvider.notifier)
-          .exportCredentialsBundle(passphrase);
+          .exportCredentialsBundle(passphrase, accountId: accountId);
       if (!mounted) return;
       final stamp = DateTime.now()
           .toIso8601String()
           .replaceAll(':', '')
           .split('.')
           .first;
-      final filename = 'antigravity-creds-$stamp.agycreds.json';
+      final slug = (accountLabel ?? 'creds')
+          .toLowerCase()
+          .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
+          .replaceAll(RegExp(r'^-|-$'), '');
+      final filename = 'antigravity-${slug.isEmpty ? "creds" : slug}-$stamp.agycreds.json';
       await showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
@@ -609,13 +734,13 @@ class _GoogleLoginSheetState extends ConsumerState<GoogleLoginSheet> {
   }
 
   Future<void> _handleImport() async {
-    String? bundleJson;
+    final entries = <({String label, String json})>[];
     final sourceChoice = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Import Credentials'),
         content: const Text(
-          'Select your exported `.agycreds.json` file or paste the encrypted bundle text.',
+          'Pick one or more `.agycreds.json` files to add multiple accounts, or paste an encrypted bundle.',
         ),
         actions: [
           TextButton(
@@ -630,7 +755,7 @@ class _GoogleLoginSheetState extends ConsumerState<GoogleLoginSheet> {
           FilledButton.icon(
             onPressed: () => Navigator.of(ctx).pop('file'),
             icon: const Icon(Icons.folder_open_outlined, size: 16),
-            label: const Text('Pick File'),
+            label: const Text('Pick File(s)'),
           ),
         ],
       ),
@@ -638,15 +763,26 @@ class _GoogleLoginSheetState extends ConsumerState<GoogleLoginSheet> {
     if (sourceChoice == null || !mounted) return;
 
     if (sourceChoice == 'file') {
-      final files = await FilePicker.pickFiles(type: FileType.any);
+      final files = await FilePicker.pickFiles(
+        type: FileType.any,
+        allowMultiple: true,
+      );
       if (files.isEmpty || !mounted) return;
-      final path = files.first.path;
-      if (path != null && path.isNotEmpty) {
-        bundleJson = await File(path).readAsString();
+      for (final f in files) {
+        String? raw;
+        final path = f.path;
+        if (path != null && path.isNotEmpty) {
+          raw = await File(path).readAsString();
+        } else if (f.bytes != null) {
+          raw = utf8.decode(f.bytes!);
+        }
+        if (raw != null && raw.trim().isNotEmpty) {
+          entries.add((label: f.name, json: raw.trim()));
+        }
       }
     } else {
       final ctrl = TextEditingController();
-      bundleJson = await showDialog<String>(
+      final pasted = await showDialog<String>(
         context: context,
         builder: (ctx) => AlertDialog(
           title: const Text('Paste Encrypted Bundle'),
@@ -671,39 +807,150 @@ class _GoogleLoginSheetState extends ConsumerState<GoogleLoginSheet> {
         ),
       );
       ctrl.dispose();
+      if (pasted != null && pasted.trim().isNotEmpty) {
+        entries.add((label: 'pasted bundle', json: pasted.trim()));
+      }
     }
 
-    if (bundleJson == null || bundleJson.trim().isEmpty || !mounted) return;
-    final passphrase = await _promptPassphrase(isExport: false);
-    if (passphrase == null || !mounted) return;
+    if (entries.isEmpty || !mounted) return;
+
+    String? sharedPassphrase;
+    final importedLabels = <String>[];
+    String? firstError;
 
     setState(() => _submitting = true);
     try {
-      final imported = await ref
-          .read(authProvider.notifier)
-          .importCredentialsBundle(
-            bundleJson: bundleJson.trim(),
-            passphrase: passphrase,
-          );
+      for (var i = 0; i < entries.length; i++) {
+        final entry = entries[i];
+        final isLast = i == entries.length - 1;
+        var passphrase = sharedPassphrase;
+        String? retryError;
+        var done = false;
+
+        while (!done && mounted) {
+          if (passphrase == null) {
+            passphrase = await _promptPassphrase(
+              isExport: false,
+              subjectLabel: entries.length > 1 ? entry.label : null,
+              initialError: retryError,
+            );
+            if (passphrase == null) break;
+          }
+          try {
+            final res = await ref
+                .read(authProvider.notifier)
+                .importCredentialsBundle(
+                  bundleJson: entry.json,
+                  passphrase: passphrase,
+                  activate: isLast,
+                );
+            sharedPassphrase = passphrase;
+            importedLabels.add(res.email ?? entry.label);
+            done = true;
+          } catch (e) {
+            final msg = e is PlatformException ? (e.message ?? e.code) : '$e';
+            if (msg.toLowerCase().contains('passphrase')) {
+              retryError = 'Wrong passphrase for ${entry.label}';
+              passphrase = null;
+              sharedPassphrase = null;
+            } else {
+              firstError ??= '${entry.label}: $msg';
+              done = true;
+            }
+          }
+        }
+      }
+
       if (!mounted) return;
       final messenger = ScaffoldMessenger.of(context);
-      Navigator.of(context).pop();
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-            'Imported ${imported.restoredFiles} file(s)${imported.email != null ? " · ${imported.email}" : ""}',
-          ),
-        ),
-      );
-    } catch (e) {
-      if (mounted) {
-        final msg = e is PlatformException ? (e.message ?? e.code) : '$e';
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Import failed: $msg')),
+      if (importedLabels.isNotEmpty) {
+        final summary = importedLabels.length == 1
+            ? 'Imported account: ${importedLabels.first}'
+            : 'Imported ${importedLabels.length} accounts (${importedLabels.join(', ')})';
+        messenger.showSnackBar(SnackBar(content: Text(summary)));
+      } else if (firstError != null) {
+        messenger.showSnackBar(
+          SnackBar(content: Text('Import failed: $firstError')),
         );
       }
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
+  }
+}
+
+class _SavedAccountTile extends StatelessWidget {
+  const _SavedAccountTile({
+    required this.account,
+    required this.busy,
+    required this.onSwitch,
+    required this.onExport,
+    required this.onRemove,
+  });
+
+  final SavedAccount account;
+  final bool busy;
+  final VoidCallback? onSwitch;
+  final VoidCallback onExport;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return ListTile(
+      dense: true,
+      contentPadding: EdgeInsets.zero,
+      onTap: busy ? null : onSwitch,
+      leading: Icon(
+        account.isActive ? Icons.verified_user : Icons.account_circle_outlined,
+        size: 22,
+        color: account.isActive ? Colors.green : theme.colorScheme.primary,
+      ),
+      title: Text(
+        account.displayName,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: theme.textTheme.bodyMedium?.copyWith(
+          fontWeight: account.isActive ? FontWeight.w700 : FontWeight.w500,
+        ),
+      ),
+      subtitle: Text(
+        account.gcpProject != null
+            ? '${account.method.label} · ${account.gcpProject}'
+            : '${account.method.label} · ${account.planTier.label}',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: theme.textTheme.bodySmall?.copyWith(
+          color: theme.colorScheme.onSurfaceVariant,
+        ),
+      ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (account.isActive)
+            const Chip(
+              visualDensity: VisualDensity.compact,
+              label: Text('Active', style: TextStyle(fontSize: 11)),
+            )
+          else
+            TextButton(
+              onPressed: busy ? null : onSwitch,
+              child: const Text('Switch'),
+            ),
+          PopupMenuButton<String>(
+            enabled: !busy,
+            iconSize: 18,
+            onSelected: (v) {
+              if (v == 'export') onExport();
+              if (v == 'remove') onRemove();
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'export', child: Text('Export')),
+              PopupMenuItem(value: 'remove', child: Text('Remove')),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 }

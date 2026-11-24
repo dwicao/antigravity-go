@@ -700,6 +700,12 @@ class AcpSessionManager(
             runCatching { active.process.destroyForcibly() }
             emitTurnExitOnce(turnId, 137, active)
         }
+        count += closeAllLiveWorkers(notifyTasks = false)
+        if (count > 0) onTasksChanged()
+        return count
+    }
+
+    fun closeAllLiveWorkers(notifyTasks: Boolean = true): Int {
         val workersToStop = synchronized(liveWorkers) {
             val list = liveWorkers.values.toList()
             liveWorkers.clear()
@@ -707,14 +713,13 @@ class AcpSessionManager(
         }
         for (worker in workersToStop) {
             worker.cancelled.set(true)
-            count++
             worker.terminals.values.forEach { term ->
                 runCatching { term.process.destroyForcibly() }
             }
             runCatching { worker.writer.close() }
             runCatching { worker.process.destroyForcibly() }
         }
-        if (count > 0) onTasksChanged()
-        return count
+        if (notifyTasks && workersToStop.isNotEmpty()) onTasksChanged()
+        return workersToStop.size
     }
 }

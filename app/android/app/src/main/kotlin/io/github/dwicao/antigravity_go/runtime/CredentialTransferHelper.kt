@@ -102,6 +102,44 @@ object CredentialTransferHelper {
         return result
     }
 
+    private val settingsPreserveRelPaths = setOf(
+        ".gemini/antigravity-cli/settings.json",
+        ".gemini/config/config.json",
+    )
+
+    private fun lockOwnerOnly(file: File) {
+        runCatching {
+            file.setReadable(false, false)
+            file.setReadable(true, true)
+            file.setWritable(false, false)
+            file.setWritable(true, true)
+        }
+    }
+
+    fun clearActiveCredentialFiles(homeDir: File) {
+        val collected = collectCredentialFiles(homeDir)
+        for (relPath in collected.keys) {
+            if (relPath in settingsPreserveRelPaths) continue
+            runCatching { File(homeDir, relPath).delete() }
+        }
+        // Also ensure well-known auth files are deleted even if empty.
+        for (relPath in explicitRelativePaths) {
+            if (relPath in settingsPreserveRelPaths) continue
+            runCatching { File(homeDir, relPath).delete() }
+        }
+        // Strip account-specific GCP / provider overrides from settings.json while preserving MCP & tool rules.
+        val settingsFile = File(homeDir, ".gemini/antigravity-cli/settings.json")
+        if (settingsFile.isFile) {
+            runCatching {
+                val obj = JSONObject(settingsFile.readText())
+                val changed = obj.remove("gcp") != null || obj.remove("modelProvider") != null
+                if (changed) {
+                    settingsFile.writeText(obj.toString(2))
+                }
+            }
+        }
+    }
+
     fun restoreCredentialFiles(
         homeDir: File,
         files: Map<String, String>,
@@ -128,12 +166,7 @@ object CredentialTransferHelper {
             target.parentFile?.mkdirs()
             target.writeBytes(bytes)
             // Lock restored secret files down to owner-only permissions on Android/POSIX.
-            runCatching {
-                target.setReadable(false, false)
-                target.setReadable(true, true)
-                target.setWritable(false, false)
-                target.setWritable(true, true)
-            }
+            lockOwnerOnly(target)
             restored++
         }
 
@@ -149,12 +182,7 @@ object CredentialTransferHelper {
                 obj.put("email", fallbackEmail)
             }
             marker.writeText(obj.toString(2))
-            runCatching {
-                marker.setReadable(false, false)
-                marker.setReadable(true, true)
-                marker.setWritable(false, false)
-                marker.setWritable(true, true)
-            }
+            lockOwnerOnly(marker)
         }
         return restored
     }
@@ -213,13 +241,18 @@ object CredentialTransferHelper {
         }
     }
 
-    fun exportEncryptedBundle(
-        homeDir: File,
+    data class DecryptedPayload(
+        val files: Map<String, String>,
+        val geminiApiKey: String?,
+        val authProfileJson: String?,
+    )
+
+    fun encryptPayload(
+        files: Map<String, String>,
         passphrase: String,
         geminiApiKey: String? = null,
         authProfileJson: String? = null,
     ): String {
-        val files = collectCredentialFiles(homeDir)
         if (files.isEmpty() && geminiApiKey.isNullOrBlank() && authProfileJson.isNullOrBlank()) {
             throw IllegalStateException("No saved credentials found on this device")
         }
@@ -240,11 +273,10 @@ object CredentialTransferHelper {
         return encrypt(payload.toString().toByteArray(Charsets.UTF_8), passphrase)
     }
 
-    fun importEncryptedBundle(
-        homeDir: File,
+    fun decryptPayload(
         bundleJson: String,
         passphrase: String,
-    ): Map<String, Any?> {
+    ): DecryptedPayload {
         val plainBytes = decrypt(bundleJson, passphrase)
         val payload = runCatching { JSONObject(String(plainBytes, Charsets.UTF_8)) }.getOrNull()
             ?: throw IllegalArgumentException("Corrupted credential payload")
@@ -256,18 +288,45 @@ object CredentialTransferHelper {
             val k = keys.next()
             fileMap[k] = filesObj.getString(k)
         }
-
         val authProfileJson = payload.optString("authProfileJson").takeIf { it.isNotBlank() }
-        val fallbackEmail = authProfileJson?.let { raw ->
+        val geminiApiKey = payload.optString("geminiApiKey").takeIf { it.isNotBlank() }
+        return DecryptedPayload(
+            files = fileMap,
+            geminiApiKey = geminiApiKey,
+            authProfileJson = authProfileJson,
+        )
+    }
+
+    fun exportEncryptedBundle(
+        homeDir: File,
+        passphrase: String,
+        geminiApiKey: String? = null,
+        authProfileJson: String? = null,
+    ): String {
+        val files = collectCredentialFiles(homeDir)
+        return encryptPayload(
+            files = files,
+            passphrase = passphrase,
+            geminiApiKey = geminiApiKey,
+            authProfileJson = authProfileJson,
+        )
+    }
+
+    fun importEncryptedBundle(
+        homeDir: File,
+        bundleJson: String,
+        passphrase: String,
+    ): Map<String, Any?> {
+        val decoded = decryptPayload(bundleJson, passphrase)
+        val fallbackEmail = decoded.authProfileJson?.let { raw ->
             runCatching { JSONObject(raw).optString("email").takeIf { it.isNotBlank() } }.getOrNull()
         }
-        val restoredCount = restoreCredentialFiles(homeDir, fileMap, fallbackEmail)
-        val geminiApiKey = payload.optString("geminiApiKey").takeIf { it.isNotBlank() }
+        val restoredCount = restoreCredentialFiles(homeDir, decoded.files, fallbackEmail)
 
         return mapOf(
             "restoredFiles" to restoredCount,
-            "geminiApiKey" to geminiApiKey,
-            "authProfileJson" to authProfileJson,
+            "geminiApiKey" to decoded.geminiApiKey,
+            "authProfileJson" to decoded.authProfileJson,
         )
     }
 

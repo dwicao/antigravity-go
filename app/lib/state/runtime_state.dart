@@ -42,6 +42,8 @@ final runtimeProvider =
 
 class RuntimeNotifier extends Notifier<RuntimeUiState> {
   StreamSubscription<RuntimeEvent>? _sub;
+  bool _autoStartAttempted = false;
+  bool _manuallyStopped = false;
 
   @override
   RuntimeUiState build() {
@@ -67,7 +69,18 @@ class RuntimeNotifier extends Notifier<RuntimeUiState> {
   }
 
   Future<void> refresh() async {
-    final status = await RuntimeBridge.instance.getStatus();
+    var status = await RuntimeBridge.instance.getStatus();
+    if (status.phase == RuntimePhase.stopped &&
+        !_autoStartAttempted &&
+        !_manuallyStopped) {
+      _autoStartAttempted = true;
+      try {
+        await RuntimeBridge.instance.startService();
+        status = await RuntimeBridge.instance.getStatus();
+      } catch (_) {
+        // Keep stopped state if foreground service launch is unavailable.
+      }
+    }
     final logs = await RuntimeBridge.instance.getLogs();
     final tasks = await RuntimeBridge.instance.getBackgroundTasks();
     if (!ref.mounted) return;
@@ -77,6 +90,18 @@ class RuntimeNotifier extends Notifier<RuntimeUiState> {
       initialized: true,
       backgroundTasks: tasks,
     );
+  }
+
+  Future<void> ensureRunningOnResume() async {
+    if (_manuallyStopped ||
+        !state.initialized ||
+        state.busy ||
+        state.status.phase != RuntimePhase.stopped) {
+      return;
+    }
+    try {
+      await start();
+    } catch (_) {}
   }
 
   Future<bool> cancelBackgroundTask(String taskId) async {
@@ -92,6 +117,8 @@ class RuntimeNotifier extends Notifier<RuntimeUiState> {
   }
 
   Future<void> installAndStart() async {
+    _manuallyStopped = false;
+    _autoStartAttempted = true;
     state = state.copyWith(busy: true);
     try {
       await RuntimeBridge.instance.installRuntime();
@@ -103,6 +130,8 @@ class RuntimeNotifier extends Notifier<RuntimeUiState> {
   }
 
   Future<void> start() async {
+    _manuallyStopped = false;
+    _autoStartAttempted = true;
     state = state.copyWith(busy: true);
     try {
       await RuntimeBridge.instance.startService();
@@ -113,6 +142,7 @@ class RuntimeNotifier extends Notifier<RuntimeUiState> {
   }
 
   Future<void> stop() async {
+    _manuallyStopped = true;
     state = state.copyWith(busy: true);
     try {
       await RuntimeBridge.instance.stopService();

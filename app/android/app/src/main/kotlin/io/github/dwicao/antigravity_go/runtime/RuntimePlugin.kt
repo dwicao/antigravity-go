@@ -124,12 +124,38 @@ class RuntimePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChann
                 val passphrase = call.argument<String>("passphrase") ?: ""
                 val apiKey = call.argument<String>("geminiApiKey")
                 val authProfile = call.argument<String>("authProfileJson")
-                runAsync(result) { ctrl.exportCredentials(passphrase, apiKey, authProfile) }
+                val accountId = call.argument<String>("accountId")
+                runAsync(result) { ctrl.exportCredentials(passphrase, apiKey, authProfile, accountId) }
             }
             "importCredentials" -> {
                 val bundleJson = call.argument<String>("bundleJson") ?: ""
                 val passphrase = call.argument<String>("passphrase") ?: ""
-                runAsync(result) { ctrl.importCredentials(bundleJson, passphrase) }
+                val activate = call.argument<Boolean>("activate") ?: true
+                val authProfile = call.argument<String>("authProfileJson")
+                val apiKey = call.argument<String>("geminiApiKey")
+                runAsync(result) {
+                    ctrl.importCredentials(bundleJson, passphrase, activate, authProfile, apiKey)
+                }
+            }
+            "listAccounts" -> {
+                val authProfile = call.argument<String>("authProfileJson")
+                val apiKey = call.argument<String>("geminiApiKey")
+                runAsync(result) { ctrl.listAccounts(authProfile, apiKey) }
+            }
+            "syncActiveAccount" -> {
+                val authProfile = call.argument<String>("authProfileJson")
+                val apiKey = call.argument<String>("geminiApiKey")
+                runAsync(result) { ctrl.syncActiveAccount(authProfile, apiKey) }
+            }
+            "switchAccount" -> {
+                val accountId = call.argument<String>("accountId") ?: ""
+                val authProfile = call.argument<String>("authProfileJson")
+                val apiKey = call.argument<String>("geminiApiKey")
+                runAsync(result) { ctrl.switchAccount(accountId, authProfile, apiKey) }
+            }
+            "removeAccount" -> {
+                val accountId = call.argument<String>("accountId") ?: ""
+                runAsync(result) { ctrl.removeAccount(accountId) }
             }
             "runCapture" -> {
                 val args = call.argument<List<String>>("args") ?: emptyList()

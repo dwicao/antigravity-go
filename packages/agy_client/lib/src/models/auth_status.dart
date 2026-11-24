@@ -33,6 +33,71 @@ enum AntigravityPlanTier {
   }
 }
 
+/// Metadata for a saved / imported account stored in the on-device multi-account vault.
+class SavedAccount {
+  const SavedAccount({
+    required this.id,
+    required this.displayName,
+    this.email,
+    this.method = AgyAuthMethod.googlePersonal,
+    this.planTier = AntigravityPlanTier.free,
+    this.gcpProject,
+    this.gcpLocation,
+    this.hasApiKey = false,
+    this.fileCount = 0,
+    this.addedAt,
+    this.lastUsedAt,
+    this.isActive = false,
+  });
+
+  final String id;
+  final String displayName;
+  final String? email;
+  final AgyAuthMethod method;
+  final AntigravityPlanTier planTier;
+  final String? gcpProject;
+  final String? gcpLocation;
+  final bool hasApiKey;
+  final int fileCount;
+  final DateTime? addedAt;
+  final DateTime? lastUsedAt;
+  final bool isActive;
+
+  factory SavedAccount.fromMap(Map<Object?, Object?> map) {
+    final methodId = map['method']?.toString();
+    final method = AgyAuthMethod.values.firstWhere(
+      (m) => m.id == methodId,
+      orElse: () => AgyAuthMethod.googlePersonal,
+    );
+    final tierRaw = map['planTier']?.toString();
+    final tier = AntigravityPlanTier.values.firstWhere(
+      (t) => t.name == tierRaw,
+      orElse: () => AntigravityPlanTier.fromString(tierRaw),
+    );
+    final email = map['email']?.toString();
+    final addedMs = (map['addedAtMs'] as num?)?.toInt();
+    final usedMs = (map['lastUsedAtMs'] as num?)?.toInt();
+    return SavedAccount(
+      id: map['id']?.toString() ?? '',
+      displayName: map['displayName']?.toString() ?? email ?? 'Google Account',
+      email: email,
+      method: method,
+      planTier: tier,
+      gcpProject: map['gcpProject']?.toString(),
+      gcpLocation: map['gcpLocation']?.toString(),
+      hasApiKey: map['hasApiKey'] as bool? ?? false,
+      fileCount: (map['fileCount'] as num?)?.toInt() ?? 0,
+      addedAt: addedMs != null && addedMs > 0
+          ? DateTime.fromMillisecondsSinceEpoch(addedMs)
+          : null,
+      lastUsedAt: usedMs != null && usedMs > 0
+          ? DateTime.fromMillisecondsSinceEpoch(usedMs)
+          : null,
+      isActive: map['isActive'] as bool? ?? false,
+    );
+  }
+}
+
 /// Current authentication state of Antigravity Go.
 class AgyAuthStatus {
   const AgyAuthStatus({
@@ -48,10 +113,13 @@ class AgyAuthStatus {
     this.pendingOAuthUrl,
     this.awaitingCode = false,
     this.errorMessage,
+    this.savedAccounts = const [],
   });
 
-  const AgyAuthStatus.signedOut({this.initialized = true})
-      : isAuthenticated = false,
+  const AgyAuthStatus.signedOut({
+    this.initialized = true,
+    this.savedAccounts = const [],
+  })  : isAuthenticated = false,
         method = AgyAuthMethod.googlePersonal,
         planTier = AntigravityPlanTier.free,
         email = null,
@@ -75,6 +143,7 @@ class AgyAuthStatus {
   final String? pendingOAuthUrl;
   final bool awaitingCode;
   final String? errorMessage;
+  final List<SavedAccount> savedAccounts;
 
   AgyAuthStatus copyWith({
     bool? isAuthenticated,
@@ -89,6 +158,7 @@ class AgyAuthStatus {
     String? pendingOAuthUrl,
     bool? awaitingCode,
     String? errorMessage,
+    List<SavedAccount>? savedAccounts,
   }) {
     return AgyAuthStatus(
       isAuthenticated: isAuthenticated ?? this.isAuthenticated,
@@ -103,6 +173,7 @@ class AgyAuthStatus {
       pendingOAuthUrl: pendingOAuthUrl ?? this.pendingOAuthUrl,
       awaitingCode: awaitingCode ?? this.awaitingCode,
       errorMessage: errorMessage ?? this.errorMessage,
+      savedAccounts: savedAccounts ?? this.savedAccounts,
     );
   }
 

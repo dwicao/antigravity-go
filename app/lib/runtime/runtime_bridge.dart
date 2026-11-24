@@ -117,11 +117,13 @@ class RuntimeBridge {
     required String passphrase,
     String? geminiApiKey,
     String? authProfileJson,
+    String? accountId,
   }) async {
     final res = await _method.invokeMethod<String>('exportCredentials', {
       'passphrase': passphrase,
       'geminiApiKey': ?geminiApiKey,
       'authProfileJson': ?authProfileJson,
+      'accountId': ?accountId,
     });
     if (res == null || res.isEmpty) {
       throw StateError('Failed to create credentials bundle');
@@ -132,12 +134,84 @@ class RuntimeBridge {
   Future<Map<String, dynamic>> importCredentials({
     required String bundleJson,
     required String passphrase,
+    bool activate = true,
+    String? authProfileJson,
+    String? geminiApiKey,
   }) async {
     final raw =
         await _method.invokeMethod<Map<Object?, Object?>>('importCredentials', {
       'bundleJson': bundleJson,
       'passphrase': passphrase,
+      'activate': activate,
+      'authProfileJson': ?authProfileJson,
+      'geminiApiKey': ?geminiApiKey,
     });
+    if (raw == null) return const {};
+    return raw.map((k, v) => MapEntry(k.toString(), v));
+  }
+
+  Future<List<Map<String, dynamic>>> listAccounts({
+    String? authProfileJson,
+    String? geminiApiKey,
+  }) async {
+    try {
+      final raw = await _method.invokeMethod<List<Object?>>('listAccounts', {
+        'authProfileJson': ?authProfileJson,
+        'geminiApiKey': ?geminiApiKey,
+      });
+      if (raw == null) return const [];
+      return raw
+          .whereType<Map<Object?, Object?>>()
+          .map((m) => m.map((k, v) => MapEntry(k.toString(), v)))
+          .toList();
+    } on MissingPluginException {
+      return const [];
+    }
+  }
+
+  Future<Map<String, dynamic>?> syncActiveAccount({
+    String? authProfileJson,
+    String? geminiApiKey,
+  }) async {
+    try {
+      final raw = await _method.invokeMethod<Map<Object?, Object?>>(
+        'syncActiveAccount',
+        {
+          'authProfileJson': ?authProfileJson,
+          'geminiApiKey': ?geminiApiKey,
+        },
+      );
+      if (raw == null) return null;
+      return raw.map((k, v) => MapEntry(k.toString(), v));
+    } on MissingPluginException {
+      return null;
+    }
+  }
+
+  Future<Map<String, dynamic>> switchAccount({
+    required String accountId,
+    String? authProfileJson,
+    String? geminiApiKey,
+  }) async {
+    final raw = await _method.invokeMethod<Map<Object?, Object?>>(
+      'switchAccount',
+      {
+        'accountId': accountId,
+        'authProfileJson': ?authProfileJson,
+        'geminiApiKey': ?geminiApiKey,
+      },
+    );
+    if (raw == null) return const {};
+    return raw.map((k, v) => MapEntry(k.toString(), v));
+  }
+
+  Future<Map<String, dynamic>> removeAccount({
+    required String accountId,
+  }) async {
+    final raw = await _method.invokeMethod<Map<Object?, Object?>>(
+      'removeAccount',
+      {'accountId': accountId},
+    );
     if (raw == null) return const {};
     return raw.map((k, v) => MapEntry(k.toString(), v));
   }

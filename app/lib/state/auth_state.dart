@@ -60,16 +60,16 @@ class AuthNotifier extends Notifier<AgyAuthStatus> {
   }
 
   Future<void> refresh({bool verifyWithCli = false}) async {
+    final svc = ref.read(authServiceProvider);
     final wasTurnVerified = state.isAuthenticated;
-    final loaded = await ref
-        .read(authServiceProvider)
-        .loadStatus(verifyWithCli: verifyWithCli);
+    final loaded = await svc.loadStatus(verifyWithCli: verifyWithCli);
     if (!ref.mounted) return;
-    if (!verifyWithCli && wasTurnVerified && !loaded.isAuthenticated) {
-      state = state.copyWith(initialized: true);
-      return;
-    }
-    state = loaded.copyWith(initialized: true);
+    final nextBase = (!verifyWithCli && wasTurnVerified && !loaded.isAuthenticated)
+        ? state.copyWith(initialized: true)
+        : loaded.copyWith(initialized: true);
+    final accounts = await svc.listAccounts(activeStatus: nextBase);
+    if (!ref.mounted) return;
+    state = nextBase.copyWith(savedAccounts: accounts);
   }
 
   /// Marks state authenticated immediately when an `agy` turn or model probe succeeds.
@@ -85,11 +85,14 @@ class AuthNotifier extends Notifier<AgyAuthStatus> {
       lastAuthenticatedAt: DateTime.now(),
     );
     state = next;
-    unawaited(ref.read(authServiceProvider).cacheStatus(next));
+    final svc = ref.read(authServiceProvider);
+    unawaited(svc.cacheStatus(next));
+    unawaited(svc.syncActiveAccount(next));
     Future.microtask(() => refresh(verifyWithCli: false));
   }
 
   Future<void> startGoogleSignIn({bool enterprise = false}) async {
+    await ref.read(authServiceProvider).syncActiveAccount(state);
     state = state.copyWith(
       awaitingCode: true,
       errorMessage: null,
@@ -125,32 +128,64 @@ class AuthNotifier extends Notifier<AgyAuthStatus> {
   }
 
   Future<void> signOut() async {
-    await ref.read(authServiceProvider).cacheStatus(
-          const AgyAuthStatus.signedOut(initialized: true),
-        );
-    await ref.read(authServiceProvider).signOut();
-    state = const AgyAuthStatus.signedOut(initialized: true);
+    final svc = ref.read(authServiceProvider);
+    await svc.signOut();
+    final accounts = await svc.listAccounts();
+    if (!ref.mounted) return;
+    state = AgyAuthStatus.signedOut(
+      initialized: true,
+      savedAccounts: accounts,
+    );
   }
 
-  Future<String> exportCredentialsBundle(String passphrase) {
+  Future<String> exportCredentialsBundle(
+    String passphrase, {
+    String? accountId,
+  }) {
     return ref.read(authServiceProvider).exportCredentialsBundle(
           passphrase: passphrase,
           currentStatus: state,
+          accountId: accountId,
         );
   }
 
-  Future<({int restoredFiles, String? email})> importCredentialsBundle({
+  Future<({int restoredFiles, String? email, SavedAccount? account})>
+      importCredentialsBundle({
     required String bundleJson,
     required String passphrase,
+    bool activate = true,
   }) async {
     final res = await ref.read(authServiceProvider).importCredentialsBundle(
           bundleJson: bundleJson,
           passphrase: passphrase,
+          activate: activate,
+          currentStatus: state,
+        );
+    await refresh(verifyWithCli: false);
+    if (activate && state.isAuthenticated) {
+      await ref.read(usageProvider.notifier).refreshFromRuntime();
+    }
+    return res;
+  }
+
+  Future<void> switchAccount(String accountId) async {
+    await ref.read(authServiceProvider).switchAccount(
+          accountId: accountId,
+          currentStatus: state,
         );
     await refresh(verifyWithCli: false);
     if (state.isAuthenticated) {
       await ref.read(usageProvider.notifier).refreshFromRuntime();
     }
-    return res;
+  }
+
+  Future<void> removeAccount(String accountId) async {
+    final wasActive =
+        await ref.read(authServiceProvider).removeAccount(accountId);
+    await refresh(verifyWithCli: false);
+    if (wasActive && !state.isAuthenticated) {
+      // Clear cached live quota output when active account is removed.
+      await ref.read(usageProvider.notifier).refreshFromRuntime();
+    }
   }
 }

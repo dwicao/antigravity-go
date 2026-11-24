@@ -6,6 +6,7 @@ import io.github.dwicao.antigravity_go.phone.PhoneControlCoordinator
 import io.github.dwicao.antigravity_go.phone.SafetyGate
 import io.github.dwicao.antigravity_go.runtime.CrashRecorder
 import io.github.dwicao.antigravity_go.runtime.CredentialTransferHelper
+import io.github.dwicao.antigravity_go.runtime.MultiAccountVault
 import io.github.dwicao.antigravity_go.runtime.UrlSafetyGuard
 import java.io.File
 import org.junit.Assert.assertEquals
@@ -154,5 +155,91 @@ class DshAdoptFeaturesTest {
         assertFalse(CredentialTransferHelper.isAllowedRelativePath("/data/local/tmp/foo"))
         assertFalse(CredentialTransferHelper.isAllowedRelativePath(".ssh/id_rsa"))
         assertTrue(CredentialTransferHelper.isAllowedRelativePath(".gemini/antigravity-cli/antigravity-oauth-token"))
+    }
+
+    @Test
+    fun multiAccountVaultImportsMultipleBundlesAndSwitchesCleanly() {
+        val aliceSrc = tempFolder.newFolder("alice-src")
+        val aliceToken = File(aliceSrc, ".gemini/antigravity-cli/antigravity-oauth-token")
+        aliceToken.parentFile?.mkdirs()
+        aliceToken.writeText("""{"token":"alice-secret"}""")
+        File(aliceSrc, ".gemini/antigravity-go-auth.json").writeText(
+            """{"isAuthenticated":true,"email":"alice@gmail.com","method":"oauth-personal"}"""
+        )
+        val aliceBundle = CredentialTransferHelper.exportEncryptedBundle(
+            homeDir = aliceSrc,
+            passphrase = "pass-a",
+            authProfileJson = """{"isAuthenticated":true,"email":"alice@gmail.com","planTier":"pro"}""",
+        )
+
+        val bobSrc = tempFolder.newFolder("bob-src")
+        val bobToken = File(bobSrc, ".gemini/antigravity-cli/antigravity-oauth-token")
+        bobToken.parentFile?.mkdirs()
+        bobToken.writeText("""{"token":"bob-secret"}""")
+        File(bobSrc, ".gemini/oauth_creds.json").writeText("""{"refresh_token":"bob-refresh"}""")
+        val bobBundle = CredentialTransferHelper.exportEncryptedBundle(
+            homeDir = bobSrc,
+            passphrase = "pass-b",
+            authProfileJson = """{"isAuthenticated":true,"email":"bob@gmail.com","planTier":"ultra"}""",
+        )
+
+        // Device already signed in as carol@gmail.com before importing Alice & Bob.
+        val deviceHome = tempFolder.newFolder("device-home")
+        val accountsDir = tempFolder.newFolder("device-accounts")
+        val carolToken = File(deviceHome, ".gemini/antigravity-cli/antigravity-oauth-token")
+        carolToken.parentFile?.mkdirs()
+        carolToken.writeText("""{"token":"carol-secret"}""")
+        File(deviceHome, ".gemini/antigravity-go-auth.json").writeText(
+            """{"isAuthenticated":true,"email":"carol@gmail.com","method":"oauth-personal"}"""
+        )
+
+        val aliceImport = MultiAccountVault.importEncryptedBundle(
+            homeDir = deviceHome,
+            accountsDir = accountsDir,
+            bundleJson = aliceBundle,
+            passphrase = "pass-a",
+            activate = false,
+            currentAuthProfileJson = """{"isAuthenticated":true,"email":"carol@gmail.com"}""",
+        )
+        assertEquals(false, aliceImport["activated"])
+
+        val bobImport = MultiAccountVault.importEncryptedBundle(
+            homeDir = deviceHome,
+            accountsDir = accountsDir,
+            bundleJson = bobBundle,
+            passphrase = "pass-b",
+            activate = true,
+            currentAuthProfileJson = """{"isAuthenticated":true,"email":"carol@gmail.com"}""",
+        )
+        assertEquals(true, bobImport["activated"])
+
+        val accounts = MultiAccountVault.listAccounts(deviceHome, accountsDir)
+        assertEquals(3, accounts.size)
+        val activeAcct = accounts.first { it["isActive"] == true }
+        assertEquals("bob@gmail.com", activeAcct["email"])
+        assertTrue(File(deviceHome, ".gemini/antigravity-cli/antigravity-oauth-token").readText().contains("bob-secret"))
+
+        // Switching to Alice clears Bob-only files (oauth_creds.json) and restores Alice's tokens.
+        val aliceMeta = accounts.first { it["email"] == "alice@gmail.com" }
+        MultiAccountVault.switchAccount(deviceHome, accountsDir, aliceMeta["id"] as String)
+        assertTrue(File(deviceHome, ".gemini/antigravity-cli/antigravity-oauth-token").readText().contains("alice-secret"))
+        assertFalse(File(deviceHome, ".gemini/oauth_creds.json").exists())
+
+        // Exporting Carol's inactive slot works without switching away from Alice.
+        val carolMeta = accounts.first { it["email"] == "carol@gmail.com" }
+        val carolExport = MultiAccountVault.exportAccount(
+            homeDir = deviceHome,
+            accountsDir = accountsDir,
+            accountId = carolMeta["id"] as String,
+            passphrase = "pass-c",
+        )
+        val decryptedCarol = CredentialTransferHelper.decryptPayload(carolExport, "pass-c")
+        assertTrue(decryptedCarol.files.containsKey(".gemini/antigravity-cli/antigravity-oauth-token"))
+
+        // Removing active Alice clears home auth files while keeping Bob & Carol.
+        val removeRes = MultiAccountVault.removeAccount(deviceHome, accountsDir, aliceMeta["id"] as String)
+        assertEquals(true, removeRes["wasActive"])
+        assertFalse(File(deviceHome, ".gemini/antigravity-cli/antigravity-oauth-token").exists())
+        assertEquals(2, MultiAccountVault.listAccounts(deviceHome, accountsDir).size)
     }
 }

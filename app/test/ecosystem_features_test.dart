@@ -18,6 +18,7 @@ import 'package:antigravity_go/ui/settings/settings_page.dart';
 import 'package:antigravity_go/ui/shell/sessions_drawer.dart';
 import 'package:antigravity_go/ui/usage/usage_page.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -49,9 +50,15 @@ class _FakeSessionsNotifier extends SessionsNotifier {
 class _FakeAuthNotifier extends AuthNotifier {
   _FakeAuthNotifier(this._initial);
   final AgyAuthStatus _initial;
+  String? switchedAccountId;
 
   @override
   AgyAuthStatus build() => _initial;
+
+  @override
+  Future<void> switchAccount(String accountId) async {
+    switchedAccountId = accountId;
+  }
 }
 
 ThemeData _testTheme() => AgyTheme.build(
@@ -561,5 +568,113 @@ Weekly limit: 70% remaining (resets in 5d)
 
     expect(find.text('Export'), findsOneWidget);
     expect(find.text('Import Credentials'), findsOneWidget);
+  });
+
+  testWidgets('GoogleLoginSheet lists Saved Accounts and switches accounts on tap', (tester) async {
+    final fakeAuth = _FakeAuthNotifier(
+      const AgyAuthStatus(
+        isAuthenticated: true,
+        email: 'alice@gmail.com',
+        displayName: 'alice@gmail.com',
+        planTier: AntigravityPlanTier.pro,
+        savedAccounts: [
+          SavedAccount(
+            id: 'acct-alice',
+            email: 'alice@gmail.com',
+            displayName: 'alice@gmail.com',
+            planTier: AntigravityPlanTier.pro,
+            isActive: true,
+          ),
+          SavedAccount(
+            id: 'acct-bob',
+            email: 'bob@gmail.com',
+            displayName: 'bob@gmail.com',
+            planTier: AntigravityPlanTier.ultra,
+            isActive: false,
+          ),
+        ],
+      ),
+    );
+    final container = ProviderContainer(
+      overrides: [authProvider.overrideWith(() => fakeAuth)],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          theme: _testTheme(),
+          home: const Scaffold(body: GoogleLoginSheet()),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Saved Accounts (2)'), findsOneWidget);
+    expect(find.text('bob@gmail.com'), findsOneWidget);
+    expect(find.text('Active'), findsOneWidget);
+    expect(find.text('Switch'), findsOneWidget);
+
+    await tester.tap(find.text('Switch'));
+    await tester.pump();
+
+    expect(fakeAuth.switchedAccountId, 'acct-bob');
+  });
+
+  testWidgets('RuntimeNotifier auto-starts stopped local runtime on launch', (tester) async {
+    var phase = 'stopped';
+    var startCalls = 0;
+    const channel = MethodChannel('agy/runtime');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      switch (call.method) {
+        case 'status':
+          return {
+            'phase': phase,
+            'statusMessage': phase == 'running' ? 'Running on device' : 'Stopped',
+          };
+        case 'start':
+          startCalls++;
+          phase = 'running';
+          return null;
+        case 'stop':
+          phase = 'stopped';
+          return null;
+        case 'logs':
+          return const <String>[];
+        case 'backgroundTasks':
+          return const <Map<String, Object?>>[];
+        default:
+          return null;
+      }
+    });
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null);
+    });
+
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final initial = container.read(runtimeProvider);
+    expect(initial.initialized, isFalse);
+
+    await tester.runAsync(() async {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    });
+
+    final afterLaunch = container.read(runtimeProvider);
+    expect(startCalls, 1);
+    expect(afterLaunch.initialized, isTrue);
+    expect(afterLaunch.status.phase, RuntimePhase.running);
+
+    // Explicit stop must not be immediately auto-restarted on resume.
+    await tester.runAsync(() async {
+      await container.read(runtimeProvider.notifier).stop();
+      await container.read(runtimeProvider.notifier).ensureRunningOnResume();
+    });
+    expect(startCalls, 1);
+    expect(container.read(runtimeProvider).status.phase, RuntimePhase.stopped);
   });
 }

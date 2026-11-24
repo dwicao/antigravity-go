@@ -64,6 +64,7 @@ class RuntimeController private constructor(private val appContext: Context) {
     val bashFile: File get() = File(binDir, "bash")
     val ptyHostFile: File get() = File(binDir, "pty-host")
     val homeDir: File get() = File(runtimeDir, "home")
+    val accountsDir: File get() = File(runtimeDir, "accounts")
     val workspaceDir: File get() = File(runtimeDir, "workspace")
     val settingsFile: File get() = File(homeDir, ".gemini/antigravity-cli/settings.json")
     val authMarkerFile: File get() = File(homeDir, ".gemini/antigravity-go-auth.json")
@@ -419,16 +420,31 @@ class RuntimeController private constructor(private val appContext: Context) {
             emitStatus()
             return
         }
+        if (phase == RuntimePhase.running && AgyService.running) {
+            emitStatus()
+            return
+        }
         phase = RuntimePhase.starting
         statusMessage = "Starting Antigravity foreground harness…"
         emitStatus()
 
         val intent = Intent(appContext, AgyService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            appContext.startForegroundService(intent)
-        } else {
-            appContext.startService(intent)
+        val started = runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                appContext.startForegroundService(intent)
+            } else {
+                appContext.startService(intent)
+            }
         }
+        if (started.isFailure) {
+            phase = RuntimePhase.stopped
+            errorMessage = started.exceptionOrNull()?.message
+            statusMessage = "Tap Start to launch foreground service"
+            log("Deferred foreground service start: ${errorMessage ?: "not allowed"}")
+            emitStatus()
+            return
+        }
+        errorMessage = null
         phase = RuntimePhase.running
         statusMessage = if (safeMode) "Running (Safe Mode)" else "Running on device"
         log(statusMessage)
@@ -1006,12 +1022,9 @@ am start -a android.intent.action.VIEW -d "${'$'}url" >/dev/null 2>&1 || echo "[
     }
 
     fun logout() {
-        val geminiDir = File(homeDir, ".gemini")
+        acpManager.closeAllLiveWorkers()
+        MultiAccountVault.clearActiveAccountOnLogout(homeDir, accountsDir)
         writeAuthMarker(false)
-        File(geminiDir, "oauth_creds.json").delete()
-        File(geminiDir, "google_accounts.json").delete()
-        File(geminiDir, "antigravity-cli/credentials.json").delete()
-        File(geminiDir, "antigravity_state.pbtxt").delete()
         if (binaryFile.exists()) {
             runCatching { runCapture(listOf("-p", "/logout", "--output-format", "text"), null, emptyMap(), 8) }
         }
@@ -1022,12 +1035,15 @@ am start -a android.intent.action.VIEW -d "${'$'}url" >/dev/null 2>&1 || echo "[
         passphrase: String,
         geminiApiKey: String? = null,
         authProfileJson: String? = null,
+        accountId: String? = null,
     ): String {
-        val bundle = CredentialTransferHelper.exportEncryptedBundle(
+        val bundle = MultiAccountVault.exportAccount(
             homeDir = homeDir,
+            accountsDir = accountsDir,
+            accountId = accountId,
             passphrase = passphrase,
-            geminiApiKey = geminiApiKey,
-            authProfileJson = authProfileJson,
+            fallbackGeminiApiKey = geminiApiKey,
+            fallbackAuthProfileJson = authProfileJson,
         )
         log("Exported encrypted credentials bundle")
         return bundle
@@ -1036,14 +1052,77 @@ am start -a android.intent.action.VIEW -d "${'$'}url" >/dev/null 2>&1 || echo "[
     fun importCredentials(
         bundleJson: String,
         passphrase: String,
+        activate: Boolean = true,
+        currentAuthProfileJson: String? = null,
+        currentGeminiApiKey: String? = null,
     ): Map<String, Any?> {
-        val res = CredentialTransferHelper.importEncryptedBundle(
+        val res = MultiAccountVault.importEncryptedBundle(
             homeDir = homeDir,
+            accountsDir = accountsDir,
             bundleJson = bundleJson,
             passphrase = passphrase,
+            activate = activate,
+            currentAuthProfileJson = currentAuthProfileJson,
+            currentGeminiApiKey = currentGeminiApiKey,
         )
+        if (activate) {
+            acpManager.closeAllLiveWorkers()
+        }
         val count = res["restoredFiles"] ?: 0
-        log("Imported encrypted credentials bundle ($count file(s) restored)")
+        log("Imported encrypted credentials bundle ($count file(s) restored, activate=$activate)")
+        return res
+    }
+
+    fun listAccounts(
+        currentAuthProfileJson: String? = null,
+        currentGeminiApiKey: String? = null,
+    ): List<Map<String, Any?>> =
+        MultiAccountVault.listAccounts(
+            homeDir = homeDir,
+            accountsDir = accountsDir,
+            currentAuthProfileJson = currentAuthProfileJson,
+            currentGeminiApiKey = currentGeminiApiKey,
+        )
+
+    fun syncActiveAccount(
+        authProfileJson: String? = null,
+        geminiApiKey: String? = null,
+    ): Map<String, Any?>? =
+        MultiAccountVault.syncActiveAccount(
+            homeDir = homeDir,
+            accountsDir = accountsDir,
+            authProfileJson = authProfileJson,
+            geminiApiKey = geminiApiKey,
+        )
+
+    fun switchAccount(
+        accountId: String,
+        currentAuthProfileJson: String? = null,
+        currentGeminiApiKey: String? = null,
+    ): Map<String, Any?> {
+        val res = MultiAccountVault.switchAccount(
+            homeDir = homeDir,
+            accountsDir = accountsDir,
+            accountId = accountId,
+            currentAuthProfileJson = currentAuthProfileJson,
+            currentGeminiApiKey = currentGeminiApiKey,
+        )
+        acpManager.closeAllLiveWorkers()
+        val acct = res["account"] as? Map<*, *>
+        log("Switched active account to ${acct?.get("displayName") ?: accountId}")
+        return res
+    }
+
+    fun removeAccount(accountId: String): Map<String, Any?> {
+        val res = MultiAccountVault.removeAccount(
+            homeDir = homeDir,
+            accountsDir = accountsDir,
+            accountId = accountId,
+        )
+        if (res["wasActive"] == true) {
+            acpManager.closeAllLiveWorkers()
+        }
+        log("Removed saved account $accountId")
         return res
     }
 

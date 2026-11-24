@@ -7,6 +7,7 @@ import '../../state/automations_state.dart';
 import '../../state/chat_state.dart';
 import '../../state/performance_state.dart';
 import '../../state/permissions_state.dart';
+import '../../state/runtime_state.dart';
 import '../../state/sessions_state.dart';
 import '../../state/settings_state.dart';
 import '../../state/side_panel_state.dart';
@@ -78,6 +79,9 @@ class _HomeShellState extends ConsumerState<HomeShell>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _lifecycleState = state;
+    if (state == AppLifecycleState.resumed) {
+      ref.read(runtimeProvider.notifier).ensureRunningOnResume();
+    }
   }
 
   Future<void> _consumeInitialShortcut() async {
