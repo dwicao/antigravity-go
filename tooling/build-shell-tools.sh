@@ -68,24 +68,69 @@ build_for_arch() {
     alpine:3.20 /bin/sh -euxc '
       apk add --no-cache build-base bzip2 linux-headers ncurses-dev ncurses-static
 
-      # Build BusyBox from source with SUID/syslog/utmp disabled so Android seccomp
+      # Android <= 13 seccomp-bpf kills SYS_faccessat2 (439) with SIGSYS (159).
+      # Wrap faccessat across all bundled static binaries so musl 1.2.5 never
+      # invokes SYS_faccessat2.
+      cat <<'\''SECCOMPEOF'\'' > /tmp/seccomp_compat.c
+#define _GNU_SOURCE
+#include <errno.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+
+int __wrap_faccessat(int fd, const char *path, int amode, int flag) {
+    if ((flag & ~AT_EACCESS) == 0 &&
+        (flag == 0 || (getuid() == geteuid() && getgid() == getegid()))) {
+        return (int)syscall(SYS_faccessat, fd, path, amode);
+    }
+    struct stat st;
+    if (fstatat(fd, path, &st,
+                (flag & AT_SYMLINK_NOFOLLOW) ? AT_SYMLINK_NOFOLLOW : 0) != 0) {
+        return -1;
+    }
+    if (amode == F_OK) return 0;
+    uid_t uid = (flag & AT_EACCESS) ? geteuid() : getuid();
+    gid_t gid = (flag & AT_EACCESS) ? getegid() : getgid();
+    if (uid == 0) {
+        if (!(amode & X_OK) || (st.st_mode & 0111) || S_ISDIR(st.st_mode)) return 0;
+        errno = EACCES;
+        return -1;
+    }
+    mode_t mode = st.st_mode;
+    int shift = (uid == st.st_uid) ? 6 : (gid == st.st_gid ? 3 : 0);
+    int bits = (mode >> shift) & 7;
+    if ((amode & R_OK) && !(bits & 4)) { errno = EACCES; return -1; }
+    if ((amode & W_OK) && !(bits & 2)) { errno = EACCES; return -1; }
+    if ((amode & X_OK) && !(bits & 1)) { errno = EACCES; return -1; }
+    return 0;
+}
+SECCOMPEOF
+      gcc -Os -Wall -Wextra -c /tmp/seccomp_compat.c -o /tmp/seccomp_compat.o
+
+      # Build BusyBox from source with SUID/syslog/utmp/adjtimex disabled so Android seccomp
       # does not terminate applet dispatch with SIGSYS (exit 159).
       rm -rf /tmp/bb-src && mkdir -p /tmp/bb-src
       tar -xjf "/cache/busybox-'"${BUSYBOX_VERSION}"'.tar.bz2" -C /tmp/bb-src --strip-components=1
       cd /tmp/bb-src
       make defconfig
       sed -i \
-        -e "s/^# CONFIG_STATIC is not set/CONFIG_STATIC=y/" \
-        -e "s/^CONFIG_FEATURE_SUID=y/# CONFIG_FEATURE_SUID is not set/" \
-        -e "s/^CONFIG_FEATURE_SUID_CONFIG=y/# CONFIG_FEATURE_SUID_CONFIG is not set/" \
-        -e "s/^CONFIG_FEATURE_SYSLOG=y/# CONFIG_FEATURE_SYSLOG is not set/" \
-        -e "s/^CONFIG_FEATURE_UTMP=y/# CONFIG_FEATURE_UTMP is not set/" \
-        -e "s/^CONFIG_FEATURE_WTMP=y/# CONFIG_FEATURE_WTMP is not set/" \
-        -e "s/^CONFIG_TC=y/# CONFIG_TC is not set/" \
-        -e "s/^CONFIG_FEATURE_TC_INGRESS=y/# CONFIG_FEATURE_TC_INGRESS is not set/" \
-        -e "s/^CONFIG_SHA1_HWACCEL=y/# CONFIG_SHA1_HWACCEL is not set/" \
-        -e "s/^CONFIG_SHA256_HWACCEL=y/# CONFIG_SHA256_HWACCEL is not set/" \
+        -e "s|^# CONFIG_STATIC is not set|CONFIG_STATIC=y|" \
+        -e "s|^CONFIG_FEATURE_SUID=y|# CONFIG_FEATURE_SUID is not set|" \
+        -e "s|^CONFIG_FEATURE_SUID_CONFIG=y|# CONFIG_FEATURE_SUID_CONFIG is not set|" \
+        -e "s|^CONFIG_FEATURE_SYSLOG=y|# CONFIG_FEATURE_SYSLOG is not set|" \
+        -e "s|^CONFIG_FEATURE_UTMP=y|# CONFIG_FEATURE_UTMP is not set|" \
+        -e "s|^CONFIG_FEATURE_WTMP=y|# CONFIG_FEATURE_WTMP is not set|" \
+        -e "s|^CONFIG_TC=y|# CONFIG_TC is not set|" \
+        -e "s|^CONFIG_FEATURE_TC_INGRESS=y|# CONFIG_FEATURE_TC_INGRESS is not set|" \
+        -e "s|^CONFIG_ADJTIMEX=y|# CONFIG_ADJTIMEX is not set|" \
+        -e "s|^CONFIG_NTPD=y|# CONFIG_NTPD is not set|" \
+        -e "s|^CONFIG_HWCLOCK=y|# CONFIG_HWCLOCK is not set|" \
+        -e "s|^CONFIG_SHA1_HWACCEL=y|# CONFIG_SHA1_HWACCEL is not set|" \
+        -e "s|^CONFIG_SHA256_HWACCEL=y|# CONFIG_SHA256_HWACCEL is not set|" \
+        -e "s|^CONFIG_EXTRA_LDFLAGS=.*|CONFIG_EXTRA_LDFLAGS=\"-Wl,--wrap=faccessat /tmp/seccomp_compat.o\"|" \
         .config
+      grep -q "^CONFIG_EXTRA_LDFLAGS=" .config || echo "CONFIG_EXTRA_LDFLAGS=\"-Wl,--wrap=faccessat /tmp/seccomp_compat.o\"" >> .config
       yes "" | make oldconfig >/dev/null 2>&1 || true
       make -j"$(nproc)"
       strip busybox
@@ -96,7 +141,7 @@ build_for_arch() {
       cd /tmp/bash-src
       CC=gcc \
       CFLAGS="-Os -Wno-implicit-function-declaration -Wno-incompatible-pointer-types" \
-      LDFLAGS="-static" \
+      LDFLAGS="-static -Wl,--wrap=faccessat /tmp/seccomp_compat.o" \
       ./configure \
         --enable-static-link \
         --without-bash-malloc \
@@ -279,13 +324,30 @@ int main(int argc, char **argv) {
     return 1;
 }
 PTYEOF
-      gcc -Os -Wall -Wextra -static /tmp/pty_host.c -o /out/libpty.so
+      gcc -Os -Wall -Wextra -static -Wl,--wrap=faccessat /tmp/pty_host.c /tmp/seccomp_compat.o -o /out/libpty.so
       strip /out/libpty.so
       chmod 0755 /out/libbusybox.so /out/libbash.so /out/libpty.so
 
+      # Audit disassembled binaries so Android <= 13 blocked syscalls (faccessat2/439,
+      # clone3/435, close_range/436, openat2/437, epoll_pwait2/441, statx, rseq) never ship.
+      for bin in /out/libbusybox.so /out/libbash.so /out/libpty.so; do
+        objdump -d "$bin" | awk -v bin="$bin" '\''
+          /svc[[:space:]]+#0x0/ && (prev ~ /mov[[:space:]]+x8,[[:space:]]*#(0x1b7|0x1b3|0x1b4|0x1b5|0x1b9|0x123|0x125|439|435|436|437|441|291|293)([^0-9a-fA-F]|$)/) {
+            print "FORBIDDEN ARM64 SYSCALL in " bin ": " prev " -> " $0 > "/dev/stderr";
+            bad = 1;
+          }
+          /syscall/ && (prev ~ /mov[[:space:]]+\$(0x1b7|0x1b3|0x1b4|0x1b5|0x1b9|0x14c|0x14e|439|435|436|437|441|332|334),%(e|r)ax/) {
+            print "FORBIDDEN X86_64 SYSCALL in " bin ": " prev " -> " $0 > "/dev/stderr";
+            bad = 1;
+          }
+          { prev = $0 }
+          END { if (bad) exit 1 }
+        '\''
+      done
+
       ln -sf /out/libbusybox.so /tmp/busybox
       ln -sf /out/libbusybox.so /tmp/ls
-      /out/libbash.so -c "echo verified-bash-\$(/tmp/busybox uname -m)"
+      /out/libbash.so -c "command -v ls >/dev/null && test -d /tmp && echo verified-bash-\$(/tmp/busybox uname -m)"
       /tmp/ls /tmp >/dev/null
       /out/libpty.so 91 33 - /out/libbash.so -c "echo verified-pty"
     '

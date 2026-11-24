@@ -2,6 +2,7 @@ import 'package:agy_client/agy_client.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../state/hosts_state.dart';
 import '../../state/phone_state.dart';
 import '../../state/runtime_state.dart';
 import '../../state/settings_state.dart';
@@ -26,7 +27,18 @@ class QuickPanel extends ConsumerWidget {
     final usage = ref.watch(usageProvider);
     final runtime = ref.watch(runtimeProvider);
     final phone = ref.watch(phoneProvider);
+    final hosts = ref.watch(hostsProvider);
     final theme = Theme.of(context);
+    final availableExecModes = AgyExecutionMode.values
+        .where(
+          (m) => hosts.activeSshHost != null || m != AgyExecutionMode.auto,
+        )
+        .toList();
+    final safeExecModeValue = availableExecModes.any(
+      (m) => m.cliValue == settings.executionMode,
+    )
+        ? settings.executionMode
+        : AgyExecutionMode.standard.cliValue;
 
     final activeModel = AgyModelCatalog.resolve(settings.selectedModelId);
 
@@ -149,10 +161,10 @@ class QuickPanel extends ConsumerWidget {
             const SizedBox(height: 10),
           ],
           DropdownButtonFormField<String>(
-            value: settings.executionMode,
+            value: safeExecModeValue,
             isExpanded: true,
             decoration: const InputDecoration(labelText: 'Execution Mode'),
-            items: AgyExecutionMode.values
+            items: availableExecModes
                 .map(
                   (m) => DropdownMenuItem(
                     value: m.cliValue,

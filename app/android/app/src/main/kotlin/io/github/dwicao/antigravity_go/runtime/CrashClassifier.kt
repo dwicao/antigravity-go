@@ -69,6 +69,16 @@ object CrashClassifier {
                     upMillis = upMillis,
                 )
 
+            exitCode == 159 || lower.contains("sigsys") || lower.contains("bad system call") ->
+                RunFailure(
+                    kind = FailureKind.CRASHED_EARLY,
+                    exitCode = exitCode,
+                    safeMode = safeMode,
+                    summary = lastMeaningful,
+                    hint = "Child process hit Android seccomp (SIGSYS / exit 159). Update APK or run Settings -> On-Device Runtime -> Run Shell & Storage Self-Test.",
+                    upMillis = upMillis,
+                )
+
             lower.contains("authentication required") ||
                 lower.contains("not signed in") ||
                 lower.contains("please sign in") ||

@@ -2,6 +2,7 @@ import 'package:agy_client/agy_client.dart';
 import 'package:antigravity_go/app.dart';
 import 'package:antigravity_go/state/settings_state.dart';
 import 'package:antigravity_go/ui/settings/settings_page.dart';
+import 'package:antigravity_go/ui/shell/quick_panel.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -58,5 +59,24 @@ void main() {
     final repaired = container.read(settingsProvider);
     expect(repaired.permissionPreset, AntigravityPermissionPreset.turbo);
     expect(repaired.executionMode, 'default');
+  });
+
+  testWidgets('QuickPanel hides Auto (Sandbox) execution mode on local Android', (tester) async {
+    SharedPreferences.setMockInitialValues({'agy_exec_mode': 'auto'});
+    await tester.pumpWidget(
+      const ProviderScope(
+        child: MaterialApp(
+          home: Scaffold(body: QuickPanel()),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Execution Mode'), findsOneWidget);
+    await tester.tap(find.byType(DropdownButtonFormField<String>).last);
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Auto (Sandbox)'), findsNothing);
+    expect(find.textContaining('Fast —'), findsWidgets);
   });
 }

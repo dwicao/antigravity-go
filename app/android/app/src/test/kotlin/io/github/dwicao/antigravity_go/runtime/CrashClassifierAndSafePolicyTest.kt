@@ -68,6 +68,16 @@ class CrashClassifierAndSafePolicyTest {
             receivedAgentOutput = true,
         )
         assertEquals(FailureKind.KILLED, osKilled?.kind)
+
+        val sigsys = CrashClassifier.classify(
+            exitCode = 159,
+            upMillis = 100,
+            tailLines = emptyList(),
+            safeMode = false,
+            receivedAgentOutput = false,
+        )
+        assertEquals(FailureKind.CRASHED_EARLY, sigsys?.kind)
+        assertTrue(sigsys?.hint?.contains("SIGSYS") == true)
     }
 
     @Test
@@ -117,5 +127,30 @@ class CrashClassifierAndSafePolicyTest {
         val summarized = AcpSessionManager.summarizeCommand(longCmd, maxLen = 20)
         assertEquals(20, summarized.length)
         assertTrue(summarized.endsWith("…"))
+    }
+
+    @Test
+    fun `AcpSessionManager workerSignature changes when extraDirs or skipPermissions change`() {
+        val cwd = java.io.File("/data/user/0/app/workspace")
+        val withoutSdcard = AcpSessionManager.buildWorkerSignature(
+            cwd = cwd,
+            extraDirs = listOf("/data/user/0/app/workspace"),
+            skipPermissions = true,
+            agent = null,
+        )
+        val withSdcard = AcpSessionManager.buildWorkerSignature(
+            cwd = cwd,
+            extraDirs = listOf("/data/user/0/app/workspace", "/sdcard", "/storage/emulated/0"),
+            skipPermissions = true,
+            agent = null,
+        )
+        val sameReordered = AcpSessionManager.buildWorkerSignature(
+            cwd = cwd,
+            extraDirs = listOf("/storage/emulated/0", "/sdcard", "/data/user/0/app/workspace", ""),
+            skipPermissions = true,
+            agent = null,
+        )
+        assertFalse(withoutSdcard == withSdcard)
+        assertEquals(withSdcard, sameReordered)
     }
 }

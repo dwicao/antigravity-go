@@ -25,6 +25,7 @@ internal data class ActiveAcp(
     val env: Map<String, String>,
     val defaultCwd: File,
     val agent: String? = null,
+    val workerSignature: String = "",
     @Volatile var promptSummary: String,
     val startedAtMs: Long = System.currentTimeMillis(),
     val nextId: AtomicInteger = AtomicInteger(1),

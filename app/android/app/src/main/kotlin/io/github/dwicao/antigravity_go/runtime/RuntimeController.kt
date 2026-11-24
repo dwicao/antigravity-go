@@ -54,6 +54,9 @@ class RuntimeController private constructor(private val appContext: Context) {
     @Volatile
     private var busyboxHealthy: Boolean = false
 
+    @Volatile
+    private var bashHealthy: Boolean = false
+
     val runtimeDir: File get() = File(appContext.filesDir, "runtime")
     val binDir: File get() = File(runtimeDir, "bin")
     val tmpDir: File get() = File(runtimeDir, "tmp")
@@ -487,8 +490,12 @@ class RuntimeController private constructor(private val appContext: Context) {
 
     private fun isBusyboxHealthy(busyboxBin: File): Boolean {
         if (!busyboxBin.isFile) return false
+        val busyboxLink = File(binDir, "busybox")
         return try {
-            val probe = ProcessBuilder(busyboxBin.absolutePath, "true")
+            // BusyBox resolves applets from argv[0]; invoke via the `busybox` symlink
+            // rather than `libbusybox.so` directly so applet dispatch succeeds.
+            ensureSymlink(busyboxLink, busyboxBin.absolutePath)
+            val probe = ProcessBuilder(busyboxLink.absolutePath, "true")
                 .directory(tmpDir)
                 .redirectErrorStream(true)
                 .start()
@@ -498,7 +505,7 @@ class RuntimeController private constructor(private val appContext: Context) {
             }
             if (probe.exitValue() != 0) return false
 
-            val lsProbe = ProcessBuilder(busyboxBin.absolutePath, "ls", tmpDir.absolutePath)
+            val lsProbe = ProcessBuilder(busyboxLink.absolutePath, "ls", tmpDir.absolutePath)
                 .directory(tmpDir)
                 .redirectErrorStream(true)
                 .start()
@@ -510,6 +517,41 @@ class RuntimeController private constructor(private val appContext: Context) {
         } catch (_: Throwable) {
             false
         }
+    }
+
+    private fun isBashHealthy(bashBin: File): Boolean {
+        if (!bashBin.isFile) return false
+        return try {
+            // Exercise PATH lookup (`command -v sh`) and `test -d` so Android seccomp
+            // issues (e.g. SIGSYS / 159 on faccessat2) are caught before wiring SHELL.
+            val pb = ProcessBuilder(
+                bashBin.absolutePath,
+                "-c",
+                "command -v sh >/dev/null && test -d \"\$1\"",
+                "bash",
+                tmpDir.absolutePath,
+            )
+            pb.directory(tmpDir)
+            pb.environment()["PATH"] = "${binDir.absolutePath}:/system/bin:/system/xbin"
+            pb.redirectErrorStream(true)
+            val probe = pb.start()
+            if (!probe.waitFor(3, TimeUnit.SECONDS)) {
+                probe.destroyForcibly()
+                return false
+            }
+            probe.exitValue() == 0
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun writeFallbackShWrapper() {
+        val currentTarget = runCatching { Os.readlink(bashFile.absolutePath) }.getOrNull()
+        if (currentTarget != null) {
+            runCatching { bashFile.delete() }
+        }
+        bashFile.writeText("#!/system/bin/sh\nexec /system/bin/sh \"\$@\"\n")
+        bashFile.setExecutable(true, false)
     }
 
     private fun clearBusyboxSymlinks() {
@@ -533,11 +575,12 @@ class RuntimeController private constructor(private val appContext: Context) {
                 val bundledBusybox = nativeLibDir?.let { File(it, "libbusybox.so") }?.takeIf { it.isFile }
                 val bundledPty = nativeLibDir?.let { File(it, "libpty.so") }?.takeIf { it.isFile }
 
-                if (bundledBash != null) {
+                if (bundledBash != null && isBashHealthy(bundledBash)) {
+                    bashHealthy = true
                     ensureSymlink(bashFile, bundledBash.absolutePath)
-                } else if (!bashFile.exists() || !bashFile.canExecute()) {
-                    bashFile.writeText("#!/system/bin/sh\nexec /system/bin/sh \"\$@\"\n")
-                    bashFile.setExecutable(true, false)
+                } else {
+                    bashHealthy = false
+                    writeFallbackShWrapper()
                 }
 
                 if (bundledPty != null) {
@@ -983,6 +1026,7 @@ class RuntimeController private constructor(private val appContext: Context) {
             "agyExists" to (binaryFile.exists() && binaryFile.canExecute()),
             "bashPath" to bashFile.absolutePath,
             "bashExecutable" to bashFile.canExecute(),
+            "bashHealthy" to bashHealthy,
             "ptyHostExecutable" to ptyHostFile.canExecute(),
             "busyboxExecutable" to File(binDir, "busybox").canExecute(),
             "busyboxHealthy" to busyboxHealthy,
@@ -1061,7 +1105,8 @@ class RuntimeController private constructor(private val appContext: Context) {
             AgyService.updateTurnStatus(appContext, "Agent thinking…")
         }
 
-        val storageEnabled = allowNonWorkspaceAccess || hasStorageAccess()
+        val storageGranted = hasStorageAccess()
+        val storageEnabled = allowNonWorkspaceAccess && storageGranted
         if (!safeMode) {
             customizationsOps.syncManagedGeminiMd(allowStorage = storageEnabled)
         }

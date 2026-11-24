@@ -37,14 +37,28 @@ class AcpSessionManager(
         emit(mapOf("kind" to "turn_exit", "turnId" to turnId, "exitCode" to exitCode))
     }
 
-    private fun takeLiveWorker(sessionId: String?, agent: String?): ActiveAcp? {
+    private fun takeLiveWorker(
+        sessionId: String?,
+        agent: String?,
+        expectedSignature: String,
+    ): ActiveAcp? {
         if (sessionId.isNullOrBlank()) return null
+        val stale: ActiveAcp?
         synchronized(liveWorkers) {
             val worker = liveWorkers[sessionId] ?: return null
-            if (worker.agent != agent) return null
-            liveWorkers.remove(sessionId)
-            return worker
+            if (worker.agent == agent && worker.workerSignature == expectedSignature) {
+                liveWorkers.remove(sessionId)
+                return worker
+            }
+            stale = liveWorkers.remove(sessionId)
         }
+        if (stale != null) {
+            stale.terminals.values.forEach { t -> runCatching { t.process.destroyForcibly() } }
+            runCatching { stale.writer.close() }
+            runCatching { stale.process.destroyForcibly() }
+            onTasksChanged()
+        }
+        return null
     }
 
     private fun putLiveWorker(sessionId: String, active: ActiveAcp) {
@@ -77,6 +91,16 @@ class AcpSessionManager(
 
         fun summarizeCommand(raw: String, maxLen: Int = 80): String =
             AcpConfigAndPromptHelper.summarizeCommand(raw, maxLen)
+
+        fun buildWorkerSignature(
+            cwd: File,
+            extraDirs: List<String>,
+            skipPermissions: Boolean,
+            agent: String?,
+        ): String {
+            val dirs = extraDirs.filter { it.isNotBlank() }.distinct().sorted().joinToString("|")
+            return "${cwd.absolutePath}#$skipPermissions#${agent.orEmpty()}#$dirs"
+        }
     }
 
     fun listBackgroundTasks(): List<Map<String, Any?>> {
@@ -172,7 +196,8 @@ class AcpSessionManager(
         onAuthenticated: () -> Unit,
     ) {
         executor.submit {
-            val reused = takeLiveWorker(existingSessionId, agent)
+            val workerSig = buildWorkerSignature(cwd, extraDirs, skipPermissions, agent)
+            val reused = takeLiveWorker(existingSessionId, agent, workerSig)
             if (reused != null && reused.process.isAlive) {
                 try {
                     reused.promptSummary = summarizeCommand(prompt, maxLen = 64)
@@ -257,6 +282,7 @@ class AcpSessionManager(
                     env = env,
                     defaultCwd = cwd,
                     agent = agent,
+                    workerSignature = workerSig,
                     promptSummary = summarizeCommand(prompt, maxLen = 64),
                     currentTurnId = turnId,
                 )
