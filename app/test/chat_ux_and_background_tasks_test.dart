@@ -1028,6 +1028,7 @@ void main() {
 
     await tester.pump(const Duration(seconds: 185));
     expect(bgContainer.read(chatProvider).stallWarning, isNull);
+    bgContainer.dispose();
 
     final idleContainer = ProviderContainer(
       overrides: [
@@ -1039,7 +1040,6 @@ void main() {
         ),
       ],
     );
-    addTearDown(idleContainer.dispose);
 
     idleContainer.read(chatProvider.notifier).seedStreamingTurnForTest(
           sessionId: 's-idle',
@@ -1055,5 +1055,6 @@ void main() {
       idleContainer.read(chatProvider).stallWarning,
       contains('3 minutes'),
     );
+    idleContainer.dispose();
   });
 }
