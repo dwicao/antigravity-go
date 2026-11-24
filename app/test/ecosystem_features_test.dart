@@ -1,6 +1,5 @@
 import 'package:agy_client/agy_client.dart';
 import 'package:antigravity_go/runtime/runtime_models.dart';
-import 'package:antigravity_go/state/chat_models.dart';
 import 'package:antigravity_go/state/chat_state.dart';
 import 'package:antigravity_go/state/runtime_state.dart';
 import 'package:antigravity_go/state/sessions_state.dart';
@@ -120,7 +119,7 @@ void main() {
           theme: _testTheme(),
           home: const Scaffold(
             body: AgyMarkdown(
-              data: '```dart\nvoid main() {}\n```',
+              text: '```dart\nvoid main() {}\n```',
             ),
           ),
         ),
@@ -162,7 +161,6 @@ void main() {
             SessionsState(
               sessions: [sActive, sArchived],
               activeSessionId: 's-active',
-              loading: false,
             ),
           ),
         ),
@@ -232,7 +230,7 @@ void main() {
                 shouldCompact: false,
                 statusLabel: 'Healthy',
               ),
-              onKeyEvent: (_, __) => KeyEventResult.ignored,
+              onKeyEvent: (_, _) => KeyEventResult.ignored,
               onChanged: (_) {},
               onPickFile: () {},
               onPickImage: () {},

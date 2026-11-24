@@ -640,16 +640,15 @@ class _SegmentedQuotaBar extends StatelessWidget {
     required this.value,
     required this.color,
     this.height = 7,
-    this.segments = 10,
   });
 
   final double value;
   final Color color;
   final double height;
-  final int segments;
 
   @override
   Widget build(BuildContext context) {
+    const segments = 10;
     final clamped = value.clamp(0.0, 1.0);
     final activeCount = (clamped * segments).round();
     return Row(

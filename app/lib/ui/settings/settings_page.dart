@@ -696,8 +696,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     onTap: () => _showWhatsNewDialog(
                       context,
                       currentVersion: update.currentVersion,
-                      latestNotes: update.latest?.releaseNotes,
-                      changelogUrl: update.latest?.htmlUrl,
+                      latestNotes: update.latest?.notes,
+                      changelogUrl:
+                          update.latest?.changelogUrl ?? update.latest?.htmlUrl,
                     ),
                   ),
                   const Divider(height: 1),
