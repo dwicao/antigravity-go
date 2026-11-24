@@ -226,7 +226,7 @@ class UpdateSheet extends ConsumerWidget {
                     ),
                   ),
                   child: SingleChildScrollView(
-                    child: AgyMarkdown(data: release.notes!.trim()),
+                    child: AgyMarkdown(text: release.notes!.trim()),
                   ),
                 ),
               ),

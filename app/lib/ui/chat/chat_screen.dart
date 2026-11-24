@@ -973,12 +973,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                               );
                             },
                           ),
-                            ),
-                          ),
                         ),
                       ),
                     ),
-                    Positioned(
+                  ),
+                  Positioned(
                       right: 16,
                       bottom: 12,
                       child: (!_isAtBottom && !_followLatest)
