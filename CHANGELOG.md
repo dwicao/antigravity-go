@@ -2,6 +2,14 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.31] - 2026-11-25
+
+### Added
+- **Inline Image Attachment Previews & Sent Chat Images:** Added `AttachmentPreviewStrip`, `AttachmentImageThumbnail`, and full-screen zoom preview (`showAttachmentImagePreviewDialog`) above the chat text input, multi-image gallery picking (`pickMultiImage`), empty-text image sending, and inline image rendering inside sent user chat bubbles (`MessageBubble`).
+
+### Docs
+- **Complete Feature List & Mobile Screenshot:** Expanded `README.md` with all implemented capabilities through `v1.0.31` and added a mobile screenshot (`docs/screenshots/mobile-chat.jpg`) alongside Samsung DeX.
+
 ## [1.0.30] - 2026-11-25
 
 ### Added

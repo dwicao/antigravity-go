@@ -1262,8 +1262,8 @@ am start -a android.intent.action.VIEW -d "${'$'}url" >/dev/null 2>&1 || echo "[
     }
 
     private fun appVersionName(): String = runCatching {
-        appContext.packageManager.getPackageInfo(appContext.packageName, 0).versionName ?: "1.0.30"
-    }.getOrDefault("1.0.30")
+        appContext.packageManager.getPackageInfo(appContext.packageName, 0).versionName ?: "1.0.31"
+    }.getOrDefault("1.0.31")
 
     fun startTurn(
         turnId: String,

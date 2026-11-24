@@ -1,7 +1,7 @@
 {
-  "version": "1.0.30",
+  "version": "1.0.31",
   "buildNumber": 1,
-  "tag": "v1.0.30",
+  "tag": "v1.0.31",
   "changelogUrl": "https://github.com/dwicao/antigravity-go/blob/main/CHANGELOG.md",
-  "releaseNotes": "### Added\n- **Multi-Account Vault & Multi-File Credential Import:** Added `MultiAccountVault` (`runtime/accounts/` with owner-only `0600`/`0700` permissions) and updated `GoogleLoginSheet` & `SessionsDrawer` so users can import one or multiple `.agycreds.json` backups, automatically preserve any already signed-in account, switch accounts in one tap without re-running Google OAuth, export individual saved accounts, or remove accounts cleanly.\n\n### Improved\n- **Automatic Local Runtime Startup:** Automatically starts `AgyService` when opening or resuming the app whenever the local `agy` runtime is installed and stopped (while respecting explicit manual stops), removing the `\"Local runtime is stopped\"` startup warning."
+  "releaseNotes": "### Added\n- **Inline Image Attachment Previews & Sent Chat Images:** Added `AttachmentPreviewStrip`, `AttachmentImageThumbnail`, and full-screen zoom preview (`showAttachmentImagePreviewDialog`) above the chat text input, multi-image gallery picking (`pickMultiImage`), empty-text image sending, and inline image rendering inside sent user chat bubbles (`MessageBubble`).\n\n### Docs\n- **Complete Feature List & Mobile Screenshot:** Expanded `README.md` with all implemented capabilities through `v1.0.31` and added a mobile screenshot (`docs/screenshots/mobile-chat.jpg`) alongside Samsung DeX."
 }
