@@ -639,12 +639,12 @@ class _GoogleLoginSheetState extends ConsumerState<GoogleLoginSheet> {
     if (sourceChoice == null || !mounted) return;
 
     if (sourceChoice == 'file') {
-      final picked = await FilePicker.platform.pickFiles(
+      final files = await FilePicker.pickFiles(
         type: FileType.any,
         withData: true,
       );
-      if (picked == null || picked.files.isEmpty || !mounted) return;
-      final file = picked.files.first;
+      if (files.isEmpty || !mounted) return;
+      final file = files.first;
       if (file.bytes != null) {
         bundleJson = utf8.decode(file.bytes!, allowMalformed: true);
       } else if (file.path != null) {

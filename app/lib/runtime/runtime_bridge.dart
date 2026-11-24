@@ -120,8 +120,8 @@ class RuntimeBridge {
   }) async {
     final res = await _method.invokeMethod<String>('exportCredentials', {
       'passphrase': passphrase,
-      if (geminiApiKey != null) 'geminiApiKey': geminiApiKey,
-      if (authProfileJson != null) 'authProfileJson': authProfileJson,
+      'geminiApiKey': ?geminiApiKey,
+      'authProfileJson': ?authProfileJson,
     });
     if (res == null || res.isEmpty) {
       throw StateError('Failed to create credentials bundle');
