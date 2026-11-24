@@ -46,6 +46,14 @@ class _FakeSessionsNotifier extends SessionsNotifier {
   SessionsState build() => _initial;
 }
 
+class _FakeAuthNotifier extends AuthNotifier {
+  _FakeAuthNotifier(this._initial);
+  final AgyAuthStatus _initial;
+
+  @override
+  AgyAuthStatus build() => _initial;
+}
+
 ThemeData _testTheme() => AgyTheme.build(
       brightness: Brightness.dark,
       accent: AgyAccentPreset.indigo,
@@ -525,18 +533,20 @@ Weekly limit: 70% remaining (resets in 5d)
     expect(find.text('Import Credentials'), findsOneWidget);
     expect(find.text('Export'), findsNothing);
 
-    SharedPreferences.setMockInitialValues({
-      'agy_auth_profile_json': jsonEncode(
-        const AgyAuthStatus(
-          isAuthenticated: true,
-          email: 'user@gmail.com',
-          displayName: 'user@gmail.com',
-        ).toJson(),
-      ),
-    });
-    final signedInContainer = ProviderContainer();
+    final signedInContainer = ProviderContainer(
+      overrides: [
+        authProvider.overrideWith(
+          () => _FakeAuthNotifier(
+            const AgyAuthStatus(
+              isAuthenticated: true,
+              email: 'user@gmail.com',
+              displayName: 'user@gmail.com',
+            ),
+          ),
+        ),
+      ],
+    );
     addTearDown(signedInContainer.dispose);
-    await signedInContainer.read(authProvider.notifier).refresh();
 
     await tester.pumpWidget(
       UncontrolledProviderScope(
