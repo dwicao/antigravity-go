@@ -166,4 +166,193 @@ class ChatTurnHelpers {
     }
     return byPath.values.toList();
   }
+
+  static bool isSubagentSpawnTool(String toolName) {
+    final lower = toolName.toLowerCase();
+    return lower.contains('invoke_subagent') ||
+        lower.contains('invoking subagent') ||
+        lower.contains('invoke subagent') ||
+        lower.contains('run_workflow') ||
+        lower.contains('browser_subagent');
+  }
+
+  static bool isSubagentTool(String toolName) {
+    final lower = toolName.toLowerCase();
+    return lower.contains('subagent') ||
+        lower.contains('workflow') ||
+        lower.contains('schedule') ||
+        lower.contains('send_message');
+  }
+
+  static String? extractConversationId(String? rawOutput) {
+    if (rawOutput == null || rawOutput.trim().isEmpty) return null;
+    final uuidMatch = RegExp(
+      r'\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b',
+    ).firstMatch(rawOutput);
+    if (uuidMatch != null) return uuidMatch.group(0);
+    final kvMatch = RegExp(
+      r'''conversationId["']?\s*[:=]\s*["']?([A-Za-z0-9_-]{6,})''',
+    ).firstMatch(rawOutput);
+    return kvMatch?.group(1);
+  }
+
+  static String extractSubagentRole(
+    String toolName,
+    Map<String, dynamic> parameters,
+  ) {
+    final role = (parameters['Role'] ?? parameters['role'])?.toString().trim();
+    if (role != null && role.isNotEmpty) return role;
+    final name = (parameters['Name'] ?? parameters['name'])?.toString().trim();
+    if (name != null && name.isNotEmpty) return name;
+    final desc = (parameters['Description'] ?? parameters['description'])
+        ?.toString()
+        .trim();
+    if (desc != null && desc.isNotEmpty) return desc;
+    final typeName =
+        (parameters['TypeName'] ?? parameters['typeName'])?.toString().trim();
+    if (typeName != null && typeName.isNotEmpty) return typeName;
+    if (toolName.toLowerCase().contains('workflow')) return 'Workflow';
+    if (toolName.toLowerCase().contains('browser')) return 'Browser Subagent';
+    return 'Subagent';
+  }
+
+  static String formatToolTarget(ChatToolStep step) {
+    if (step.parameters.isEmpty) return '';
+    final p = step.parameters;
+    final direct = p['CommandLine'] ??
+        p['command'] ??
+        p['TargetFile'] ??
+        p['AbsolutePath'] ??
+        p['Path'] ??
+        p['path'] ??
+        p['Query'];
+    if (direct != null && direct.toString().trim().isNotEmpty) {
+      return direct.toString().trim().replaceAll(RegExp(r'\s+'), ' ');
+    }
+    final role = (p['Role'] ?? p['role'])?.toString().trim() ?? '';
+    final typeName = (p['TypeName'] ?? p['typeName'])?.toString().trim() ?? '';
+    if (role.isNotEmpty && typeName.isNotEmpty) {
+      return '$role ($typeName)';
+    }
+    if (role.isNotEmpty) return role;
+    if (typeName.isNotEmpty) return typeName;
+
+    final subagentMeta = p['Name'] ??
+        p['name'] ??
+        p['Description'] ??
+        p['description'] ??
+        p['Action'] ??
+        p['action'] ??
+        p['Recipient'] ??
+        p['recipient'];
+    if (subagentMeta != null && subagentMeta.toString().trim().isNotEmpty) {
+      return subagentMeta.toString().trim().replaceAll(RegExp(r'\s+'), ' ');
+    }
+    return '';
+  }
+
+  static List<ActiveSubagent> applySubagentToolEvent(
+    List<ActiveSubagent> current, {
+    required String callId,
+    required String toolName,
+    required ToolCallState state,
+    required Map<String, dynamic> parameters,
+    String? output,
+    String? errorMessage,
+    DateTime? now,
+  }) {
+    final ts = now ?? DateTime.now();
+    final lower = toolName.toLowerCase();
+
+    if (lower.contains('manage_subagents') ||
+        lower.contains('manage subagents')) {
+      final action =
+          (parameters['Action'] ?? parameters['action'])?.toString().trim();
+      if (action == 'kill_all') {
+        return const [];
+      }
+      if (action == 'kill') {
+        final rawIds =
+            parameters['ConversationIds'] ?? parameters['conversationIds'];
+        if (rawIds is List) {
+          final killSet = rawIds.map((e) => e.toString()).toSet();
+          return current
+              .where(
+                (s) =>
+                    !killSet.contains(s.id) &&
+                    (s.conversationId == null ||
+                        !killSet.contains(s.conversationId)),
+              )
+              .toList();
+        }
+      }
+      if (action == 'list' &&
+          state == ToolCallState.completed &&
+          output != null) {
+        final trimmed = output.trim().toLowerCase();
+        if (trimmed == '[]' ||
+            trimmed.contains('no active') ||
+            trimmed.contains('0 active')) {
+          return current
+              .map(
+                (s) => s.isActive
+                    ? s.copyWith(status: SubagentStatus.completed)
+                    : s,
+              )
+              .toList();
+        }
+      }
+      return current;
+    }
+
+    if (!isSubagentSpawnTool(toolName)) {
+      return current;
+    }
+
+    final isFailed = state == ToolCallState.failed ||
+        (errorMessage != null && errorMessage.trim().isNotEmpty);
+    final role = extractSubagentRole(toolName, parameters);
+    final typeName =
+        (parameters['TypeName'] ?? parameters['typeName'])?.toString().trim() ??
+            (lower.contains('workflow') ? 'workflow' : '');
+    final model =
+        (parameters['Model'] ?? parameters['model'])?.toString().trim() ?? '';
+    final convId = extractConversationId(output);
+
+    final nextStatus = isFailed
+        ? SubagentStatus.failed
+        : (state == ToolCallState.running || state == ToolCallState.pending)
+            ? SubagentStatus.spawning
+            : SubagentStatus.running;
+
+    final idx = current.indexWhere(
+      (s) =>
+          s.id == callId ||
+          (convId != null && s.conversationId == convId),
+    );
+    final next = [...current];
+    if (idx >= 0) {
+      final prev = next[idx];
+      next[idx] = prev.copyWith(
+        role: role != 'Subagent' ? role : prev.role,
+        typeName: typeName.isNotEmpty ? typeName : prev.typeName,
+        model: model.isNotEmpty ? model : prev.model,
+        status: nextStatus,
+        conversationId: convId ?? prev.conversationId,
+      );
+    } else {
+      next.add(
+        ActiveSubagent(
+          id: callId,
+          role: role,
+          typeName: typeName,
+          model: model,
+          status: nextStatus,
+          startedAt: ts,
+          conversationId: convId,
+        ),
+      );
+    }
+    return next;
+  }
 }

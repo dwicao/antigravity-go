@@ -2,6 +2,7 @@ import 'package:agy_client/agy_client.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'chat_state.dart';
+import 'chat_turn_helpers.dart';
 import 'ci_watch_state.dart';
 import 'runtime_state.dart';
 import 'sessions_state.dart';
@@ -39,12 +40,8 @@ class BackgroundTaskItem {
   final bool canCancel;
 }
 
-bool _isSubagentTool(String toolName) {
-  final lower = toolName.toLowerCase();
-  return lower.contains('subagent') ||
-      lower.contains('workflow') ||
-      lower.contains('schedule');
-}
+bool _isSubagentTool(String toolName) =>
+    ChatTurnHelpers.isSubagentTool(toolName);
 
 String _summarizeTitle(String raw, {int maxLen = 56}) {
   final single = raw.trim().replaceAll(RegExp(r'\s+'), ' ');
@@ -131,6 +128,7 @@ final backgroundTasksProvider = Provider<List<BackgroundTaskItem>>((ref) {
   }
 
   // 3. Running tool steps in currently streaming assistant messages only.
+  final activeSubagentToolIds = <String>{};
   for (final m in chat.messages) {
     if (!m.isStreaming) {
       continue;
@@ -144,13 +142,17 @@ final backgroundTasksProvider = Provider<List<BackgroundTaskItem>>((ref) {
         continue;
       }
       final isSubagent = _isSubagentTool(tool.toolName);
+      if (isSubagent) {
+        activeSubagentToolIds.add(tool.id);
+      }
+      final target = ChatTurnHelpers.formatToolTarget(tool);
       items.add(
         BackgroundTaskItem(
           id: 'tool:${tool.id}',
           kind: isSubagent
               ? BackgroundTaskKind.subagent
               : BackgroundTaskKind.tool,
-          title: summary,
+          title: target.isNotEmpty ? _summarizeTitle('$summary: $target') : summary,
           subtitle: isSubagent ? 'Subagent / workflow running' : 'Tool step running',
           startedAt: tool.startedAt ?? m.createdAt,
           sessionId: activeSessionId,
@@ -159,6 +161,26 @@ final backgroundTasksProvider = Provider<List<BackgroundTaskItem>>((ref) {
         ),
       );
     }
+  }
+
+  // 3b. Spawned subagents working in background even after parent turn ended.
+  for (final sub in chat.activeSubagents) {
+    if (!sub.isActive || activeSubagentToolIds.contains(sub.id)) continue;
+    final subLabel = sub.typeName.isNotEmpty && sub.typeName != sub.role
+        ? '${sub.typeName} · Subagent working in background'
+        : 'Subagent working in background';
+    items.add(
+      BackgroundTaskItem(
+        id: 'subagent:${sub.id}',
+        kind: BackgroundTaskKind.subagent,
+        title: _summarizeTitle(sub.role),
+        subtitle: subLabel,
+        startedAt: sub.startedAt,
+        sessionId: activeSessionId,
+        nativeTaskId: 'subagent:${sub.id}',
+        canCancel: true,
+      ),
+    );
   }
 
   // 4. Queued follow-up prompts waiting in background queue.

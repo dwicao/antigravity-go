@@ -2,6 +2,7 @@ import 'package:agy_client/agy_client.dart';
 import 'package:flutter/material.dart';
 
 import '../../state/chat_state.dart';
+import '../../state/chat_turn_helpers.dart';
 import '../../theme/app_theme.dart';
 import 'message_metrics_footer.dart';
 import 'render/agy_markdown.dart';
@@ -63,15 +64,9 @@ class _FoldedToolsBarState extends State<FoldedToolsBar> {
   bool _expanded = false;
 
   String _formatCommandOrParams(ChatToolStep step) {
+    final formatted = ChatTurnHelpers.formatToolTarget(step);
+    if (formatted.isNotEmpty) return formatted;
     if (step.parameters.isEmpty) return '';
-    final cmd = step.parameters['CommandLine'] ??
-        step.parameters['command'] ??
-        step.parameters['Path'] ??
-        step.parameters['path'] ??
-        step.parameters['TargetFile'];
-    if (cmd != null && cmd.toString().trim().isNotEmpty) {
-      return cmd.toString().trim();
-    }
     return step.parameters.entries
         .map((e) => '${e.key}: ${e.value}')
         .join(', ');
@@ -236,6 +231,24 @@ class _MilestoneStackCardState extends State<MilestoneStackCard> {
 
   static String _toolActionVerb(String toolName) {
     final lower = toolName.toLowerCase();
+    if (lower.contains('invoke_subagent') ||
+        lower.contains('invoking subagent')) {
+      return 'Subagent';
+    }
+    if (lower.contains('define_subagent') ||
+        lower.contains('defining subagent')) {
+      return 'Define subagent';
+    }
+    if (lower.contains('manage_subagents') ||
+        lower.contains('managing subagents')) {
+      return 'Subagents';
+    }
+    if (lower.contains('send_message') || lower.contains('sending message')) {
+      return 'Message';
+    }
+    if (lower.contains('run_workflow') || lower.contains('workflow')) {
+      return 'Workflow';
+    }
     if (lower.contains('run') ||
         lower.contains('command') ||
         lower.contains('terminal') ||
@@ -257,19 +270,20 @@ class _MilestoneStackCardState extends State<MilestoneStackCard> {
     return toolName;
   }
 
-  static String _toolCommandOrTarget(ChatToolStep step) {
-    final v = step.parameters['CommandLine'] ??
-        step.parameters['command'] ??
-        step.parameters['TargetFile'] ??
-        step.parameters['AbsolutePath'] ??
-        step.parameters['Path'] ??
-        step.parameters['path'] ??
-        step.parameters['Query'];
-    if (v != null && v.toString().trim().isNotEmpty) {
-      return v.toString().trim().replaceAll(RegExp(r'\s+'), ' ');
+  static IconData _toolStepIcon(ChatToolStep tool) {
+    if (tool.state == ToolCallState.failed) return Icons.error_outline;
+    if (tool.state == ToolCallState.running) return Icons.play_circle_outline;
+    final lower = tool.toolName.toLowerCase();
+    if (lower.contains('subagent')) return Icons.smart_toy_outlined;
+    if (lower.contains('workflow')) return Icons.account_tree_outlined;
+    if (lower.contains('send_message') || lower.contains('sending message')) {
+      return Icons.send_outlined;
     }
-    return '';
+    return Icons.terminal;
   }
+
+  static String _toolCommandOrTarget(ChatToolStep step) =>
+      ChatTurnHelpers.formatToolTarget(step);
 
   @override
   Widget build(BuildContext context) {
@@ -279,16 +293,36 @@ class _MilestoneStackCardState extends State<MilestoneStackCard> {
     final runningCount = widget.tools
         .where((t) => t.state == ToolCallState.running)
         .length;
+    final subagentSpawnCount = widget.tools
+        .where((t) => ChatTurnHelpers.isSubagentSpawnTool(t.toolName))
+        .length;
+    final runningSubagentCount = widget.tools
+        .where(
+          (t) =>
+              t.state == ToolCallState.running &&
+              ChatTurnHelpers.isSubagentSpawnTool(t.toolName),
+        )
+        .length;
     final cmdCount = widget.tools.length;
     final thoughtCount = widget.steps
         .where((s) => s.kind == ChatMilestoneKind.thought)
         .length;
 
-    final headerLabel = runningCount > 0
-        ? 'Running $runningCount command${runningCount == 1 ? '' : 's'} ($cmdCount total)'
-        : cmdCount > 0
-            ? 'Ran $cmdCount command${cmdCount == 1 ? '' : 's'}'
-            : '$thoughtCount thinking step${thoughtCount == 1 ? '' : 's'}';
+    final String headerLabel;
+    if (runningSubagentCount > 0) {
+      headerLabel =
+          'Spawning $runningSubagentCount subagent${runningSubagentCount == 1 ? '' : 's'} ($cmdCount total)';
+    } else if (runningCount > 0) {
+      headerLabel =
+          'Running $runningCount command${runningCount == 1 ? '' : 's'} ($cmdCount total)';
+    } else if (subagentSpawnCount > 0) {
+      headerLabel =
+          'Spawned $subagentSpawnCount subagent${subagentSpawnCount == 1 ? '' : 's'} ($cmdCount step${cmdCount == 1 ? '' : 's'})';
+    } else if (cmdCount > 0) {
+      headerLabel = 'Ran $cmdCount command${cmdCount == 1 ? '' : 's'}';
+    } else {
+      headerLabel = '$thoughtCount thinking step${thoughtCount == 1 ? '' : 's'}';
+    }
 
     return Card(
       margin: EdgeInsets.zero,
@@ -432,11 +466,7 @@ class _MilestoneStackCardState extends State<MilestoneStackCard> {
             Row(
               children: [
                 Icon(
-                  tool.state == ToolCallState.failed
-                      ? Icons.error_outline
-                      : tool.state == ToolCallState.running
-                          ? Icons.play_circle_outline
-                          : Icons.terminal,
+                  _toolStepIcon(tool),
                   size: 15,
                   color: tool.state == ToolCallState.failed
                       ? semantic.danger

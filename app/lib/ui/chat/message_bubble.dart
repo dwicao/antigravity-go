@@ -1,9 +1,11 @@
 import 'dart:async';
 
+import 'package:agy_client/agy_client.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../state/chat_state.dart';
+import '../../state/chat_turn_helpers.dart';
 import '../../theme/app_theme.dart';
 import '../auth/google_login_sheet.dart';
 import 'change_card.dart';
@@ -24,6 +26,7 @@ class MessageBubble extends StatelessWidget {
     this.onRewind,
     this.onOpenDiff,
     this.tokensPerSecond,
+    this.activeSubagents = const [],
   });
 
   final ChatMessage message;
@@ -32,6 +35,7 @@ class MessageBubble extends StatelessWidget {
   final VoidCallback? onRewind;
   final VoidCallback? onOpenDiff;
   final double? tokensPerSecond;
+  final List<ActiveSubagent> activeSubagents;
 
   @override
   Widget build(BuildContext context) {
@@ -292,6 +296,14 @@ class MessageBubble extends StatelessWidget {
               ),
             ],
           ],
+          if (message.tools.any(
+              (t) => ChatTurnHelpers.isSubagentSpawnTool(t.toolName))) ...[
+            const SizedBox(height: 6),
+            _SpawnedSubagentsStrip(
+              tools: message.tools,
+              activeSubagents: activeSubagents,
+            ),
+          ],
           if (message.text.isNotEmpty) ...[
             const SizedBox(height: 8),
             AgyMarkdown(
@@ -421,6 +433,121 @@ class _BottomCopyButtonState extends State<_BottomCopyButton> {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _SpawnedSubagentsStrip extends StatelessWidget {
+  const _SpawnedSubagentsStrip({
+    required this.tools,
+    required this.activeSubagents,
+  });
+
+  final List<ChatToolStep> tools;
+  final List<ActiveSubagent> activeSubagents;
+
+  @override
+  Widget build(BuildContext context) {
+    final spawns = tools
+        .where((t) => ChatTurnHelpers.isSubagentSpawnTool(t.toolName))
+        .toList();
+    if (spawns.isEmpty) return const SizedBox.shrink();
+
+    final theme = Theme.of(context);
+    final semantic = AgySemanticColors.of(context);
+
+    return Wrap(
+      key: const ValueKey('spawned-subagents-strip'),
+      spacing: 6,
+      runSpacing: 6,
+      children: spawns.map((tool) {
+        final role =
+            ChatTurnHelpers.extractSubagentRole(tool.toolName, tool.parameters);
+        final convId = ChatTurnHelpers.extractConversationId(tool.output);
+        ActiveSubagent? liveMatch;
+        for (final s in activeSubagents) {
+          if (s.id == tool.id || (convId != null && s.conversationId == convId)) {
+            liveMatch = s;
+            break;
+          }
+        }
+
+        final SubagentStatus effectiveStatus;
+        if (liveMatch != null) {
+          effectiveStatus = liveMatch.status;
+        } else if (tool.state == ToolCallState.failed ||
+            (tool.error?.isNotEmpty ?? false)) {
+          effectiveStatus = SubagentStatus.failed;
+        } else if (tool.state == ToolCallState.running ||
+            tool.state == ToolCallState.pending) {
+          effectiveStatus = SubagentStatus.spawning;
+        } else {
+          effectiveStatus = SubagentStatus.completed;
+        }
+
+        final isBusy = effectiveStatus == SubagentStatus.spawning ||
+            effectiveStatus == SubagentStatus.running;
+        final isFailed = effectiveStatus == SubagentStatus.failed;
+        final tint = isFailed
+            ? semantic.danger
+            : isBusy
+                ? theme.colorScheme.primary
+                : semantic.success;
+        final stateLabel = switch (effectiveStatus) {
+          SubagentStatus.spawning => 'spawning',
+          SubagentStatus.running => 'working',
+          SubagentStatus.failed => 'failed',
+          SubagentStatus.completed => 'launched',
+        };
+
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainerHigh.withOpacity(0.75),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: tint.withOpacity(0.32)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (isBusy)
+                SizedBox(
+                  width: 10,
+                  height: 10,
+                  child: CircularProgressIndicator(strokeWidth: 1.6, color: tint),
+                )
+              else
+                Icon(
+                  isFailed ? Icons.error_outline : Icons.smart_toy_outlined,
+                  size: 13,
+                  color: tint,
+                ),
+              const SizedBox(width: 5),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 190),
+                child: Text(
+                  AgySecretMask.mask(role),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: semantic.textPrimary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 5),
+              Text(
+                stateLabel,
+                style: theme.textTheme.labelSmall?.copyWith(
+                  fontSize: 10.5,
+                  color: tint,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        );
+      }).toList(),
     );
   }
 }

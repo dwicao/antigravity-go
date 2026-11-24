@@ -83,6 +83,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
   final Map<String, int> _sessionTurnTokens = {};
   final Map<String, List<({String prompt, List<String> attachments})>>
       _queuedItemsBySession = {};
+  final Map<String, List<ActiveSubagent>> _activeSubagentsBySession = {};
+  final Set<String> _wakeupSpawnedSubagentSessions = <String>{};
   int _nextStreamToken = 0;
   final Map<
       String,
@@ -239,6 +241,9 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     if (_wakeupAssistantIds[sessionId] == assistantId) {
       _wakeupAssistantIds.remove(sessionId);
     }
+    if (!_wakeupSpawnedSubagentSessions.remove(sessionId)) {
+      _completeRunningSubagents(sessionId);
+    }
     final msgs = _messagesForSession(sessionId);
     final idx = msgs.indexWhere((m) => m.id == assistantId);
     if (idx >= 0 && msgs[idx].isStreaming) {
@@ -366,6 +371,35 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         .toList();
   }
 
+  void _completeRunningSubagents(String sessionId) {
+    final existing = _activeSubagentsBySession[sessionId];
+    if (existing == null || existing.isEmpty) return;
+    var changed = false;
+    final next = existing.map((s) {
+      if (s.isActive) {
+        changed = true;
+        return s.copyWith(status: SubagentStatus.completed);
+      }
+      return s;
+    }).toList();
+    if (!changed) return;
+    _activeSubagentsBySession[sessionId] = next;
+    if (_loadedSessionId == sessionId) {
+      state = state.copyWith(activeSubagents: next);
+    }
+  }
+
+  void dismissSubagents({String? sessionId}) {
+    final targetSid = sessionId ?? _loadedSessionId;
+    if (targetSid != null) {
+      _activeSubagentsBySession.remove(targetSid);
+      _wakeupSpawnedSubagentSessions.remove(targetSid);
+    }
+    if (targetSid == null || _loadedSessionId == targetSid) {
+      state = state.copyWith(activeSubagents: const []);
+    }
+  }
+
   Set<String> _computeActiveBgIds() {
     return <String>{..._sessionRuntimes.keys};
   }
@@ -373,6 +407,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
   Future<void> _loadMessages(String sessionId) async {
     final inFlight = _inFlightMessages[sessionId];
     final activeRt = _sessionRuntimes[sessionId];
+    final sessionSubagents =
+        _activeSubagentsBySession[sessionId] ?? const <ActiveSubagent>[];
     if (inFlight != null) {
       if (!ref.mounted || _loadedSessionId != sessionId) return;
       final isSessionStreaming = activeRt != null;
@@ -389,6 +425,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         activeTurnId: activeRt?.turnId,
         clearActiveTurnId: activeRt == null,
         activeBackgroundSessionIds: _computeActiveBgIds(),
+        activeSubagents: sessionSubagents,
         loadedSessionId: sessionId,
       );
       return;
@@ -399,6 +436,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     // Re-check in case a background turn completed or started while awaiting I/O.
     final latestInFlight = _inFlightMessages[sessionId];
     final latestRt = _sessionRuntimes[sessionId];
+    final latestSubagents =
+        _activeSubagentsBySession[sessionId] ?? const <ActiveSubagent>[];
     if (latestInFlight != null) {
       state = state.copyWith(
         messages: List<ChatMessage>.from(latestInFlight),
@@ -413,6 +452,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         activeTurnId: latestRt?.turnId,
         clearActiveTurnId: latestRt == null,
         activeBackgroundSessionIds: _computeActiveBgIds(),
+        activeSubagents: latestSubagents,
         loadedSessionId: sessionId,
       );
       return;
@@ -433,6 +473,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       stallWarning: _sessionStallWarnings[sessionId],
       loopWarning: _sessionLoopWarnings[sessionId],
       activeBackgroundSessionIds: _computeActiveBgIds(),
+      activeSubagents: latestSubagents,
       loadedSessionId: sessionId,
     );
   }
@@ -613,12 +654,22 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     _sessionRuntimes.remove(session.id)?.dispose();
     _sessionRuntimes[session.id] = rt;
 
+    final retainedSubagents = (_activeSubagentsBySession[session.id] ?? const [])
+        .where((s) => s.isActive)
+        .toList();
+    if (retainedSubagents.isEmpty) {
+      _activeSubagentsBySession.remove(session.id);
+    } else {
+      _activeSubagentsBySession[session.id] = retainedSubagents;
+    }
+
     final isViewingSession = _loadedSessionId == session.id;
     state = state.copyWith(
       messages: isViewingSession ? nextMessages : state.messages,
       isStreaming: isViewingSession ? true : state.isStreaming,
       activeTurnId: isViewingSession ? turnId : state.activeTurnId,
       activeBackgroundSessionIds: _computeActiveBgIds(),
+      activeSubagents: isViewingSession ? retainedSubagents : state.activeSubagents,
       clearPermission: isViewingSession,
       clearStallWarning: isViewingSession,
       clearLoopWarning: isViewingSession,
@@ -1055,6 +1106,30 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           idx,
           current.copyWith(tools: tools, steps: nextSteps),
         );
+        final prevSubagents = _activeSubagentsBySession[session.id] ?? const [];
+        final nextSubagents = ChatTurnHelpers.applySubagentToolEvent(
+          prevSubagents,
+          callId: effCallId,
+          toolName: resolvedToolName,
+          state: evt.state,
+          parameters: mergedParams,
+          output: evt.output,
+          errorMessage: evt.errorMessage,
+        );
+        if (!identical(nextSubagents, prevSubagents)) {
+          if (nextSubagents.isEmpty) {
+            _activeSubagentsBySession.remove(session.id);
+          } else {
+            _activeSubagentsBySession[session.id] = nextSubagents;
+          }
+          if (_wakeupAssistantIds[session.id] == assistantId &&
+              ChatTurnHelpers.isSubagentSpawnTool(resolvedToolName)) {
+            _wakeupSpawnedSubagentSessions.add(session.id);
+          }
+          if (_loadedSessionId == session.id) {
+            state = state.copyWith(activeSubagents: nextSubagents);
+          }
+        }
         if (ref.read(harnessProvider).loopBreakerEnabled && rt != null) {
           final isFailed = evt.state == ToolCallState.failed ||
               (evt.errorMessage?.isNotEmpty ?? false);
@@ -1463,6 +1538,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       _sessionTurnTokens.remove(targetSid);
       _wakeupFinalizeTimers.remove(targetSid)?.cancel();
       _wakeupAssistantIds.remove(targetSid);
+      _wakeupSpawnedSubagentSessions.remove(targetSid);
+      _activeSubagentsBySession.remove(targetSid);
       _pendingPermissionsBySession.remove(targetSid);
       _sessionLoopWarnings.remove(targetSid);
       _sessionStallWarnings.remove(targetSid);
@@ -1500,6 +1577,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         isStreaming: false,
         tokensPerSecond: 0,
         activeBackgroundSessionIds: _computeActiveBgIds(),
+        activeSubagents: const [],
         clearPermission: true,
         clearStallWarning: true,
         clearLoopWarning: true,
@@ -1543,9 +1621,27 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       ref.read(ciWatchProvider.notifier).cancelWatch(nativeTaskId);
       return;
     }
+    if (kindName == 'subagent' ||
+        (nativeTaskId != null && nativeTaskId.startsWith('subagent:'))) {
+      final sid = sessionId ?? _loadedSessionId;
+      if (sid != null) {
+        final rtTurn = _sessionRuntimes[sid]?.turnId;
+        await stopStreaming(sessionId: sid);
+        if (rtTurn != null) {
+          await ref
+              .read(runtimeProvider.notifier)
+              .cancelBackgroundTask('turn:$rtTurn');
+        }
+        dismissSubagents(sessionId: sid);
+      } else {
+        await forceStopAllTasks();
+      }
+      return;
+    }
     if (nativeTaskId != null &&
         !nativeTaskId.startsWith('session:') &&
-        !nativeTaskId.startsWith('tool:')) {
+        !nativeTaskId.startsWith('tool:') &&
+        !nativeTaskId.startsWith('subagent:')) {
       await ref.read(runtimeProvider.notifier).cancelBackgroundTask(nativeTaskId);
       return;
     }
@@ -1572,10 +1668,13 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       await stopStreaming();
     }
     _inFlightMessages.clear();
+    _activeSubagentsBySession.clear();
+    _wakeupSpawnedSubagentSessions.clear();
     final stoppedNative =
         await ref.read(runtimeProvider.notifier).forceStopAllBackgroundTasks();
     state = state.copyWith(
       activeBackgroundSessionIds: const {},
+      activeSubagents: const [],
       isStreaming: false,
       clearPermission: true,
       clearStallWarning: true,

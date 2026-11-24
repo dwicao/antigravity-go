@@ -5,6 +5,50 @@ import '../ui/chat/secret_mask.dart';
 
 enum ChatRole { user, assistant, system }
 
+enum SubagentStatus { spawning, running, completed, failed }
+
+class ActiveSubagent {
+  const ActiveSubagent({
+    required this.id,
+    required this.role,
+    this.typeName = '',
+    this.model = '',
+    required this.status,
+    required this.startedAt,
+    this.conversationId,
+  });
+
+  final String id;
+  final String role;
+  final String typeName;
+  final String model;
+  final SubagentStatus status;
+  final DateTime startedAt;
+  final String? conversationId;
+
+  bool get isActive =>
+      status == SubagentStatus.spawning || status == SubagentStatus.running;
+
+  ActiveSubagent copyWith({
+    String? role,
+    String? typeName,
+    String? model,
+    SubagentStatus? status,
+    DateTime? startedAt,
+    String? conversationId,
+  }) {
+    return ActiveSubagent(
+      id: id,
+      role: role ?? this.role,
+      typeName: typeName ?? this.typeName,
+      model: model ?? this.model,
+      status: status ?? this.status,
+      startedAt: startedAt ?? this.startedAt,
+      conversationId: conversationId ?? this.conversationId,
+    );
+  }
+}
+
 Map<String, dynamic> _maskParameters(Map<String, dynamic> raw) {
   if (raw.isEmpty) return raw;
   return raw.map((k, v) {
@@ -230,6 +274,7 @@ class ChatThreadState {
     this.stallWarning,
     this.loopWarning,
     this.activeBackgroundSessionIds = const {},
+    this.activeSubagents = const [],
     this.loadedSessionId,
   });
 
@@ -242,6 +287,7 @@ class ChatThreadState {
   final String? stallWarning;
   final LoopDetectionResult? loopWarning;
   final Set<String> activeBackgroundSessionIds;
+  final List<ActiveSubagent> activeSubagents;
   final String? loadedSessionId;
 
   ChatThreadState copyWith({
@@ -258,6 +304,7 @@ class ChatThreadState {
     LoopDetectionResult? loopWarning,
     bool clearLoopWarning = false,
     Set<String>? activeBackgroundSessionIds,
+    List<ActiveSubagent>? activeSubagents,
     String? loadedSessionId,
   }) {
     return ChatThreadState(
@@ -276,6 +323,7 @@ class ChatThreadState {
           clearLoopWarning ? null : (loopWarning ?? this.loopWarning),
       activeBackgroundSessionIds:
           activeBackgroundSessionIds ?? this.activeBackgroundSessionIds,
+      activeSubagents: activeSubagents ?? this.activeSubagents,
       loadedSessionId: loadedSessionId ?? this.loadedSessionId,
     );
   }

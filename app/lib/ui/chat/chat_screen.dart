@@ -33,6 +33,7 @@ import '../usage/usage_page.dart';
 import 'chat_banners_and_sheets.dart';
 import 'chat_composer_bar.dart';
 import 'message_bubble.dart';
+import 'subagents_activity_banner.dart';
 import 'tool_approval_card.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
@@ -916,6 +917,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                   message: m,
                                   tokensPerSecond:
                                       m.isStreaming ? chat.tokensPerSecond : null,
+                                  activeSubagents: chat.activeSubagents,
                                   onRegenerate: isLastAssistant
                                       ? () => ref
                                           .read(chatProvider.notifier)
@@ -1335,6 +1337,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               ),
             ),
           ),
+        wrapCentered(const SubagentsActivityBanner()),
         wrapCentered(
           ChatComposerBar(
             inputController: _inputController,

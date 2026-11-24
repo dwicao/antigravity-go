@@ -2,10 +2,13 @@ import 'package:agy_client/agy_client.dart';
 import 'package:antigravity_go/runtime/runtime_models.dart';
 import 'package:antigravity_go/state/background_tasks_state.dart';
 import 'package:antigravity_go/state/chat_state.dart';
+import 'package:antigravity_go/state/chat_turn_helpers.dart';
 import 'package:antigravity_go/state/runtime_state.dart';
 import 'package:antigravity_go/state/sessions_state.dart';
 import 'package:antigravity_go/ui/chat/chat_screen.dart';
 import 'package:antigravity_go/ui/chat/message_bubble.dart';
+import 'package:antigravity_go/ui/chat/milestone_stack_card.dart';
+import 'package:antigravity_go/ui/chat/subagents_activity_banner.dart';
 import 'package:antigravity_go/ui/shell/background_tasks_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -468,5 +471,202 @@ void main() {
 
     await tester.pump(const Duration(milliseconds: 1600));
     expect(find.text('Copy'), findsOneWidget);
+  });
+
+  test('ChatTurnHelpers tracks subagent spawn, completion/kill, and target formatting', () {
+    final now = DateTime(2026, 11, 24, 10, 0);
+    var list = ChatTurnHelpers.applySubagentToolEvent(
+      const [],
+      callId: 'call-1',
+      toolName: 'invoke_subagent',
+      state: ToolCallState.running,
+      parameters: const {'Role': 'Codebase Researcher', 'TypeName': 'research'},
+      now: now,
+    );
+    expect(list, hasLength(1));
+    expect(list.first.status, SubagentStatus.spawning);
+    expect(list.first.role, 'Codebase Researcher');
+
+    list = ChatTurnHelpers.applySubagentToolEvent(
+      list,
+      callId: 'call-1',
+      toolName: 'invoke_subagent',
+      state: ToolCallState.completed,
+      parameters: const {'Role': 'Codebase Researcher', 'TypeName': 'research'},
+      output: '{"conversationId":"11111111-2222-3333-4444-555555555555"}',
+      now: now,
+    );
+    expect(list, hasLength(1));
+    expect(list.first.status, SubagentStatus.running);
+    expect(
+      list.first.conversationId,
+      '11111111-2222-3333-4444-555555555555',
+    );
+
+    list = ChatTurnHelpers.applySubagentToolEvent(
+      list,
+      callId: 'call-2',
+      toolName: 'manage_subagents',
+      state: ToolCallState.completed,
+      parameters: const {
+        'Action': 'kill',
+        'ConversationIds': ['11111111-2222-3333-4444-555555555555'],
+      },
+      now: now,
+    );
+    expect(list, isEmpty);
+
+    const step = ChatToolStep(
+      id: 's1',
+      toolName: 'invoke_subagent',
+      parameters: {'Role': 'UI Auditor', 'TypeName': 'research'},
+      state: ToolCallState.completed,
+    );
+    expect(ChatTurnHelpers.formatToolTarget(step), 'UI Auditor (research)');
+  });
+
+  test('backgroundTasksProvider surfaces active subagents after parent turn ends', () {
+    final container = ProviderContainer(
+      overrides: [
+        sessionsProvider.overrideWith(
+          () => _FakeSessionsNotifier(const SessionsState(activeSessionId: 's1')),
+        ),
+        runtimeProvider.overrideWith(
+          () => _FakeRuntimeNotifier(const RuntimeUiState()),
+        ),
+        chatProvider.overrideWith(
+          () => _FakeChatNotifier(
+            ChatThreadState(
+              isStreaming: false,
+              activeSubagents: [
+                ActiveSubagent(
+                  id: 'call-bg-1',
+                  role: 'Security Auditor',
+                  typeName: 'research',
+                  status: SubagentStatus.running,
+                  startedAt: DateTime(2026, 11, 24, 10, 0),
+                  conversationId: 'conv-bg-1',
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    final tasks = container.read(backgroundTasksProvider);
+    expect(tasks, hasLength(1));
+    expect(tasks.first.kind, BackgroundTaskKind.subagent);
+    expect(tasks.first.title, 'Security Auditor');
+    expect(tasks.first.nativeTaskId, 'subagent:call-bg-1');
+  });
+
+  testWidgets(
+      'SubagentsActivityBanner renders live subagent status and dismisses cleanly',
+      (tester) async {
+    final container = ProviderContainer(
+      overrides: [
+        sessionsProvider.overrideWith(
+          () => _FakeSessionsNotifier(const SessionsState(activeSessionId: 's1')),
+        ),
+        runtimeProvider.overrideWith(
+          () => _FakeRuntimeNotifier(const RuntimeUiState()),
+        ),
+        chatProvider.overrideWith(
+          () => _FakeChatNotifier(
+            ChatThreadState(
+              isStreaming: false,
+              activeSubagents: [
+                ActiveSubagent(
+                  id: 'sub-1',
+                  role: 'Database Debugger',
+                  typeName: 'self',
+                  status: SubagentStatus.running,
+                  startedAt: DateTime.now().subtract(const Duration(seconds: 5)),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(
+          home: Scaffold(body: SubagentsActivityBanner()),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byKey(const ValueKey('subagents-activity-banner')), findsOneWidget);
+    expect(find.textContaining('1 subagent working'), findsOneWidget);
+    expect(find.text('Database Debugger'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Dismiss'));
+    await tester.pump();
+
+    expect(container.read(chatProvider).activeSubagents, isEmpty);
+    expect(find.byKey(const ValueKey('subagents-activity-banner')), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(seconds: 2));
+  });
+
+  testWidgets(
+      'MessageBubble and MilestoneStackCard show spawned subagents strip and verb',
+      (tester) async {
+    final msg = ChatMessage(
+      id: 'm-sub',
+      role: ChatRole.assistant,
+      text: 'Delegating codebase audit now.',
+      createdAt: DateTime(2026, 11, 24, 10, 0),
+      completedAt: DateTime(2026, 11, 24, 10, 1),
+      isStreaming: false,
+      tools: const [
+        ChatToolStep(
+          id: 'tool-sub-1',
+          toolName: 'invoke_subagent',
+          parameters: {'Role': 'Codebase Researcher', 'TypeName': 'research'},
+          output: 'conversationId: conv-abc123',
+          state: ToolCallState.completed,
+        ),
+      ],
+    );
+
+    final active = [
+      ActiveSubagent(
+        id: 'tool-sub-1',
+        role: 'Codebase Researcher',
+        typeName: 'research',
+        status: SubagentStatus.running,
+        startedAt: DateTime(2026, 11, 24, 10, 0),
+        conversationId: 'conv-abc123',
+      ),
+    ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: Column(
+              children: [
+                MilestoneStackCard(message: msg),
+                MessageBubble(message: msg, activeSubagents: active),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.textContaining('Spawned 1 subagent'), findsOneWidget);
+    expect(find.byKey(const ValueKey('spawned-subagents-strip')), findsOneWidget);
+    expect(find.text('Codebase Researcher'), findsWidgets);
+    expect(find.text('working'), findsOneWidget);
   });
 }
