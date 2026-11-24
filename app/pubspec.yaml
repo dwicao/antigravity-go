@@ -1,7 +1,7 @@
 name: antigravity_go
 description: "Antigravity Go — Google Antigravity Mobile Harness for Android"
 publish_to: 'none'
-version: 1.0.20+1
+version: 1.0.21+1
 
 environment:
   sdk: ^3.10.0
@@ -40,3 +40,5 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/version.json

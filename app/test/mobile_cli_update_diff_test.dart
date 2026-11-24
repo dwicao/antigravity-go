@@ -572,4 +572,76 @@ void main() {
       '/sdcard/Projects/antigravity-go',
     );
   });
+
+  test('UpdateService.parseVersionManifest and AppUpdateState compare current vs latest accurately', () {
+    final parsed = UpdateService.parseVersionManifest({
+      'version': '1.0.21',
+      'tag': 'v1.0.21',
+      'page': 'https://github.com/dwicao/antigravity-go/releases/tag/v1.0.21',
+      'changelogUrl': 'https://github.com/dwicao/antigravity-go/blob/main/CHANGELOG.md',
+      'releaseNotes': '- Fix Follow toggle\n- Add version.json',
+      'assets': {
+        'arm64': {
+          'name': 'antigravity-go-1.0.21-arm64.apk',
+          'sha256': 'abc123',
+          'size': 123456,
+          'url': 'https://github.com/dwicao/antigravity-go/releases/download/v1.0.21/antigravity-go-1.0.21-arm64.apk',
+        },
+      },
+    }, preferX64: false);
+
+    expect(parsed, isNotNull);
+    expect(parsed!.versionName, '1.0.21');
+    expect(parsed.tagName, 'v1.0.21');
+    expect(parsed.arm64Sha256, 'abc123');
+    expect(parsed.notes, contains('Fix Follow toggle'));
+
+    final upToDate = AppUpdateState(currentVersion: '1.0.21', latest: parsed);
+    expect(upToDate.hasNewerVersion, isFalse);
+    expect(upToDate.isUpToDate, isTrue);
+
+    final newerAvailable = AppUpdateState(currentVersion: '1.0.20', latest: parsed);
+    expect(newerAvailable.hasNewerVersion, isTrue);
+    expect(newerAvailable.isUpToDate, isFalse);
+  });
+
+  testWidgets(
+      'UpdateSheet shows Already on latest version and Release Notes when up to date',
+      (tester) async {
+    final container = ProviderContainer(
+      overrides: [
+        appUpdateProvider.overrideWith(
+          () => _FakeUpdateNotifier(
+            const AppUpdateState(
+              currentVersion: '1.0.21',
+              latest: AppReleaseInfo(
+                tagName: 'v1.0.21',
+                versionName: '1.0.21',
+                htmlUrl: 'https://github.com/dwicao/antigravity-go/releases/tag/v1.0.21',
+                arm64ApkUrl: 'https://example.com/app.apk',
+                arm64SizeBytes: 15000000,
+                notes: '- Fixed Follow button auto-disable bug',
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(
+          home: Scaffold(body: UpdateSheet()),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.textContaining('Already on latest version (v1.0.21)'), findsOneWidget);
+    expect(find.text('Release Notes (v1.0.21)'), findsOneWidget);
+    expect(find.textContaining('Fixed Follow button auto-disable bug'), findsOneWidget);
+    expect(find.text('Up to date · Reinstall v1.0.21'), findsOneWidget);
+  });
 }

@@ -14,6 +14,7 @@ class AppReleaseInfo {
     this.arm64SizeBytes,
     this.arm64Sha256,
     this.notes,
+    this.changelogUrl,
     this.publishedAt,
   });
 
@@ -24,6 +25,7 @@ class AppReleaseInfo {
   final int? arm64SizeBytes;
   final String? arm64Sha256;
   final String? notes;
+  final String? changelogUrl;
   final DateTime? publishedAt;
 }
 
@@ -88,7 +90,94 @@ class UpdateService {
     return _eventStream!;
   }
 
+  Future<String?> getInstalledVersion() async {
+    try {
+      final raw = await _channel.invokeMethod<Map<Object?, Object?>>(
+        'getAppVersion',
+      );
+      final nativeVersion = raw?['versionName']?.toString().trim();
+      if (nativeVersion != null && nativeVersion.isNotEmpty) {
+        return nativeVersion;
+      }
+    } on MissingPluginException {
+      // Fallback to bundled version.json when running outside Android.
+    } catch (_) {}
+
+    try {
+      final rawJson = await rootBundle.loadString('assets/version.json');
+      final decoded = jsonDecode(rawJson);
+      if (decoded is Map<String, dynamic>) {
+        final v = decoded['version']?.toString().trim();
+        if (v != null && v.isNotEmpty) return v;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  static AppReleaseInfo? parseVersionManifest(
+    Map<String, dynamic> json, {
+    bool? preferX64,
+  }) {
+    final rawVersion = (json['version'] as String? ?? '').trim();
+    final rawTag = (json['tag'] as String? ?? '').trim();
+    final tag = rawTag.isNotEmpty
+        ? rawTag
+        : (rawVersion.isNotEmpty ? 'v$rawVersion' : '');
+    final version = rawVersion.isNotEmpty
+        ? rawVersion
+        : (tag.startsWith('v') ? tag.substring(1) : tag);
+    if (version.isEmpty && tag.isEmpty) return null;
+
+    final assetsMap = json['assets'];
+    Map<String, dynamic>? selectedAsset;
+    if (assetsMap is Map<String, dynamic>) {
+      final isX64 = preferX64 ??
+          (Platform.version.toLowerCase().contains('x64') ||
+              Platform.version.toLowerCase().contains('x86_64'));
+      final primaryKey = isX64 ? 'x64' : 'arm64';
+      final fallbackKey = isX64 ? 'arm64' : 'x64';
+      final primary = assetsMap[primaryKey];
+      final fallback = assetsMap[fallbackKey];
+      if (primary is Map<String, dynamic>) {
+        selectedAsset = primary;
+      } else if (fallback is Map<String, dynamic>) {
+        selectedAsset = fallback;
+      }
+    }
+
+    return AppReleaseInfo(
+      tagName: tag,
+      versionName: version,
+      htmlUrl: json['page'] as String? ??
+          'https://github.com/$repoOwner/$repoName/releases/tag/$tag',
+      arm64ApkUrl: selectedAsset?['url'] as String?,
+      arm64SizeBytes: (selectedAsset?['size'] as num?)?.toInt(),
+      arm64Sha256: (selectedAsset?['sha256'] as String?)?.toLowerCase(),
+      notes: json['releaseNotes'] as String?,
+      changelogUrl: json['changelogUrl'] as String? ??
+          'https://github.com/$repoOwner/$repoName/blob/main/CHANGELOG.md',
+      publishedAt: DateTime.tryParse(json['publishedAt'] as String? ?? ''),
+    );
+  }
+
   Future<AppReleaseInfo?> fetchLatestRelease() async {
+    final manifestUri = Uri.https(
+      'github.com',
+      '/$repoOwner/$repoName/releases/latest/download/version.json',
+    );
+    try {
+      final manifestRes = await http
+          .get(manifestUri, headers: {'Accept': 'application/json'})
+          .timeout(const Duration(seconds: 10));
+      if (manifestRes.statusCode == 200) {
+        final decoded = jsonDecode(manifestRes.body);
+        if (decoded is Map<String, dynamic>) {
+          final parsed = parseVersionManifest(decoded);
+          if (parsed != null) return parsed;
+        }
+      }
+    } catch (_) {}
+
     final uri = Uri.https(
       'api.github.com',
       '/repos/$repoOwner/$repoName/releases/latest',
@@ -142,6 +231,7 @@ class UpdateService {
       arm64SizeBytes: apkSize,
       arm64Sha256: sha256,
       notes: json['body'] as String?,
+      changelogUrl: 'https://github.com/$repoOwner/$repoName/blob/main/CHANGELOG.md',
       publishedAt: DateTime.tryParse(json['published_at'] as String? ?? ''),
     );
   }

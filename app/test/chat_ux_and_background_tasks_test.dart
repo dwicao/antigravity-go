@@ -670,4 +670,88 @@ void main() {
     expect(find.text('Codebase Researcher'), findsWidgets);
     expect(find.text('working'), findsOneWidget);
   });
+
+  testWidgets(
+      'ChatScreen Follow toggle stays active across horizontal scroll and pauses only on vertical scroll up',
+      (tester) async {
+    final longLines = List.generate(
+      24,
+      (i) => 'Message line $i with enough vertical height to scroll cleanly.',
+    ).join('\n\n');
+    final chatNotifier = _FakeChatNotifier(
+      ChatThreadState(
+        loadedSessionId: 's-follow',
+        messages: [
+          ChatMessage(
+            id: 'm1',
+            role: ChatRole.user,
+            text: 'Start session',
+            createdAt: DateTime(2026, 11, 24, 9, 0),
+          ),
+          ChatMessage(
+            id: 'm2',
+            role: ChatRole.assistant,
+            text:
+                '$longLines\n\n```dart\nfinal horizontalCodeBlock = "verylonghorizontaltexttotestscrollingbehavior0123456789abcdefghijklmnopqrstuvwxyz";\n```',
+            createdAt: DateTime(2026, 11, 24, 9, 1),
+            isStreaming: true,
+          ),
+        ],
+      ),
+    );
+    final container = ProviderContainer(
+      overrides: [
+        sessionsProvider.overrideWith(
+          () => _FakeSessionsNotifier(const SessionsState(activeSessionId: 's-follow')),
+        ),
+        runtimeProvider.overrideWith(
+          () => _FakeRuntimeNotifier(const RuntimeUiState()),
+        ),
+        chatProvider.overrideWith(() => chatNotifier),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(
+          home: Scaffold(body: ChatScreen()),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    // Tap Follow pill and confirm it switches to Following.
+    expect(find.text('Follow'), findsOneWidget);
+    await tester.tap(find.text('Follow'));
+    await tester.pump();
+    expect(find.text('Following'), findsOneWidget);
+
+    // Simulate appended streaming chunks — Following must remain active.
+    chatNotifier.setMessages([
+      ...container.read(chatProvider).messages,
+      ChatMessage(
+        id: 'm3',
+        role: ChatRole.assistant,
+        text: 'More streamed output appended to chat.',
+        createdAt: DateTime(2026, 11, 24, 9, 2),
+        isStreaming: true,
+      ),
+    ]);
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('Following'), findsOneWidget);
+
+    // Intentionally drag main vertical chat ListView upward away from bottom -> Follow pauses.
+    await tester.drag(find.byType(ListView), const Offset(0, 320));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('Following'), findsNothing);
+    expect(find.byTooltip('Jump to latest'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(milliseconds: 500));
+  });
 }

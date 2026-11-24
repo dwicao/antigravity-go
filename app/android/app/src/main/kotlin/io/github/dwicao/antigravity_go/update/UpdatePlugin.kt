@@ -69,6 +69,27 @@ class UpdatePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChanne
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
+            "getAppVersion" -> {
+                val info = runCatching {
+                    @Suppress("DEPRECATION")
+                    appContext.packageManager.getPackageInfo(appContext.packageName, 0)
+                }.getOrNull()
+                val versionName = info?.versionName ?: ""
+                val versionCode = if (info == null) {
+                    0L
+                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    info.longVersionCode
+                } else {
+                    @Suppress("DEPRECATION")
+                    info.versionCode.toLong()
+                }
+                result.success(
+                    mapOf(
+                        "versionName" to versionName,
+                        "versionCode" to versionCode,
+                    )
+                )
+            }
             "canRequestPackageInstalls" -> {
                 val allowed = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     appContext.packageManager.canRequestPackageInstalls()

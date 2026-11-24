@@ -390,8 +390,10 @@ class SettingsPage extends ConsumerWidget {
                       update.isDownloading
                           ? '${formatUpdateBytes(update.receivedBytes)} / ${update.effectiveTotalBytes != null ? formatUpdateBytes(update.effectiveTotalBytes!) : "…"} · Data used: ${formatUpdateBytes(update.totalDataUsedBytes)}'
                           : update.latest != null
-                              ? 'Latest release: ${update.latest!.tagName} · Data used: ${formatUpdateBytes(update.totalDataUsedBytes)}'
-                              : 'dwicao/antigravity-go on GitHub Releases',
+                              ? (update.hasNewerVersion
+                                  ? 'Update available: ${update.latest!.tagName} (installed v${update.currentVersion}) · Data used: ${formatUpdateBytes(update.totalDataUsedBytes)}'
+                                  : 'Up to date (v${update.currentVersion}) · Data used: ${formatUpdateBytes(update.totalDataUsedBytes)}')
+                              : 'Installed v${update.currentVersion} · dwicao/antigravity-go',
                     ),
                     trailing: update.checking
                         ? const SizedBox(
@@ -452,10 +454,15 @@ class SettingsPage extends ConsumerWidget {
                       child: Row(
                         children: [
                           Expanded(
-                            child: FilledButton(
-                              onPressed: () => UpdateSheet.show(context),
-                              child: Text('Install ${update.latest!.tagName}'),
-                            ),
+                            child: update.hasNewerVersion
+                                ? FilledButton(
+                                    onPressed: () => UpdateSheet.show(context),
+                                    child: Text('Install ${update.latest!.tagName}'),
+                                  )
+                                : OutlinedButton(
+                                    onPressed: () => UpdateSheet.show(context),
+                                    child: Text('Up to date (${update.latest!.tagName})'),
+                                  ),
                           ),
                           const SizedBox(width: 8),
                           OutlinedButton(

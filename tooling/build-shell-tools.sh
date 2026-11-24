@@ -8,6 +8,49 @@ set -euo pipefail
 ROOT=$(CDPATH= cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 JNI_DIR="$ROOT/app/android/app/src/main/jniLibs"
 CACHE_DIR="$ROOT/.cache/shell-tools"
+VERIFY_ONLY=0
+
+while (($#)); do
+  case "$1" in
+    --verify-only) VERIFY_ONLY=1; shift ;;
+    *) echo "Unknown option: $1" >&2; exit 1 ;;
+  esac
+done
+
+verify_arch_dir() {
+  local abi="$1"
+  local expected_machine="$2"
+  local out_dir="$JNI_DIR/$abi"
+  for bin in libbash.so libbusybox.so libpty.so; do
+    local target="$out_dir/$bin"
+    [[ -s "$target" ]] || { echo "Missing $target" >&2; exit 1; }
+    readelf -h "$target" | grep -q "$expected_machine" || {
+      echo "$target is not expected ELF machine ($expected_machine)" >&2
+      readelf -h "$target" >&2
+      exit 1
+    }
+    if readelf -l "$target" | grep -q "INTERP"; then
+      echo "$target must be statically linked (found PT_INTERP)" >&2
+      exit 1
+    fi
+  done
+}
+
+verify_host_x64() {
+  echo "[shell-tools] Executing x86_64 static binaries on host to double-check..."
+  mkdir -p "$CACHE_DIR"
+  ln -sf "$JNI_DIR/x86_64/libbusybox.so" "$CACHE_DIR/ls"
+  "$JNI_DIR/x86_64/libbash.so" -c '"$1" /tmp >/dev/null && echo "host-exec-ok"' _ "$CACHE_DIR/ls"
+  rm -f "$CACHE_DIR/ls"
+}
+
+if [[ "$VERIFY_ONLY" -eq 1 ]]; then
+  verify_arch_dir "x86_64" "X86-64"
+  verify_arch_dir "arm64-v8a" "AArch64"
+  verify_host_x64
+  exit 0
+fi
+
 mkdir -p "$CACHE_DIR"
 
 BASH_VERSION="5.2.37"
@@ -355,26 +398,14 @@ PTYEOF
       /out/libpty.so 91 33 - /out/libbash.so -c "echo verified-pty"
     '
 
-  for bin in libbash.so libbusybox.so libpty.so; do
-    local target="$out_dir/$bin"
-    [[ -s "$target" ]] || { echo "Missing $target" >&2; exit 1; }
-    readelf -h "$target" | grep -q "$expected_machine" || {
-      echo "$target is not expected ELF machine ($expected_machine)" >&2
-      readelf -h "$target" >&2
-      exit 1
-    }
-    if readelf -l "$target" | grep -q "INTERP"; then
-      echo "$target must be statically linked (found PT_INTERP)" >&2
-      exit 1
-    fi
-  done
+  verify_arch_dir "$abi" "$expected_machine"
 }
 
-build_for_arch "x86_64" "linux/amd64" "X86-64"
-build_for_arch "arm64-v8a" "linux/arm64" "AArch64"
+build_for_arch "x86_64" "linux/amd64" "X86-64" &
+pid_x64=$!
+build_for_arch "arm64-v8a" "linux/arm64" "AArch64" &
+pid_arm64=$!
+wait "$pid_x64"
+wait "$pid_arm64"
 
-echo "[shell-tools] Executing x86_64 static binaries on host to double-check..."
-ln -sf "$JNI_DIR/x86_64/libbusybox.so" /tmp/test-busybox-host
-ln -sf "$JNI_DIR/x86_64/libbusybox.so" "$CACHE_DIR/ls"
-"$JNI_DIR/x86_64/libbash.so" -c '"$1" /tmp >/dev/null && echo "host-exec-ok"' _ "$CACHE_DIR/ls"
-rm -f /tmp/test-busybox-host "$CACHE_DIR/ls"
+verify_host_x64

@@ -67,7 +67,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   bool _isAtBottom = true;
   bool _followLatest = false;
   bool _isProgrammaticScroll = false;
-  double _lastScrollPixels = 0;
+  bool _userActivelyScrollingUp = false;
   int _remainingOpenSnapFrames = 0;
   String? _observedActiveSessionId;
   String? _lastAutoScrolledSessionKey;
@@ -87,19 +87,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final pos = _scrollController.position;
     final distFromBottom = pos.maxScrollExtent - pos.pixels;
     final atBottom = distFromBottom <= _atBottomThreshold;
-    final userScrolledUp =
-        !_isProgrammaticScroll && pos.pixels < _lastScrollPixels - 2.0;
-    _lastScrollPixels = pos.pixels;
-
-    var nextFollow = _followLatest;
-    if (userScrolledUp && !atBottom && nextFollow) {
-      nextFollow = false;
-    }
-
-    if ((atBottom != _isAtBottom || nextFollow != _followLatest) && mounted) {
+    if (atBottom != _isAtBottom && mounted) {
       setState(() {
         _isAtBottom = atBottom;
-        _followLatest = nextFollow;
       });
     }
   }
@@ -127,7 +117,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       if ((pos.pixels - target).abs() > 0.5) {
         _scrollController.jumpTo(target);
       }
-      _lastScrollPixels = _scrollController.position.pixels;
     } finally {
       _isProgrammaticScroll = false;
     }
@@ -139,6 +128,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   Future<void> _jumpToBottom({bool animate = true}) async {
     if (!_scrollController.hasClients) return;
     final target = _scrollController.position.maxScrollExtent;
+    _userActivelyScrollingUp = false;
     _isProgrammaticScroll = true;
     try {
       if (animate) {
@@ -150,9 +140,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       } else {
         _scrollController.jumpTo(target);
       }
-      if (_scrollController.hasClients) {
-        _lastScrollPixels = _scrollController.position.pixels;
-      }
     } finally {
       _isProgrammaticScroll = false;
     }
@@ -161,6 +148,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   void _toggleFollowLatest() {
     final next = !_followLatest;
+    _userActivelyScrollingUp = false;
     setState(() => _followLatest = next);
     if (next) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -576,10 +564,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       }
     });
     if (_observedActiveSessionId != activeSessionId) {
+      final transitionedFromPlaceholder =
+          _observedActiveSessionId == 'new_session' &&
+              activeSessionId != 'new_session';
       _observedActiveSessionId = activeSessionId;
-      _followLatest = false;
+      _userActivelyScrollingUp = false;
       _lastAutoScrolledSessionKey = null;
       _compactBannerDismissed = false;
+      if (!transitionedFromPlaceholder) {
+        _followLatest = false;
+      }
     }
     if (chat.messages.isNotEmpty) {
       final readyForActive = chat.loadedSessionId == null ||
@@ -588,9 +582,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         final sessionKey = chat.loadedSessionId ?? activeSessionId;
         if (_lastAutoScrolledSessionKey != sessionKey) {
           _scheduleInitialBottomSnap(sessionKey);
-        } else if (_followLatest) {
+        } else if (_followLatest && !_userActivelyScrollingUp) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted && _followLatest) {
+            if (mounted && _followLatest && !_userActivelyScrollingUp) {
               _jumpToBottomImmediate();
             }
           });
@@ -870,40 +864,73 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   children: [
                     NotificationListener<UserScrollNotification>(
                       onNotification: (notification) {
+                        // Ignore nested horizontal scrolls (code blocks / tables).
+                        if (notification.depth != 0 ||
+                            notification.metrics.axis != Axis.vertical) {
+                          return false;
+                        }
                         if (notification.direction == ScrollDirection.forward) {
                           _remainingOpenSnapFrames = 0;
-                          if (_followLatest && mounted) {
-                            setState(() => _followLatest = false);
-                          }
+                          _userActivelyScrollingUp = true;
+                        } else {
+                          _userActivelyScrollingUp = false;
                         }
                         return false;
                       },
-                      child: NotificationListener<ScrollMetricsNotification>(
+                      child: NotificationListener<ScrollUpdateNotification>(
                         onNotification: (notification) {
-                          final dist = notification.metrics.maxScrollExtent -
-                              notification.metrics.pixels;
-                          if ((_remainingOpenSnapFrames > 0 || _followLatest) &&
-                              dist > 1.0) {
-                            WidgetsBinding.instance.addPostFrameCallback((_) {
-                              if (!mounted) return;
-                              if (_remainingOpenSnapFrames > 0) {
-                                _performOpenSnap();
-                              } else if (_followLatest) {
-                                _jumpToBottomImmediate();
-                              }
-                            });
-                          } else {
-                            final atBottom = dist <= _atBottomThreshold;
-                            if (atBottom != _isAtBottom && mounted) {
-                              WidgetsBinding.instance
-                                  .addPostFrameCallback((_) => _onScroll());
+                          if (notification.depth != 0 ||
+                              notification.metrics.axis != Axis.vertical ||
+                              _isProgrammaticScroll) {
+                            return false;
+                          }
+                          final delta = notification.scrollDelta ?? 0.0;
+                          final distFromBottom =
+                              notification.metrics.maxScrollExtent -
+                                  notification.metrics.pixels;
+                          if (delta < -1.5 &&
+                              distFromBottom > _atBottomThreshold &&
+                              _followLatest) {
+                            _remainingOpenSnapFrames = 0;
+                            if (mounted) {
+                              setState(() => _followLatest = false);
                             }
                           }
                           return false;
                         },
-                        child: Scrollbar(
-                          controller: _scrollController,
-                          child: ListView.builder(
+                        child: NotificationListener<ScrollMetricsNotification>(
+                          onNotification: (notification) {
+                            if (notification.depth != 0 ||
+                                notification.metrics.axis != Axis.vertical) {
+                              return false;
+                            }
+                            final dist = notification.metrics.maxScrollExtent -
+                                notification.metrics.pixels;
+                            if ((_remainingOpenSnapFrames > 0 ||
+                                    (_followLatest &&
+                                        !_userActivelyScrollingUp)) &&
+                                dist > 1.0) {
+                              WidgetsBinding.instance.addPostFrameCallback((_) {
+                                if (!mounted) return;
+                                if (_remainingOpenSnapFrames > 0) {
+                                  _performOpenSnap();
+                                } else if (_followLatest &&
+                                    !_userActivelyScrollingUp) {
+                                  _jumpToBottomImmediate();
+                                }
+                              });
+                            } else {
+                              final atBottom = dist <= _atBottomThreshold;
+                              if (atBottom != _isAtBottom && mounted) {
+                                WidgetsBinding.instance
+                                    .addPostFrameCallback((_) => _onScroll());
+                              }
+                            }
+                            return false;
+                          },
+                          child: Scrollbar(
+                            controller: _scrollController,
+                            child: ListView.builder(
                             controller: _scrollController,
                             padding: const EdgeInsets.only(top: 8, bottom: 72),
                             itemCount: chat.messages.length,
@@ -946,13 +973,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                               );
                             },
                           ),
+                            ),
+                          ),
                         ),
                       ),
                     ),
                     Positioned(
                       right: 16,
                       bottom: 12,
-                      child: !_isAtBottom
+                      child: (!_isAtBottom && !_followLatest)
                           ? FloatingActionButton.small(
                               heroTag: 'jump-to-latest-chat',
                               tooltip: 'Jump to latest',

@@ -40,6 +40,7 @@ platform_of() {
 }
 
 echo "Antigravity Go $name ($code) · $mode · ${flavors[*]}"
+python3 "$ROOT/tooling/sync_version.py" >/dev/null
 for f in "${flavors[@]}"; do
   (
     cd "$APP"

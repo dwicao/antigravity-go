@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: release-apk-${{ github.ref }}
@@ -91,11 +92,60 @@ jobs:
 
           printf 'storeFile=%s\nstorePassword=android\nkeyAlias=testkey\nkeyPassword=android\n' "$jks" > app/android/key.properties
 
+      - name: Compute shell-tools cache key
+        id: shell-hash
+        run: echo "hash=$(sha256sum tooling/build-shell-tools.sh | cut -c1-16)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore cached shell-tools via actions/cache
+        id: cache-shell
+        uses: actions/cache@v4
+        with:
+          path: app/android/app/src/main/jniLibs
+          key: shell-tools-${{ steps.shell-hash.outputs.hash }}
+
+      - name: Restore prebuilt shell-tools from workflow artifacts
+        id: restore-shell
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TOOL_HASH: ${{ steps.shell-hash.outputs.hash }}
+          CACHE_HIT: ${{ steps.cache-shell.outputs.cache-hit }}
+        run: |
+          if [[ "$CACHE_HIT" == "true" ]] && bash tooling/build-shell-tools.sh --verify-only; then
+            echo "restored=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          art_id="$(gh api "repos/${{ github.repository }}/actions/artifacts?name=shell-tools-${TOOL_HASH}&per_page=10" --jq '[.artifacts[] | select(.expired == false)][0].id // empty' || true)"
+          if [[ -n "$art_id" ]]; then
+            echo "Found prebuilt shell-tools-${TOOL_HASH} artifact ($art_id), downloading..."
+            mkdir -p app/android/app/src/main/jniLibs
+            if gh api "repos/${{ github.repository }}/actions/artifacts/${art_id}/zip" > "$RUNNER_TEMP/shell-tools.zip" \
+              && unzip -q -o "$RUNNER_TEMP/shell-tools.zip" -d app/android/app/src/main/jniLibs \
+              && chmod 0755 app/android/app/src/main/jniLibs/*/*.so \
+              && bash tooling/build-shell-tools.sh --verify-only; then
+              rm -f "$RUNNER_TEMP/shell-tools.zip"
+              echo "restored=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            rm -f "$RUNNER_TEMP/shell-tools.zip"
+          fi
+          echo "restored=false" >> "$GITHUB_OUTPUT"
+
       - name: Set up QEMU for multi-arch shell binaries
+        if: steps.restore-shell.outputs.restored != 'true'
         uses: docker/setup-qemu-action@v3
 
       - name: Build bundled bash and busybox native binaries
+        if: steps.restore-shell.outputs.restored != 'true'
         run: bash tooling/build-shell-tools.sh
+
+      - name: Cache prebuilt shell-tools workflow artifact
+        if: steps.restore-shell.outputs.restored != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: shell-tools-${{ steps.shell-hash.outputs.hash }}
+          path: app/android/app/src/main/jniLibs
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Build signed release APKs (arm64 + x64)
         run: bash tooling/build-apk.sh -f all --release
@@ -136,11 +186,12 @@ jobs:
             tag="v$version"
           fi
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$tag" dist/antigravity-go-*.apk dist/SHA256SUMS dist/update.json --clobber --repo "$GITHUB_REPOSITORY"
+            gh release upload "$tag" dist/antigravity-go-*.apk dist/SHA256SUMS dist/update.json dist/version.json --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --notes-file dist/RELEASE_NOTES.md
           else
-            gh release create "$tag" dist/antigravity-go-*.apk dist/SHA256SUMS dist/update.json \
+            gh release create "$tag" dist/antigravity-go-*.apk dist/SHA256SUMS dist/update.json dist/version.json \
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
               --title "Antigravity Go $version (AOSP release key)" \
-              --notes "Signed release APKs (arm64 + x64) built from \`$GITHUB_SHA\` with AOSP release/testkey (\`a40da80a59d170caa950cf15c18c454d47a39b26989d8b640ecd745ba71bf5dc\`)."
+              --notes-file dist/RELEASE_NOTES.md
           fi

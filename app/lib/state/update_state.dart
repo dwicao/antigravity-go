@@ -17,9 +17,10 @@ String formatUpdateBytes(int bytes) {
 }
 
 class AppUpdateState {
-  static const String currentVersion = '1.0.14';
+  static const String fallbackVersion = '1.0.21';
 
   const AppUpdateState({
+    this.currentVersion = fallbackVersion,
     this.checking = false,
     this.latest,
     this.phase = UpdateTransferPhase.idle,
@@ -32,6 +33,7 @@ class AppUpdateState {
     this.lastCheckedAt,
   });
 
+  final String currentVersion;
   final bool checking;
   final AppReleaseInfo? latest;
   final UpdateTransferPhase phase;
@@ -45,6 +47,8 @@ class AppUpdateState {
 
   bool get hasNewerVersion =>
       latest != null && compareSemver(latest!.versionName, currentVersion) > 0;
+
+  bool get isUpToDate => latest != null && !hasNewerVersion;
 
   static int compareSemver(String a, String b) {
     List<int> parse(String s) {
@@ -80,6 +84,7 @@ class AppUpdateState {
   int get totalDataUsedBytes => persistedDataUsedBytes + receivedBytes;
 
   AppUpdateState copyWith({
+    String? currentVersion,
     bool? checking,
     AppReleaseInfo? latest,
     bool clearLatest = false,
@@ -95,6 +100,7 @@ class AppUpdateState {
     DateTime? lastCheckedAt,
   }) {
     return AppUpdateState(
+      currentVersion: currentVersion ?? this.currentVersion,
       checking: checking ?? this.checking,
       latest: clearLatest ? null : (latest ?? this.latest),
       phase: phase ?? this.phase,
@@ -135,8 +141,10 @@ class AppUpdateNotifier extends Notifier<AppUpdateState> {
     final used = prefs.getInt(_kDataUsedKey) ?? 0;
     final lastMs = prefs.getInt(_kLastCheckMsKey);
     final canInstall = await UpdateService.instance.canRequestPackageInstalls();
+    final installed = await UpdateService.instance.getInstalledVersion();
     if (!ref.mounted) return;
     state = state.copyWith(
+      currentVersion: installed,
       persistedDataUsedBytes: used,
       needsInstallPermission: !canInstall,
       lastCheckedAt:
@@ -199,6 +207,7 @@ class AppUpdateNotifier extends Notifier<AppUpdateState> {
   Future<AppReleaseInfo?> checkForUpdates() async {
     state = state.copyWith(checking: true, clearError: true);
     try {
+      final installed = await UpdateService.instance.getInstalledVersion();
       final info = await UpdateService.instance.fetchLatestRelease();
       final prefs = await SharedPreferences.getInstance();
       await prefs.setInt(
@@ -207,6 +216,7 @@ class AppUpdateNotifier extends Notifier<AppUpdateState> {
       );
       if (!ref.mounted) return info;
       state = state.copyWith(
+        currentVersion: installed,
         checking: false,
         latest: info,
         lastCheckedAt: DateTime.now(),

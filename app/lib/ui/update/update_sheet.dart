@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../state/update_state.dart';
 import '../../theme/app_theme.dart';
 import '../../update/update_service.dart';
+import '../chat/render/agy_markdown.dart';
 
 /// In-app APK update sheet modeled on `dsh-Go`'s `UpdateSheet`:
 /// shows progress bar (`%`), `received / total` bytes, speed, total update
@@ -39,9 +40,11 @@ class UpdateSheet extends ConsumerWidget {
       UpdateTransferPhase.installing => 'Launching Android installer…',
       UpdateTransferPhase.cancelled => 'Download cancelled',
       UpdateTransferPhase.failed => 'Update failed',
-      UpdateTransferPhase.idle => release != null
-          ? 'Ready to install ${release.tagName}'
-          : 'Up to date',
+      UpdateTransferPhase.idle => release == null
+          ? 'Installed v${update.currentVersion}'
+          : update.hasNewerVersion
+              ? 'Update available: ${release.tagName} (installed v${update.currentVersion})'
+              : 'Already on latest version (v${update.currentVersion})',
     };
 
     return SafeArea(
@@ -203,12 +206,27 @@ class UpdateSheet extends ConsumerWidget {
 
             if (release?.notes != null && release!.notes!.trim().isNotEmpty) ...[
               const SizedBox(height: 12),
+              Text(
+                'Release Notes (${release.tagName})',
+                style: theme.textTheme.labelMedium?.copyWith(
+                  color: semantic.textSecondary,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 6),
               ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 160),
-                child: SingleChildScrollView(
-                  child: Text(
-                    release.notes!.trim(),
-                    style: theme.textTheme.bodySmall,
+                constraints: const BoxConstraints(maxHeight: 200),
+                child: Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surfaceContainerLow,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: theme.colorScheme.outlineVariant.withOpacity(0.4),
+                    ),
+                  ),
+                  child: SingleChildScrollView(
+                    child: AgyMarkdown(data: release.notes!.trim()),
                   ),
                 ),
               ),
@@ -227,26 +245,38 @@ class UpdateSheet extends ConsumerWidget {
                   )
                 else ...[
                   Expanded(
-                    child: FilledButton.icon(
-                      onPressed: release?.arm64ApkUrl != null
-                          ? notifier.startUpdate
-                          : null,
-                      icon: const Icon(Icons.download_rounded),
-                      label: Text(
-                        release != null
-                            ? (update.phase == UpdateTransferPhase.cancelled ||
-                                    update.phase == UpdateTransferPhase.failed
-                                ? 'Retry ${release.tagName}'
-                                : 'Download & Install ${release.tagName}')
-                            : 'No APK available',
-                      ),
-                    ),
+                    child: update.hasNewerVersion || release == null
+                        ? FilledButton.icon(
+                            onPressed: release?.arm64ApkUrl != null
+                                ? notifier.startUpdate
+                                : null,
+                            icon: const Icon(Icons.download_rounded),
+                            label: Text(
+                              release != null
+                                  ? (update.phase ==
+                                              UpdateTransferPhase.cancelled ||
+                                          update.phase ==
+                                              UpdateTransferPhase.failed
+                                      ? 'Retry ${release.tagName}'
+                                      : 'Download & Install ${release.tagName}')
+                                  : 'No APK available',
+                            ),
+                          )
+                        : OutlinedButton.icon(
+                            onPressed: release.arm64ApkUrl != null
+                                ? notifier.startUpdate
+                                : null,
+                            icon: const Icon(Icons.check_circle_outline),
+                            label: Text('Up to date · Reinstall ${release.tagName}'),
+                          ),
                   ),
                   if (release != null) ...[
                     const SizedBox(width: 8),
                     OutlinedButton(
-                      onPressed: () => launchUrl(Uri.parse(release.htmlUrl)),
-                      child: const Text('Notes'),
+                      onPressed: () => launchUrl(
+                        Uri.parse(release.changelogUrl ?? release.htmlUrl),
+                      ),
+                      child: const Text('Changelog'),
                     ),
                   ],
                 ],

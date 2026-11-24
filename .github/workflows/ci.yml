@@ -52,6 +52,7 @@ jobs:
           channel: stable
           cache: true
       - run: flutter pub get
+      - run: python3 ../tooling/sync_version.py --check
       - run: flutter analyze --no-pub
       - run: flutter test --no-pub --reporter github
 
