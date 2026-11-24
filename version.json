@@ -1,7 +1,7 @@
 {
-  "version": "1.0.27",
+  "version": "1.0.28",
   "buildNumber": 1,
-  "tag": "v1.0.27",
+  "tag": "v1.0.28",
   "changelogUrl": "https://github.com/dwicao/antigravity-go/blob/main/CHANGELOG.md",
-  "releaseNotes": "### Improved\n- **Automatic Bottom-Follow Scrolling:** Removed the redundant bottom-right `Follow` / `Following` pill in `ChatScreen`. Being at the bottom of a conversation now auto-follows incoming messages by default; scrolling upward pauses auto-follow and shows only the **Jump to latest** arrow button (`Icons.arrow_downward_rounded`), and scrolling back to the bottom (or tapping the arrow) seamlessly resumes auto-follow.\n\n### Fixed\n- **Suppress Misleading Startup Sign-In Prompt When Logged In:** Cached signed-in auth state cleanly via `SharedPreferences` (`agy_auth_profile_json`) and deferred `ChatOnboardingBanner` until initial auth/runtime hydration completes (`auth.initialized` / `runtime.initialized`) so signed-in users no longer see a false `\"Google Sign-In\"` prompt on launch."
+  "releaseNotes": "### Improved\n- **Compact & Organized Left Sidebar:** Redesigned `SessionsDrawer` (`home_shell.dart` & `sessions_drawer.dart`) so chat titles receive nearly full sidebar width (`_CompactSessionRow` with `14px` status icon, `28px` menu button, and metadata/triage badges moved cleanly to line 2), consolidated Project & Execution Host dropdowns into slim side-by-side `_CompactPickerPill` controls, streamlined bottom navigation menus (`Automations`, `Customizations`, `Usage Limits`, `Settings`) with a compact single-row account footer, and freed ~215px+ of vertical space so conversations are clearly visible on both phones and Samsung DeX."
 }

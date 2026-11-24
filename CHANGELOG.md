@@ -2,6 +2,11 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.28] - 2026-11-25
+
+### Improved
+- **Compact & Organized Left Sidebar:** Redesigned `SessionsDrawer` (`home_shell.dart` & `sessions_drawer.dart`) so chat titles receive nearly full sidebar width (`_CompactSessionRow` with `14px` status icon, `28px` menu button, and metadata/triage badges moved cleanly to line 2), consolidated Project & Execution Host dropdowns into slim side-by-side `_CompactPickerPill` controls, streamlined bottom navigation menus (`Automations`, `Customizations`, `Usage Limits`, `Settings`) with a compact single-row account footer, and freed ~215px+ of vertical space so conversations are clearly visible on both phones and Samsung DeX.
+
 ## [1.0.27] - 2026-11-24
 
 ### Improved

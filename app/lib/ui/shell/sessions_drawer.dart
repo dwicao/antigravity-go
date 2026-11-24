@@ -80,340 +80,368 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
           (s.lastPreview?.toLowerCase().contains(q) ?? false);
     }).toList();
 
+    final activeProject = projects.projects.firstWhere(
+      (p) => p.id == projects.activeProjectId,
+      orElse: () => projects.projects.first,
+    );
+    final activeHostLabel = hosts.activeHostId == 'local'
+        ? 'On Device'
+        : hosts.sshHosts
+                .where((h) => h.id == hosts.activeHostId)
+                .map((h) => 'SSH · ${h.name}')
+                .firstOrNull ??
+            'On Device';
+
     return SafeArea(
       child: LayoutBuilder(
         builder: (context, constraints) {
           final topControls = <Widget>[
+            // Compact Header Row
             Padding(
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+              padding: const EdgeInsets.fromLTRB(12, 8, 8, 4),
               child: Row(
                 children: [
-                  Icon(Icons.auto_awesome, color: theme.colorScheme.primary),
-                  const SizedBox(width: 8),
+                  Icon(
+                    Icons.auto_awesome,
+                    size: 18,
+                    color: theme.colorScheme.primary,
+                  ),
+                  const SizedBox(width: 7),
                   Expanded(
                     child: Text(
                       'Antigravity Go',
-                      style: theme.textTheme.titleMedium?.copyWith(
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleSmall?.copyWith(
                         fontWeight: FontWeight.w700,
                       ),
                     ),
                   ),
                   IconButton(
-                    tooltip: 'Search & Command Palette (Ctrl+K)',
+                    tooltip: 'Command Palette (Ctrl+K)',
                     iconSize: 18,
+                    visualDensity: VisualDensity.compact,
+                    constraints: const BoxConstraints(
+                      minWidth: 30,
+                      minHeight: 30,
+                    ),
+                    padding: EdgeInsets.zero,
                     onPressed: () => CommandPaletteDialog.show(context),
                     icon: const Icon(Icons.search),
                   ),
+                  IconButton(
+                    tooltip: 'Search all chat messages',
+                    iconSize: 18,
+                    visualDensity: VisualDensity.compact,
+                    constraints: const BoxConstraints(
+                      minWidth: 30,
+                      minHeight: 30,
+                    ),
+                    padding: EdgeInsets.zero,
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const SessionSearchPage(),
+                      ),
+                    ),
+                    icon: const Icon(Icons.manage_search),
+                  ),
+                  const SizedBox(width: 2),
                   FilledButton.tonalIcon(
+                    style: FilledButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      minimumSize: const Size(0, 30),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
                     onPressed: () async {
                       await ref.read(sessionsProvider.notifier).createSession();
                       widget.onClose?.call();
                     },
-                    icon: const Icon(Icons.add, size: 16),
-                    label: const Text('New'),
+                    icon: const Icon(Icons.add, size: 15),
+                    label: const Text('New', style: TextStyle(fontSize: 12)),
                   ),
                 ],
               ),
             ),
 
-            // Google Account card
+            // Side-by-side compact Project & Execution Host pills
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              child: InkWell(
-                borderRadius: BorderRadius.circular(14),
-                onTap: () => GoogleLoginSheet.show(context),
-                child: Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.surfaceContainerHighest
-                        .withOpacity(0.5),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        auth.isAuthenticated
-                            ? Icons.verified_user
-                            : Icons.account_circle_outlined,
-                        color: auth.isAuthenticated
-                            ? Colors.green
-                            : theme.colorScheme.primary,
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              auth.isAuthenticated
-                                  ? (auth.email ??
-                                      auth.displayName ??
-                                      'Signed in')
-                                  : 'Sign in with Google',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: theme.textTheme.labelLarge?.copyWith(
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            Text(
-                              auth.isAuthenticated
-                                  ? auth.planTier.label
-                                  : 'Tap to connect Google Account',
-                              style: theme.textTheme.labelSmall?.copyWith(
-                                color: theme.colorScheme.onSurfaceVariant,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const Icon(Icons.chevron_right, size: 18),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-
-            // Projects Selector + New Project / SSH Host
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              padding: const EdgeInsets.fromLTRB(10, 2, 10, 4),
               child: Row(
                 children: [
                   Expanded(
-                    child: DropdownButtonFormField<String>(
-                      value: projects.projects
-                              .any((p) => p.id == projects.activeProjectId)
-                          ? projects.activeProjectId
-                          : projects.projects.first.id,
-                      isDense: true,
-                      isExpanded: true,
-                      decoration: const InputDecoration(
-                        labelText: 'Project',
-                        contentPadding:
-                            EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                      ),
-                      items: projects.projects
-                          .map(
-                            (p) => DropdownMenuItem(
-                              value: p.id,
-                              child: Text(
-                                p.name,
-                                overflow: TextOverflow.ellipsis,
-                              ),
+                    child: _CompactPickerPill(
+                      icon: Icons.folder_outlined,
+                      label: activeProject.name,
+                      tooltip: 'Switch project',
+                      itemBuilder: (_) => [
+                        for (final p in projects.projects)
+                          PopupMenuItem(
+                            value: p.id,
+                            child: Text(
+                              p.name,
+                              overflow: TextOverflow.ellipsis,
                             ),
-                          )
-                          .toList(),
-                      onChanged: (v) {
-                        if (v != null) {
+                          ),
+                        const PopupMenuDivider(),
+                        const PopupMenuItem(
+                          value: '__new_project__',
+                          child: Row(
+                            children: [
+                              Icon(Icons.create_new_folder_outlined, size: 16),
+                              SizedBox(width: 8),
+                              Text('New Project…'),
+                            ],
+                          ),
+                        ),
+                      ],
+                      onSelected: (v) {
+                        if (v == '__new_project__') {
+                          _createProjectDialog(context);
+                        } else {
                           ref.read(projectsProvider.notifier).selectProject(v);
                         }
                       },
                     ),
                   ),
-                  const SizedBox(width: 4),
-                  IconButton(
-                    tooltip: 'New Project',
-                    iconSize: 18,
-                    onPressed: () => _createProjectDialog(context),
-                    icon: const Icon(Icons.create_new_folder_outlined),
-                  ),
-                ],
-              ),
-            ),
-
-            // Host Switcher (On-Device vs SSH Workstation)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              child: Row(
-                children: [
+                  const SizedBox(width: 6),
                   Expanded(
-                    child: DropdownButtonFormField<String>(
-                      value: hosts.activeHostId,
-                      isDense: true,
-                      isExpanded: true,
-                      decoration: const InputDecoration(
-                        labelText: 'Execution Host',
-                        contentPadding:
-                            EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                      ),
-                      items: [
-                        const DropdownMenuItem(
+                    child: _CompactPickerPill(
+                      icon: hosts.activeHostId == 'local'
+                          ? Icons.smartphone_outlined
+                          : Icons.dns_outlined,
+                      label: activeHostLabel,
+                      tooltip: 'Switch execution host',
+                      itemBuilder: (_) => [
+                        const PopupMenuItem(
                           value: 'local',
-                          child: Text(
-                            'On Device (Android)',
-                            overflow: TextOverflow.ellipsis,
-                          ),
+                          child: Text('On Device (Android)'),
                         ),
                         for (final h in hosts.sshHosts)
-                          DropdownMenuItem(
+                          PopupMenuItem(
                             value: h.id,
                             child: Text(
                               'SSH · ${h.name}',
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
+                        const PopupMenuDivider(),
+                        const PopupMenuItem(
+                          value: '__manage_ssh__',
+                          child: Row(
+                            children: [
+                              Icon(Icons.dns_outlined, size: 16),
+                              SizedBox(width: 8),
+                              Text('Manage SSH Hosts…'),
+                            ],
+                          ),
+                        ),
                       ],
-                      onChanged: (v) {
-                        if (v != null) {
+                      onSelected: (v) {
+                        if (v == '__manage_ssh__') {
+                          Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => const SshHostsPage(),
+                            ),
+                          );
+                        } else {
                           ref.read(hostsProvider.notifier).selectHost(v);
                         }
                       },
                     ),
                   ),
-                  const SizedBox(width: 4),
-                  IconButton(
-                    tooltip: 'SSH Hosts',
-                    iconSize: 18,
-                    onPressed: () => Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => const SshHostsPage(),
-                      ),
-                    ),
-                    icon: const Icon(Icons.dns_outlined),
-                  ),
                 ],
               ),
             ),
 
+            // Slim Conversation Filter Input
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      onChanged: (v) => setState(() => _query = v),
-                      decoration: const InputDecoration(
-                        hintText: 'Filter conversations…',
-                        prefixIcon: Icon(Icons.filter_list, size: 18),
-                        isDense: true,
-                      ),
-                    ),
+              padding: const EdgeInsets.fromLTRB(10, 2, 10, 4),
+              child: TextField(
+                style: const TextStyle(fontSize: 12.5),
+                onChanged: (v) => setState(() => _query = v),
+                decoration: InputDecoration(
+                  hintText: 'Filter chats…',
+                  hintStyle: const TextStyle(fontSize: 12),
+                  prefixIcon: const Icon(Icons.filter_list, size: 16),
+                  prefixIconConstraints: const BoxConstraints(
+                    minWidth: 32,
+                    minHeight: 30,
                   ),
-                  const SizedBox(width: 4),
-                  IconButton(
-                    tooltip: 'Search all chat messages',
-                    iconSize: 18,
-                    onPressed: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) => const SessionSearchPage(),
-                        ),
-                      );
-                    },
-                    icon: const Icon(Icons.manage_search),
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 7,
                   ),
-                ],
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
               ),
             ),
+
             if (folders.isNotEmpty ||
                 sessions.sessions.any((s) => s.pinned) ||
                 archivedCount > 0)
               SizedBox(
-                height: 36,
+                height: 30,
                 child: ListView(
                   scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
                   children: [
-                    Padding(
-                      padding: const EdgeInsets.only(right: 6),
-                      child: ChoiceChip(
-                        label: const Text('All'),
-                        selected: _folderFilter.isEmpty,
-                        visualDensity: VisualDensity.compact,
-                        onSelected: (_) => setState(() => _folderFilter = ''),
-                      ),
+                    _CompactFilterChip(
+                      label: 'All',
+                      selected: _folderFilter.isEmpty,
+                      onTap: () => setState(() => _folderFilter = ''),
                     ),
                     if (sessions.sessions.any((s) => s.pinned))
-                      Padding(
-                        padding: const EdgeInsets.only(right: 6),
-                        child: ChoiceChip(
-                          label: const Text('Pinned'),
-                          selected: _folderFilter == '__pinned__',
-                          visualDensity: VisualDensity.compact,
-                          onSelected: (_) => setState(
-                            () => _folderFilter =
-                                _folderFilter == '__pinned__' ? '' : '__pinned__',
-                          ),
+                      _CompactFilterChip(
+                        label: 'Pinned',
+                        selected: _folderFilter == '__pinned__',
+                        onTap: () => setState(
+                          () => _folderFilter =
+                              _folderFilter == '__pinned__' ? '' : '__pinned__',
                         ),
                       ),
                     for (final f in folders)
-                      Padding(
-                        padding: const EdgeInsets.only(right: 6),
-                        child: ChoiceChip(
-                          label: Text(f),
-                          selected: _folderFilter == f,
-                          visualDensity: VisualDensity.compact,
-                          onSelected: (_) => setState(
-                            () => _folderFilter = _folderFilter == f ? '' : f,
-                          ),
+                      _CompactFilterChip(
+                        label: f,
+                        selected: _folderFilter == f,
+                        onTap: () => setState(
+                          () => _folderFilter = _folderFilter == f ? '' : f,
                         ),
                       ),
                     if (archivedCount > 0)
-                      Padding(
-                        padding: const EdgeInsets.only(right: 6),
-                        child: ChoiceChip(
-                          label: Text('Archived ($archivedCount)'),
-                          selected: _folderFilter == '__archived__',
-                          visualDensity: VisualDensity.compact,
-                          onSelected: (_) => setState(
-                            () => _folderFilter = _folderFilter == '__archived__'
-                                ? ''
-                                : '__archived__',
-                          ),
+                      _CompactFilterChip(
+                        label: 'Archived ($archivedCount)',
+                        selected: _folderFilter == '__archived__',
+                        onTap: () => setState(
+                          () => _folderFilter =
+                              _folderFilter == '__archived__'
+                                  ? ''
+                                  : '__archived__',
                         ),
                       ),
                   ],
                 ),
               ),
-            const Divider(height: 10),
+            const Divider(height: 8),
           ];
 
           final bottomNav = <Widget>[
             const Divider(height: 1),
-            _SidebarNavTile(
-              icon: Icons.schedule_rounded,
-              title: 'Automations',
-              onTap: () {
-                widget.onClose?.call();
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const AutomationsPage(),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 4, 8, 2),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _SidebarNavTile(
+                    icon: Icons.schedule_rounded,
+                    title: 'Automations',
+                    onTap: () {
+                      widget.onClose?.call();
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const AutomationsPage(),
+                        ),
+                      );
+                    },
                   ),
-                );
-              },
-            ),
-            _SidebarNavTile(
-              icon: Icons.extension_outlined,
-              title: 'Customizations',
-              subtitle: 'Rules · Skills · MCP',
-              onTap: () {
-                widget.onClose?.call();
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const CustomizationsPage(),
+                  _SidebarNavTile(
+                    icon: Icons.extension_outlined,
+                    title: 'Customizations',
+                    badge: 'Rules · MCP',
+                    onTap: () {
+                      widget.onClose?.call();
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const CustomizationsPage(),
+                        ),
+                      );
+                    },
                   ),
-                );
-              },
+                  _SidebarNavTile(
+                    icon: Icons.speed_rounded,
+                    title: 'Usage Limits',
+                    onTap: () {
+                      widget.onClose?.call();
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const UsagePage(),
+                        ),
+                      );
+                    },
+                  ),
+                  _SidebarNavTile(
+                    icon: Icons.settings_outlined,
+                    title: 'Settings',
+                    onTap: () {
+                      widget.onClose?.call();
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const SettingsPage(),
+                        ),
+                      );
+                    },
+                  ),
+                ],
+              ),
             ),
-            _SidebarNavTile(
-              icon: Icons.speed_rounded,
-              title: 'Usage Limits',
-              onTap: () {
-                widget.onClose?.call();
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(builder: (_) => const UsagePage()),
-                );
-              },
-            ),
-            _SidebarNavTile(
-              icon: Icons.settings_outlined,
-              title: 'Settings',
-              onTap: () {
-                widget.onClose?.call();
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(builder: (_) => const SettingsPage()),
-                );
-              },
+            const Divider(height: 1),
+            InkWell(
+              onTap: () => GoogleLoginSheet.show(context),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 7, 10, 7),
+                child: Row(
+                  children: [
+                    Icon(
+                      auth.isAuthenticated
+                          ? Icons.verified_user
+                          : Icons.account_circle_outlined,
+                      size: 16,
+                      color: auth.isAuthenticated
+                          ? Colors.green
+                          : theme.colorScheme.primary,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            auth.isAuthenticated
+                                ? (auth.email ??
+                                    auth.displayName ??
+                                    'Signed in')
+                                : 'Sign in with Google',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.labelMedium?.copyWith(
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          Text(
+                            auth.isAuthenticated
+                                ? auth.planTier.label
+                                : 'Connect Google Account',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              fontSize: 10.5,
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Icon(Icons.chevron_right, size: 16),
+                  ],
+                ),
+              ),
             ),
           ];
 
@@ -443,106 +471,21 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
               const PopupMenuItem(value: 'rename', child: Text('Rename')),
               const PopupMenuItem(value: 'delete', child: Text('Delete')),
             ];
-            return GestureDetector(
-              onSecondaryTapUp: (details) async {
-                final action = await showMenu<String>(
-                  context: context,
-                  position: RelativeRect.fromLTRB(
-                    details.globalPosition.dx,
-                    details.globalPosition.dy,
-                    details.globalPosition.dx,
-                    details.globalPosition.dy,
-                  ),
-                  items: menuItems,
-                );
-                if (action != null && context.mounted) {
-                  await _handleSessionAction(context, s, action);
-                }
+            return _CompactSessionRow(
+              session: s,
+              active: active,
+              isRunning: isRunning,
+              triageLabel: triageLabel,
+              menuItems: menuItems,
+              onSelect: () {
+                ref.read(sessionsProvider.notifier).selectSession(s.id);
+                widget.onClose?.call();
               },
-              child: ListTile(
-                dense: true,
-                selected: active,
-                leading: isRunning
-                    ? SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: theme.colorScheme.primary,
-                        ),
-                      )
-                    : Icon(
-                        s.archived
-                            ? Icons.inventory_2_outlined
-                            : s.pinned
-                                ? Icons.push_pin
-                                : (s.hostKind == AgyHostKind.ssh
-                                    ? Icons.computer
-                                    : Icons.chat_bubble_outline),
-                        size: 16,
-                      ),
-                title: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        s.title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    if (triageLabel != null) ...[
-                      const SizedBox(width: 6),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 1.5,
-                        ),
-                        decoration: BoxDecoration(
-                          color: isRunning
-                              ? theme.colorScheme.primaryContainer
-                              : theme.colorScheme.surfaceContainerHighest,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Text(
-                          triageLabel,
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w700,
-                            color: isRunning
-                                ? theme.colorScheme.onPrimaryContainer
-                                : theme.colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-                subtitle: Text(
-                  [
-                    if (s.folder.isNotEmpty) '[${s.folder}]',
-                    s.hostName,
-                    s.modelId,
-                  ].join(' · '),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                trailing: PopupMenuButton<String>(
-                  iconSize: 16,
-                  onSelected: (action) => _handleSessionAction(context, s, action),
-                  itemBuilder: (_) => menuItems,
-                ),
-                onTap: () {
-                  ref.read(sessionsProvider.notifier).selectSession(s.id);
-                  widget.onClose?.call();
-                },
-              ),
+              onAction: (action) => _handleSessionAction(context, s, action),
             );
           }
 
-          // When vertical space is constrained (e.g. 600px landscape or DeX
-          // split window), allow the entire sidebar to scroll cleanly instead of
-          // overflowing the fixed chrome sections.
-          if (constraints.maxHeight < 680) {
+          if (constraints.maxHeight < 480) {
             return Scrollbar(
               child: ListView(
                 children: [
@@ -560,6 +503,7 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
               Expanded(
                 child: Scrollbar(
                   child: ListView.builder(
+                    padding: const EdgeInsets.symmetric(vertical: 2),
                     itemCount: filtered.length,
                     itemBuilder: (context, index) =>
                         buildSessionTile(filtered[index]),
@@ -715,28 +659,339 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
   }
 }
 
+class _CompactPickerPill extends StatelessWidget {
+  const _CompactPickerPill({
+    required this.icon,
+    required this.label,
+    required this.tooltip,
+    required this.itemBuilder,
+    required this.onSelected,
+  });
+
+  final IconData icon;
+  final String label;
+  final String tooltip;
+  final PopupMenuItemBuilder<String> itemBuilder;
+  final PopupMenuItemSelected<String> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return PopupMenuButton<String>(
+      tooltip: tooltip,
+      itemBuilder: itemBuilder,
+      onSelected: onSelected,
+      child: Container(
+        height: 30,
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.55),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: theme.colorScheme.outlineVariant.withOpacity(0.45),
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, size: 13.5, color: theme.colorScheme.onSurfaceVariant),
+            const SizedBox(width: 5),
+            Expanded(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.labelSmall?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            Icon(
+              Icons.keyboard_arrow_down_rounded,
+              size: 14,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CompactFilterChip extends StatelessWidget {
+  const _CompactFilterChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(right: 5),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+          decoration: BoxDecoration(
+            color: selected
+                ? theme.colorScheme.secondaryContainer
+                : theme.colorScheme.surfaceContainerHighest.withOpacity(0.45),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Center(
+            child: Text(
+              label,
+              style: theme.textTheme.labelSmall?.copyWith(
+                fontSize: 11,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                color: selected
+                    ? theme.colorScheme.onSecondaryContainer
+                    : theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CompactSessionRow extends StatelessWidget {
+  const _CompactSessionRow({
+    required this.session,
+    required this.active,
+    required this.isRunning,
+    required this.triageLabel,
+    required this.menuItems,
+    required this.onSelect,
+    required this.onAction,
+  });
+
+  final AgySessionSummary session;
+  final bool active;
+  final bool isRunning;
+  final String? triageLabel;
+  final List<PopupMenuEntry<String>> menuItems;
+  final VoidCallback onSelect;
+  final ValueChanged<String> onAction;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final meta = [
+      if (session.folder.isNotEmpty) '[${session.folder}]',
+      session.hostName,
+      session.modelId,
+    ].join(' · ');
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      child: GestureDetector(
+        onSecondaryTapUp: (details) async {
+          final action = await showMenu<String>(
+            context: context,
+            position: RelativeRect.fromLTRB(
+              details.globalPosition.dx,
+              details.globalPosition.dy,
+              details.globalPosition.dx,
+              details.globalPosition.dy,
+            ),
+            items: menuItems,
+          );
+          if (action != null && context.mounted) {
+            onAction(action);
+          }
+        },
+        child: Material(
+          color: active
+              ? theme.colorScheme.secondaryContainer.withOpacity(0.65)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(10),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: onSelect,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(8, 6, 2, 6),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 16,
+                    child: Center(
+                      child: isRunning
+                          ? SizedBox(
+                              width: 13,
+                              height: 13,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 1.8,
+                                color: theme.colorScheme.primary,
+                              ),
+                            )
+                          : Icon(
+                              session.archived
+                                  ? Icons.inventory_2_outlined
+                                  : session.pinned
+                                      ? Icons.push_pin
+                                      : (session.hostKind == AgyHostKind.ssh
+                                          ? Icons.computer
+                                          : Icons.chat_bubble_outline),
+                              size: 14,
+                              color: active
+                                  ? theme.colorScheme.primary
+                                  : theme.colorScheme.onSurfaceVariant,
+                            ),
+                    ),
+                  ),
+                  const SizedBox(width: 7),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          session.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            fontSize: 12.8,
+                            fontWeight:
+                                active ? FontWeight.w700 : FontWeight.w500,
+                            color: active
+                                ? theme.colorScheme.onSecondaryContainer
+                                : theme.colorScheme.onSurface,
+                          ),
+                        ),
+                        const SizedBox(height: 1),
+                        Row(
+                          children: [
+                            if (triageLabel != null) ...[
+                              Container(
+                                margin: const EdgeInsets.only(right: 5),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 5,
+                                  vertical: 0.5,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: isRunning
+                                      ? theme.colorScheme.primaryContainer
+                                      : theme
+                                          .colorScheme.surfaceContainerHighest,
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Text(
+                                  triageLabel!,
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                    fontSize: 9.5,
+                                    fontWeight: FontWeight.w700,
+                                    color: isRunning
+                                        ? theme.colorScheme.onPrimaryContainer
+                                        : theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              ),
+                            ],
+                            Expanded(
+                              child: Text(
+                                meta,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  fontSize: 10.5,
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  SizedBox(
+                    width: 28,
+                    height: 28,
+                    child: PopupMenuButton<String>(
+                      padding: EdgeInsets.zero,
+                      iconSize: 16,
+                      icon: Icon(
+                        Icons.more_horiz,
+                        size: 16,
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                      onSelected: onAction,
+                      itemBuilder: (_) => menuItems,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _SidebarNavTile extends StatelessWidget {
   const _SidebarNavTile({
     required this.icon,
     required this.title,
     required this.onTap,
-    this.subtitle,
+    this.badge,
   });
 
   final IconData icon;
   final String title;
-  final String? subtitle;
+  final String? badge;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return ListTile(
-      dense: true,
-      visualDensity: const VisualDensity(vertical: -2),
-      leading: Icon(icon, size: 18),
-      title: Text(title),
-      subtitle: subtitle != null ? Text(subtitle!) : null,
+    final theme = Theme.of(context);
+    return InkWell(
+      borderRadius: BorderRadius.circular(8),
       onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+        child: Row(
+          children: [
+            Icon(icon, size: 16, color: theme.colorScheme.onSurfaceVariant),
+            const SizedBox(width: 9),
+            Expanded(
+              child: Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+            if (badge != null)
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                decoration: BoxDecoration(
+                  color:
+                      theme.colorScheme.surfaceContainerHighest.withOpacity(0.6),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  badge!,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    fontSize: 10,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
     );
   }
 }

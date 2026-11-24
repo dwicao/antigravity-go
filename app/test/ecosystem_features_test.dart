@@ -459,4 +459,53 @@ Weekly limit: 70% remaining (resets in 5d)
     expect(container.read(authProvider).isAuthenticated, isTrue);
     expect(find.text('Google Sign-In'), findsNothing);
   });
+
+  testWidgets('Compact SessionsDrawer keeps conversation titles clearly visible in narrow 264x560 layout', (tester) async {
+    final sessions = List.generate(
+      4,
+      (i) => AgySessionSummary(
+        id: 'compact-$i',
+        title: 'Readable Conversation Title #$i',
+        hostId: 'local',
+        hostName: 'On Device',
+        hostKind: AgyHostKind.local,
+        workspacePath: '',
+        modelId: 'Orchestrator (Neon)',
+        updatedAt: DateTime(2026, 11, 25, 3, i),
+      ),
+    );
+    final container = ProviderContainer(
+      overrides: [
+        sessionsProvider.overrideWith(
+          () => _FakeSessionsNotifier(
+            SessionsState(
+              sessions: sessions,
+              activeSessionId: 'compact-0',
+            ),
+          ),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          theme: _testTheme(),
+          home: const Scaffold(
+            body: SizedBox(width: 264, height: 560, child: SessionsDrawer()),
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(find.text('Readable Conversation Title #0'), findsOneWidget);
+    expect(find.text('Readable Conversation Title #3'), findsOneWidget);
+    expect(find.text('Automations'), findsOneWidget);
+    expect(find.text('Customizations'), findsOneWidget);
+    expect(find.text('Usage Limits'), findsOneWidget);
+    expect(find.text('Settings'), findsOneWidget);
+  });
 }

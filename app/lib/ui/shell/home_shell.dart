@@ -223,7 +223,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
         body: Row(
           children: [
             if (_showLeftSidebar) ...[
-              const SizedBox(width: 268, child: SessionsDrawer()),
+              const SizedBox(width: 276, child: SessionsDrawer()),
               const VerticalDivider(width: 1),
             ],
             Expanded(
@@ -259,7 +259,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
         body: Row(
           children: [
             if (_showLeftSidebar) ...[
-              const SizedBox(width: 256, child: SessionsDrawer()),
+              const SizedBox(width: 264, child: SessionsDrawer()),
               const VerticalDivider(width: 1),
             ],
             Expanded(
@@ -283,7 +283,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
       body = Scaffold(
         key: _scaffoldKey,
         drawer: Drawer(
-          width: 304,
+          width: 308,
           child: SessionsDrawer(
             onClose: () => _scaffoldKey.currentState?.closeDrawer(),
           ),
