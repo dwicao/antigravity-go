@@ -298,8 +298,10 @@ void main() {
       ),
     );
     await tester.pump();
+    await tester.scrollUntilVisible(find.text('Phone Control Self-Check'), 200);
     expect(find.text('Phone Control Self-Check'), findsOneWidget);
     expect(find.text('MCP :38991'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('Per-App Rules'), 200);
     expect(find.text('Per-App Rules'), findsOneWidget);
     expect(find.text('com.example.app'), findsOneWidget);
 
