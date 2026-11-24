@@ -32,8 +32,22 @@ class SettingsPage extends ConsumerStatefulWidget {
 }
 
 class _SettingsPageState extends ConsumerState<SettingsPage> {
+  final _scrollController = ScrollController();
   String _searchQuery = '';
   bool _searchOpen = false;
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _updateSearch(String value) {
+    setState(() => _searchQuery = value);
+    if (_scrollController.hasClients) {
+      _scrollController.jumpTo(0);
+    }
+  }
 
   bool _matches(String keywords) {
     final q = _searchQuery.trim().toLowerCase();
@@ -55,7 +69,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         title: _searchOpen
             ? TextField(
                 autofocus: true,
-                onChanged: (v) => setState(() => _searchQuery = v),
+                onChanged: _updateSearch,
                 decoration: const InputDecoration(
                   hintText: 'Search settings, performance, wallpaper…',
                   border: InputBorder.none,
@@ -67,15 +81,22 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           IconButton(
             tooltip: _searchOpen ? 'Close search' : 'Search settings',
             icon: Icon(_searchOpen ? Icons.close : Icons.search),
-            onPressed: () => setState(() {
-              _searchOpen = !_searchOpen;
-              if (!_searchOpen) _searchQuery = '';
-            }),
+            onPressed: () {
+              setState(() {
+                _searchOpen = !_searchOpen;
+                if (!_searchOpen) _searchQuery = '';
+              });
+              if (!_searchOpen && _scrollController.hasClients) {
+                _scrollController.jumpTo(0);
+              }
+            },
           ),
         ],
       ),
       body: Scrollbar(
+        controller: _scrollController,
         child: ListView(
+          controller: _scrollController,
           padding: const EdgeInsets.all(16),
           children: [
             if (!_searchOpen)

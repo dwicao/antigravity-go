@@ -56,7 +56,7 @@ class SessionsNotifier extends Notifier<SessionsState> {
 
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
-    if (!ref.mounted) return;
+    if (!ref.mounted || state.sessions.isNotEmpty) return;
     final raw = prefs.getString(_prefsKey);
     final loaded = <AgySessionSummary>[];
     if (raw != null && raw.isNotEmpty) {

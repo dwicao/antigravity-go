@@ -1838,9 +1838,8 @@ class _StreamingAgentStatusBarState extends State<_StreamingAgentStatusBar> {
       }
     }
     final cacheDenom = inputTokens + cacheRead;
-    final statusParts = <String>[
+    final metaParts = <String>[
       _formatElapsed(_stopwatch.elapsed),
-      if (hasSpeed) '${widget.tokensPerSecond.toStringAsFixed(0)} tok/s' else 'Working…',
       if (rounds > 0) '$rounds rd',
       if (toolCalls > 0) '$toolCalls tools',
       if (totalTokens > 0)
@@ -1886,13 +1885,22 @@ class _StreamingAgentStatusBarState extends State<_StreamingAgentStatusBar> {
             child: CircularProgressIndicator(strokeWidth: 2),
           ),
           const SizedBox(width: 8),
+          Text(
+            hasSpeed
+                ? '${widget.tokensPerSecond.toStringAsFixed(0)} tok/s'
+                : 'Working…',
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: semantic.textSecondary,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(width: 6),
           Flexible(
             child: Text(
-              statusParts.join(' · '),
+              '· ${metaParts.join(' · ')}',
               overflow: TextOverflow.ellipsis,
               style: theme.textTheme.labelSmall?.copyWith(
                 color: semantic.textSecondary,
-                fontWeight: FontWeight.w600,
               ),
             ),
           ),
