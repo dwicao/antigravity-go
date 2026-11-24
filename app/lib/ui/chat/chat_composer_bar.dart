@@ -115,10 +115,10 @@ class ChatComposerBar extends ConsumerWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              padding: const EdgeInsets.fromLTRB(6, 5, 6, 5),
+              padding: const EdgeInsets.all(6),
               decoration: BoxDecoration(
                 color: theme.colorScheme.surfaceContainerHigh.withOpacity(0.85),
-                borderRadius: BorderRadius.circular(26),
+                borderRadius: BorderRadius.circular(24),
                 border: Border.all(
                   color: theme.colorScheme.outlineVariant.withOpacity(0.45),
                 ),
@@ -126,7 +126,10 @@ class ChatComposerBar extends ConsumerWidget {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  PopupMenuButton<String>(
+                  SizedBox(
+                    width: 36,
+                    height: 36,
+                    child: PopupMenuButton<String>(
                     tooltip: 'Attach or CLI tools',
                     padding: EdgeInsets.zero,
                     onSelected: (action) {
@@ -207,32 +210,40 @@ class ChatComposerBar extends ConsumerWidget {
                       ),
                     ),
                   ),
+                  ),
                   const SizedBox(width: 8),
                   Expanded(
-                    child: Focus(
-                      onKeyEvent: onKeyEvent,
-                      child: TextField(
-                        controller: inputController,
-                        onChanged: onChanged,
-                        minLines: 1,
-                        maxLines: isDesktopMode ? 8 : 5,
-                        textInputAction: TextInputAction.newline,
-                        decoration: InputDecoration(
-                          isDense: true,
-                          border: InputBorder.none,
-                          enabledBorder: InputBorder.none,
-                          focusedBorder: InputBorder.none,
-                          filled: false,
-                          hintMaxLines: 1,
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 2,
-                            vertical: 8,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(minHeight: 36),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Focus(
+                          onKeyEvent: onKeyEvent,
+                          child: TextField(
+                            controller: inputController,
+                            onChanged: onChanged,
+                            minLines: 1,
+                            maxLines: isDesktopMode ? 8 : 5,
+                            textAlignVertical: TextAlignVertical.center,
+                            textInputAction: TextInputAction.newline,
+                            decoration: InputDecoration(
+                              isDense: true,
+                              border: InputBorder.none,
+                              enabledBorder: InputBorder.none,
+                              focusedBorder: InputBorder.none,
+                              filled: false,
+                              hintMaxLines: 1,
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 2,
+                                vertical: 6,
+                              ),
+                              hintText: isBusy
+                                  ? 'Queue message (or Steer)…'
+                                  : isDesktopMode && enterToSend
+                                      ? 'Ask anything, @ file, / command (Enter sends)'
+                                      : 'Ask anything, @ file, / command…',
+                            ),
                           ),
-                          hintText: isBusy
-                              ? 'Queue message (or Steer)…'
-                              : isDesktopMode && enterToSend
-                                  ? 'Ask anything, @ file, / command (Enter sends)'
-                                  : 'Ask anything, @ file, / command…',
                         ),
                       ),
                     ),
@@ -242,6 +253,9 @@ class ChatComposerBar extends ConsumerWidget {
                     IconButton.filledTonal(
                       tooltip: 'Stop (Esc)',
                       padding: EdgeInsets.zero,
+                      style: IconButton.styleFrom(
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
                       constraints: const BoxConstraints.tightFor(
                         width: 36,
                         height: 36,
@@ -259,6 +273,9 @@ class ChatComposerBar extends ConsumerWidget {
                     IconButton.filledTonal(
                       tooltip: 'Steer (force send now)',
                       padding: EdgeInsets.zero,
+                      style: IconButton.styleFrom(
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
                       constraints: const BoxConstraints.tightFor(
                         width: 36,
                         height: 36,
@@ -271,6 +288,9 @@ class ChatComposerBar extends ConsumerWidget {
                   IconButton.filled(
                     tooltip: isBusy ? 'Queue' : 'Send',
                     padding: EdgeInsets.zero,
+                    style: IconButton.styleFrom(
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
                     constraints: const BoxConstraints.tightFor(
                       width: 36,
                       height: 36,

@@ -52,11 +52,11 @@ AI Credits balance: 250
     expect(find.text('Gemini 4 Hydrogen & 3.8 Flash'), findsOneWidget);
 
     await tester.scrollUntilVisible(
-      find.text('Claude & GPT'),
+      find.text('Claude and GPT models'),
       200,
       scrollable: listScrollable,
     );
-    expect(find.text('Claude & GPT'), findsOneWidget);
+    expect(find.text('Claude and GPT models'), findsOneWidget);
 
     await tester.scrollUntilVisible(
       find.text('250 credits'),
@@ -153,7 +153,6 @@ Upgrade\thttps://antigravity.google/g1-upgrade
     await tester.pumpAndSettle();
 
     expect(find.text('Gemini Models'), findsOneWidget);
-    expect(find.text('Claude and GPT models'), findsOneWidget);
     expect(find.text('27%'), findsOneWidget);
     expect(find.text('73%'), findsOneWidget);
 
@@ -161,6 +160,12 @@ Upgrade\thttps://antigravity.google/g1-upgrade
       of: find.byType(ListView),
       matching: find.byType(Scrollable),
     ).first;
+    await tester.scrollUntilVisible(
+      find.text('Claude and GPT models'),
+      200,
+      scrollable: listScrollable,
+    );
+    expect(find.text('Claude and GPT models'), findsOneWidget);
     await tester.scrollUntilVisible(
       find.text('Upgrade'),
       200,

@@ -762,7 +762,7 @@ void main() {
       ChatTurnHelpers.formatDisplayPath(
         '../../../../../../storage/emulated/0/Projects/antigravity-go/app/lib/ui/chat/chat_screen.dart',
       ),
-      'app/lib/ui/chat/chat_screen.dart',
+      '…/ui/chat/chat_screen.dart',
     );
     expect(ChatTurnHelpers.formatDisplayPath('../../../../../../'), '');
 
@@ -821,7 +821,42 @@ void main() {
     expect(find.text('Completed 3 steps · 2 read, 1 search'), findsOneWidget);
     expect(find.textContaining('file ../../../../../../'), findsNothing);
     expect(find.text('Read — app/lib/state/chat_state.dart'), findsOneWidget);
-    expect(find.text('Read — app/lib/ui/usage/usage_page.dart:10-50'), findsOneWidget);
+    expect(find.text('Read — …/ui/usage/usage_page.dart:10-50'), findsOneWidget);
     expect(find.text('Search — "QuotaGroup" in packages/agy_client'), findsOneWidget);
+  });
+
+  testWidgets('ChatComposerBar aligns Attach button, TextField, and Send vertically centered', (tester) async {
+    final container = ProviderContainer(
+      overrides: [
+        sessionsProvider.overrideWith(
+          () => _FakeSessionsNotifier(const SessionsState(activeSessionId: 's1')),
+        ),
+        runtimeProvider.overrideWith(
+          () => _FakeRuntimeNotifier(const RuntimeUiState()),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(
+          home: Scaffold(body: ChatScreen()),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final attachRect = tester.getRect(find.byTooltip('Attach or CLI tools'));
+    final fieldRect = tester.getRect(find.byType(TextField));
+    final sendRect = tester.getRect(find.byTooltip('Send'));
+
+    expect((attachRect.center.dy - sendRect.center.dy).abs(), lessThanOrEqualTo(1.0));
+    expect((fieldRect.center.dy - sendRect.center.dy).abs(), lessThanOrEqualTo(2.0));
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(milliseconds: 500));
   });
 }

@@ -9,6 +9,7 @@ All notable changes to **Antigravity Go** are documented in this file.
 
 ### Fixed
 - **Meaningful step summaries in chat milestones:** Cleaned noisy `file ../../../../../../...` paths in `MilestoneStackCard` & `FoldedToolsBar` via `ChatTurnHelpers.formatDisplayPath` so file reads, searches, and edits display concise repo-relative filenames with optional line ranges and accurate step summary headers (`Read N files`, `Completed X steps · ...`).
+- **Composer vertical alignment:** Shrunk action `IconButton` tap targets to match the 36×36 Attach button and centered the single-line `TextField` vertically in `ChatComposerBar`.
 
 ## [1.0.21] - 2026-11-24
 
