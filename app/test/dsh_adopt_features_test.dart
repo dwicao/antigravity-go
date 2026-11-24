@@ -8,7 +8,6 @@ import 'package:antigravity_go/state/session_export_helper.dart';
 import 'package:antigravity_go/state/sessions_state.dart';
 import 'package:antigravity_go/state/settings_state.dart';
 import 'package:antigravity_go/ui/chat/message_bubble.dart';
-import 'package:antigravity_go/ui/chat/share_card_sheet.dart';
 import 'package:antigravity_go/ui/phone/phone_control_page.dart';
 import 'package:antigravity_go/ui/replay/conversation_replay_page.dart';
 import 'package:antigravity_go/ui/settings/background_guide_page.dart';

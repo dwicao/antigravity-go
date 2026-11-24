@@ -6,7 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../state/chat_message_store.dart';
 import '../../state/sessions_state.dart';
-import 'replay/conversation_replay_page.dart';
+import '../replay/conversation_replay_page.dart';
 
 /// Full-text search across every saved conversation transcript and folder tag.
 class SessionSearchPage extends ConsumerStatefulWidget {

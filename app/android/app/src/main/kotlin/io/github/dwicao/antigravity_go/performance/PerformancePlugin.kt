@@ -39,6 +39,7 @@ object PerformanceClassifier {
 object RefreshRateCoordinator {
     @Volatile
     var mode: String = "auto"
+        private set
 
     @Volatile
     var onModeChanged: (() -> Unit)? = null

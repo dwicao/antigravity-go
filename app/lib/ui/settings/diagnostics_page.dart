@@ -62,7 +62,7 @@ class _DiagnosticsPageState extends ConsumerState<DiagnosticsPage> {
       ..writeln()
       ..writeln('## Runtime')
       ..writeln('- **Phase:** ${runtime.status.phase.name}')
-      ..writeln('- **Version:** ${runtime.status.version ?? "unknown"}')
+      ..writeln('- **CLI Version:** ${runtime.status.agyVersion ?? "unknown"}')
       ..writeln('- **Active Host:** ${hosts.activeSshHost?.name ?? "On Device"}')
       ..writeln('- **Model:** ${settings.selectedModelId} (${settings.reasoningEffort})')
       ..writeln('- **Sessions:** ${sessions.sessions.length}')
