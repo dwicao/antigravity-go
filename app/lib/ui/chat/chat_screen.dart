@@ -35,6 +35,7 @@ import '../shell/background_tasks_sheet.dart';
 import '../shell/command_palette.dart';
 import '../usage/usage_page.dart';
 import 'chat_banners_and_sheets.dart';
+import 'attachment_preview.dart';
 import 'chat_composer_bar.dart';
 import 'message_bubble.dart';
 import 'subagents_activity_banner.dart';
@@ -426,9 +427,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   Future<void> _submit() async {
     final text = _inputController.text.trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty && _attachments.isEmpty) return;
 
-    final firstWord = text.split(RegExp(r'\s+')).first.toLowerCase();
+    final firstWord =
+        text.isEmpty ? '' : text.split(RegExp(r'\s+')).first.toLowerCase();
 
     if (firstWord == '/usage' ||
         firstWord == '/quota' ||
@@ -642,7 +644,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   Future<void> _steerSubmit() async {
     final text = _inputController.text.trim();
-    if (text.isEmpty) {
+    if (text.isEmpty && _attachments.isEmpty) {
       if (ref.read(chatProvider).queuedPrompts.isNotEmpty) {
         await ref.read(chatProvider.notifier).sendQueuedNow();
       }
@@ -667,16 +669,24 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     if (files.isEmpty) return;
     setState(() {
       for (final f in files) {
-        if (f.path != null) _attachments.add(f.path!);
+        if (f.path != null && !_attachments.contains(f.path!)) {
+          _attachments.add(f.path!);
+        }
       }
     });
   }
 
   Future<void> _pickImage() async {
     final picker = ImagePicker();
-    final img = await picker.pickImage(source: ImageSource.gallery);
-    if (img == null) return;
-    setState(() => _attachments.add(img.path));
+    final imgs = await picker.pickMultiImage();
+    if (imgs.isEmpty) return;
+    setState(() {
+      for (final img in imgs) {
+        if (!_attachments.contains(img.path)) {
+          _attachments.add(img.path);
+        }
+      }
+    });
   }
 
   Future<void> _dictateVoice() async {
@@ -1641,24 +1651,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ),
         if (_attachments.isNotEmpty)
           wrapCentered(
-            SizedBox(
-              height: 40,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                children: _attachments
-                    .map(
-                      (a) => Padding(
-                        padding: const EdgeInsets.only(right: 6),
-                        child: InputChip(
-                          label: Text(a.split('/').last.split('\\').last),
-                          onDeleted: () =>
-                              setState(() => _attachments.remove(a)),
-                        ),
-                      ),
-                    )
-                    .toList(),
-              ),
+            AttachmentPreviewStrip(
+              attachments: _attachments,
+              onRemove: (a) => setState(() => _attachments.remove(a)),
             ),
           ),
         if (_quotedText != null && _quotedText!.isNotEmpty)

@@ -4,7 +4,11 @@
 
 Inspired by [dsh-Go](https://github.com/ccch1mneyyy/dsh-Go) and powered by the official [Antigravity CLI (`agy`)](https://antigravity.google/docs/cli/reference) and [Agent Client Protocol (ACP)](https://antigravity.google/docs/ide/extensions/acp).
 
-![Antigravity Go running on Samsung DeX](docs/screenshots/dex-workspace.webp)
+## Screenshots
+
+| Mobile (Android Phone) | Samsung DeX / Desktop |
+| :---: | :---: |
+| <img src="docs/screenshots/mobile-chat.jpg" alt="Antigravity Go running on Mobile" width="280" /> | <img src="docs/screenshots/dex-workspace.webp" alt="Antigravity Go running on Samsung DeX" width="520" /> |
 
 ## Key Features
 

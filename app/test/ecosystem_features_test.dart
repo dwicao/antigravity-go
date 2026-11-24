@@ -1,8 +1,10 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:agy_client/agy_client.dart';
 import 'package:antigravity_go/runtime/runtime_models.dart';
 import 'package:antigravity_go/state/auth_state.dart';
+import 'package:antigravity_go/state/chat_models.dart';
 import 'package:antigravity_go/state/chat_state.dart';
 import 'package:antigravity_go/state/runtime_state.dart';
 import 'package:antigravity_go/state/sessions_state.dart';
@@ -10,8 +12,10 @@ import 'package:antigravity_go/state/settings_state.dart';
 import 'package:antigravity_go/state/usage_state.dart';
 import 'package:antigravity_go/theme/app_theme.dart';
 import 'package:antigravity_go/ui/auth/google_login_sheet.dart';
+import 'package:antigravity_go/ui/chat/attachment_preview.dart';
 import 'package:antigravity_go/ui/chat/chat_composer_bar.dart';
 import 'package:antigravity_go/ui/chat/chat_screen.dart';
+import 'package:antigravity_go/ui/chat/message_bubble.dart';
 import 'package:antigravity_go/ui/chat/message_metrics_footer.dart';
 import 'package:antigravity_go/ui/chat/render/agy_markdown.dart';
 import 'package:antigravity_go/ui/settings/settings_page.dart';
@@ -676,5 +680,58 @@ Weekly limit: 70% remaining (resets in 5d)
     });
     expect(startCalls, 1);
     expect(container.read(runtimeProvider).status.phase, RuntimePhase.stopped);
+  });
+
+  testWidgets('AttachmentPreviewStrip and MessageBubble render mini and sent image previews', (tester) async {
+    final tmpDir = Directory.systemTemp.createTempSync('agy_img_test_');
+    addTearDown(() => tmpDir.deleteSync(recursive: true));
+    // Valid 1x1 transparent PNG bytes.
+    final pngBytes = base64Decode(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
+    );
+    final imgFile = File('${tmpDir.path}/sample.png')..writeAsBytesSync(pngBytes);
+    final docPath = '${tmpDir.path}/notes.txt';
+    String? removedPath;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: _testTheme(),
+        home: Scaffold(
+          body: Column(
+            children: [
+              AttachmentPreviewStrip(
+                attachments: [imgFile.path, docPath],
+                onRemove: (p) => removedPath = p,
+              ),
+              Expanded(
+                child: ListView(
+                  children: [
+                    MessageBubble(
+                      message: ChatMessage(
+                        id: 'u-img-1',
+                        role: ChatRole.user,
+                        text: 'Check this screenshot',
+                        createdAt: DateTime(2026, 11, 25, 6, 30),
+                        attachments: [imgFile.path, docPath],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(AttachmentImageThumbnail), findsNWidgets(2));
+    expect(find.byType(Image), findsNWidgets(2));
+    expect(find.text('notes.txt'), findsNWidgets(2));
+    expect(find.text('Check this screenshot'), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.close_rounded).first);
+    await tester.pump();
+    expect(removedPath, imgFile.path);
   });
 }

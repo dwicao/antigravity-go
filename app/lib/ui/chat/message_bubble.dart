@@ -8,6 +8,7 @@ import '../../state/chat_state.dart';
 import '../../state/chat_turn_helpers.dart';
 import '../../theme/app_theme.dart';
 import '../auth/google_login_sheet.dart';
+import 'attachment_preview.dart';
 import 'change_card.dart';
 import 'message_metrics_footer.dart';
 import 'milestone_stack_card.dart';
@@ -170,6 +171,12 @@ class MessageBubble extends StatelessWidget {
     final isUser = message.role == ChatRole.user;
 
     if (isUser) {
+      final imageAttachments = message.attachments
+          .where(ChatTurnHelpers.isImagePath)
+          .toList();
+      final fileAttachments = message.attachments
+          .where((a) => !ChatTurnHelpers.isImagePath(a))
+          .toList();
       return Align(
         alignment: Alignment.centerRight,
         child: Container(
@@ -188,11 +195,38 @@ class MessageBubble extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (message.attachments.isNotEmpty) ...[
+              if (imageAttachments.isNotEmpty) ...[
+                if (imageAttachments.length == 1)
+                  AttachmentImageThumbnail(
+                    path: imageAttachments.first,
+                    width: 220,
+                    height: 165,
+                    borderRadius: 12,
+                  )
+                else
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: imageAttachments
+                        .map(
+                          (img) => AttachmentImageThumbnail(
+                            path: img,
+                            width: 112,
+                            height: 112,
+                            borderRadius: 10,
+                          ),
+                        )
+                        .toList(),
+                  ),
+                if (fileAttachments.isNotEmpty ||
+                    message.text.trim().isNotEmpty)
+                  const SizedBox(height: 8),
+              ],
+              if (fileAttachments.isNotEmpty) ...[
                 Wrap(
                   spacing: 6,
                   runSpacing: 4,
-                  children: message.attachments
+                  children: fileAttachments
                       .map(
                         (a) => Chip(
                           visualDensity: VisualDensity.compact,
@@ -205,16 +239,17 @@ class MessageBubble extends StatelessWidget {
                       )
                       .toList(),
                 ),
-                const SizedBox(height: 6),
+                if (message.text.trim().isNotEmpty) const SizedBox(height: 6),
               ],
-              SelectableText(
-                message.text,
-                style: TextStyle(
-                  color: theme.colorScheme.onPrimaryContainer,
-                  fontSize: 15,
-                  height: 1.4,
+              if (message.text.trim().isNotEmpty)
+                SelectableText(
+                  message.text,
+                  style: TextStyle(
+                    color: theme.colorScheme.onPrimaryContainer,
+                    fontSize: 15,
+                    height: 1.4,
+                  ),
                 ),
-              ),
               const SizedBox(height: 4),
               Row(
                 mainAxisSize: MainAxisSize.min,

@@ -6,6 +6,18 @@ import 'chat_models.dart';
 class ChatTurnHelpers {
   ChatTurnHelpers._();
 
+  static bool isImagePath(String path) {
+    final lower = path.toLowerCase();
+    return lower.endsWith('.png') ||
+        lower.endsWith('.jpg') ||
+        lower.endsWith('.jpeg') ||
+        lower.endsWith('.webp') ||
+        lower.endsWith('.gif') ||
+        lower.endsWith('.bmp') ||
+        lower.endsWith('.heic') ||
+        lower.endsWith('.heif');
+  }
+
   static List<ChatToolStep> finalizeTools(
     List<ChatToolStep> tools, {
     bool failed = false,

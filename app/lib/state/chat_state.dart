@@ -657,7 +657,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     AgySessionSummary? targetSession,
   }) async {
     final prompt = rawText.trim();
-    if (prompt.isEmpty) return;
+    if (prompt.isEmpty && attachments.isEmpty) return;
 
     var session = targetSession ?? ref.read(sessionsProvider).activeSession;
     final targetSid = session?.id ?? _loadedSessionId;
@@ -701,21 +701,16 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     final activeEffort = activeCustom != null ? '' : settings.reasoningEffort;
     final hosts = ref.read(hostsProvider);
     final sshHost = hosts.activeSshHost;
-    bool isImagePath(String p) {
-      final lower = p.toLowerCase();
-      return lower.endsWith('.png') ||
-          lower.endsWith('.jpg') ||
-          lower.endsWith('.jpeg') ||
-          lower.endsWith('.webp') ||
-          lower.endsWith('.gif');
-    }
-
     final textAttachments =
-        attachments.where((p) => !isImagePath(p)).toList();
+        attachments.where((p) => !ChatTurnHelpers.isImagePath(p)).toList();
     final attachmentNote = textAttachments.isEmpty
         ? ''
         : '\n\n[Attached files: ${textAttachments.join(', ')}]';
-    final effectivePrompt = '$prompt$attachmentNote';
+    final effectivePrompt = prompt.isNotEmpty
+        ? '$prompt$attachmentNote'
+        : (attachmentNote.trim().isNotEmpty
+            ? attachmentNote.trim()
+            : 'Analyze the attached image(s).');
     final now = DateTime.now();
 
     final priorMsgs = _messagesForSession(session.id);
