@@ -4,7 +4,6 @@ import 'dart:io';
 import 'package:agy_client/agy_client.dart';
 import 'package:antigravity_go/runtime/runtime_models.dart';
 import 'package:antigravity_go/state/auth_state.dart';
-import 'package:antigravity_go/state/chat_models.dart';
 import 'package:antigravity_go/state/chat_state.dart';
 import 'package:antigravity_go/state/runtime_state.dart';
 import 'package:antigravity_go/state/sessions_state.dart';
