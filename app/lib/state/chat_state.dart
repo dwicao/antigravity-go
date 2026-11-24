@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:agy_client/agy_client.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
@@ -135,6 +136,86 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     return sum / secs;
   }
 
+  static List<ChatMilestoneStep> _appendTextStep(
+    List<ChatMilestoneStep> currentSteps,
+    String delta,
+  ) {
+    if (delta.isEmpty) return currentSteps;
+    final nextSteps = [...currentSteps];
+    if (nextSteps.isNotEmpty && nextSteps.last.kind == ChatMilestoneKind.text) {
+      final last = nextSteps.last;
+      nextSteps[nextSteps.length - 1] =
+          last.copyWith(text: '${last.text}$delta');
+      return nextSteps;
+    }
+    if (delta.trim().isEmpty) return currentSteps;
+    nextSteps.add(
+      ChatMilestoneStep(
+        id: 'text-${nextSteps.length}',
+        kind: ChatMilestoneKind.text,
+        text: delta,
+      ),
+    );
+    return nextSteps;
+  }
+
+  bool _hasActiveBackgroundWork(String sessionId) {
+    final rt = _sessionRuntimes[sessionId];
+    final msgs = _messagesForSession(sessionId);
+    if (msgs.any(
+      (m) => m.isStreaming && m.tools.any((t) => t.state == ToolCallState.running),
+    )) {
+      return true;
+    }
+    if (_activeSubagentsBySession[sessionId]?.any((s) => s.isActive) ?? false) {
+      return true;
+    }
+    final rtTasks = ref.read(runtimeProvider).backgroundTasks;
+    final hasNativeBgTask = rtTasks.any((t) {
+      if (rt != null && t.turnId == rt.turnId) return true;
+      if (t.turnId == sessionId) return true;
+      if (t.kind == 'terminal') {
+        final ownedElsewhere = _sessionRuntimes.entries.any(
+          (e) =>
+              e.key != sessionId &&
+              (e.value.turnId == t.turnId || e.key == t.turnId),
+        );
+        return !ownedElsewhere;
+      }
+      return false;
+    });
+    if (hasNativeBgTask) return true;
+    final ciWatches = ref.read(ciWatchProvider);
+    return ciWatches.any((w) => w.sessionId == null || w.sessionId == sessionId);
+  }
+
+  @visibleForTesting
+  bool hasActiveBackgroundWorkForTest(String sessionId) =>
+      _hasActiveBackgroundWork(sessionId);
+
+  @visibleForTesting
+  void seedStreamingTurnForTest({
+    required String sessionId,
+    required String turnId,
+    List<ChatMessage> messages = const [],
+  }) {
+    _loadedSessionId = sessionId;
+    _inFlightMessages[sessionId] = messages;
+    _sessionRuntimes[sessionId]?.dispose();
+    _sessionRuntimes[sessionId] = _SessionTurnRuntime(
+      turnId: turnId,
+      isSsh: false,
+    );
+    state = state.copyWith(
+      messages: messages,
+      isStreaming: true,
+      activeTurnId: turnId,
+      loadedSessionId: sessionId,
+      clearStallWarning: true,
+    );
+    _resetWatchdog(sessionId);
+  }
+
   void _resetWatchdog(String sessionId) {
     final rt = _sessionRuntimes[sessionId];
     if (rt == null) return;
@@ -143,15 +224,27 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       return;
     }
     rt.stallWatchdog = Timer(const Duration(seconds: 180), () {
-      if (_sessionRuntimes.containsKey(sessionId) &&
-          _pendingPermissionsBySession[sessionId] == null &&
-          ref.mounted) {
-        const msg =
-            'Agent turn has had no output for 3 minutes — check connection or tap Stop & Regenerate.';
-        _sessionStallWarnings[sessionId] = msg;
-        if (_loadedSessionId == sessionId) {
-          state = state.copyWith(stallWarning: msg);
+      if (!_sessionRuntimes.containsKey(sessionId) ||
+          _pendingPermissionsBySession[sessionId] != null ||
+          !ref.mounted) {
+        return;
+      }
+      // Do not falsely warn the user about being idle while background tasks,
+      // running tools, subagents, or CI watches are still running for this turn.
+      if (_hasActiveBackgroundWork(sessionId)) {
+        if (_sessionStallWarnings.remove(sessionId) != null &&
+            _loadedSessionId == sessionId &&
+            state.stallWarning != null) {
+          state = state.copyWith(clearStallWarning: true);
         }
+        _resetWatchdog(sessionId);
+        return;
+      }
+      const msg =
+          'Agent turn has had no output for 3 minutes — check connection or tap Stop & Regenerate.';
+      _sessionStallWarnings[sessionId] = msg;
+      if (_loadedSessionId == sessionId) {
+        state = state.copyWith(stallWarning: msg);
       }
     });
   }
@@ -224,6 +317,38 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         if (next != null && next != _loadedSessionId) {
           _loadedSessionId = next;
           Future.microtask(() => _loadMessages(next));
+        }
+      },
+    );
+    ref.listen<List<NativeBackgroundTask>>(
+      runtimeProvider.select((r) => r.backgroundTasks),
+      (prev, next) {
+        if (next.isEmpty) return;
+        for (final sid in _sessionRuntimes.keys.toList()) {
+          if (_hasActiveBackgroundWork(sid)) {
+            _resetWatchdog(sid);
+            if (_sessionStallWarnings.remove(sid) != null &&
+                _loadedSessionId == sid &&
+                state.stallWarning != null) {
+              state = state.copyWith(clearStallWarning: true);
+            }
+          }
+        }
+      },
+    );
+    ref.listen<List<CiWatchEntry>>(
+      ciWatchProvider,
+      (prev, next) {
+        if (next.isEmpty) return;
+        for (final sid in _sessionRuntimes.keys.toList()) {
+          if (_hasActiveBackgroundWork(sid)) {
+            _resetWatchdog(sid);
+            if (_sessionStallWarnings.remove(sid) != null &&
+                _loadedSessionId == sid &&
+                state.stallWarning != null) {
+              state = state.copyWith(clearStallWarning: true);
+            }
+          }
         }
       },
     );
@@ -1040,6 +1165,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           final rate = _recordRateSample(session.id, evt.delta);
           state = state.copyWith(tokensPerSecond: rate);
         }
+        final nextSteps = _appendTextStep(current.steps, evt.delta);
         final nextUsage =
             ChatTurnHelpers.mergeStepUsage(current.usage, evt.stepUsage);
         _replaceMessageInSession(
@@ -1047,6 +1173,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           idx,
           current.copyWith(
             text: '${current.text}${evt.delta}',
+            steps: nextSteps,
             usage: nextUsage,
             contextTokens: (evt.stepUsage?.contextTokens ?? 0) > 0
                 ? evt.stepUsage!.contextTokens
@@ -1194,11 +1321,15 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           usage: resolvedUsage,
           reportedDurationSeconds: evt.durationSeconds,
         );
+        final nextSteps = current.text.isEmpty && resolvedText.trim().isNotEmpty
+            ? _appendTextStep(current.steps, resolvedText)
+            : current.steps;
         _replaceMessageInSession(
           session.id,
           idx,
           current.copyWith(
             text: resolvedText,
+            steps: nextSteps,
             usage: resolvedUsage,
             contextTokens: resolvedUsage.contextTokens > 0
                 ? resolvedUsage.contextTokens
@@ -1309,11 +1440,20 @@ class ChatNotifier extends Notifier<ChatThreadState> {
             : (current.text.isEmpty
                 ? evt.message
                 : '${current.text}\n\n${evt.message}');
+        final addedErrorText = current.isCompactionSummary
+            ? (current.text.trim().isNotEmpty
+                ? ''
+                : _compactionFallbackText(assistantId))
+            : (current.text.isEmpty ? evt.message : '\n\n${evt.message}');
+        final nextSteps = addedErrorText.trim().isNotEmpty
+            ? _appendTextStep(current.steps, addedErrorText)
+            : current.steps;
         _replaceMessageInSession(
           session.id,
           idx,
           current.copyWith(
             text: errorOrFallback,
+            steps: nextSteps,
             tools: _finalizeTools(current.tools, failed: true),
             durationSeconds: current.durationSeconds ?? stats.durationSec,
             tokensPerSecond: current.tokensPerSecond ?? stats.tokPerSec,
@@ -1356,11 +1496,15 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         thoughts: cur.thoughts,
         usage: cur.usage,
       );
+      final nextSteps = cur.text.isEmpty && text.trim().isNotEmpty
+          ? _appendTextStep(cur.steps, text)
+          : cur.steps;
       _replaceMessageInSession(
         session.id,
         idx,
         cur.copyWith(
           text: text,
+          steps: nextSteps,
           tools: _finalizeTools(cur.tools),
           durationSeconds: cur.durationSeconds ?? stats.durationSec,
           tokensPerSecond: cur.tokensPerSecond ?? stats.tokPerSec,

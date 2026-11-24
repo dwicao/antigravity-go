@@ -1,7 +1,7 @@
 {
-  "version": "1.0.23",
+  "version": "1.0.24",
   "buildNumber": 1,
-  "tag": "v1.0.23",
+  "tag": "v1.0.24",
   "changelogUrl": "https://github.com/dwicao/antigravity-go/blob/main/CHANGELOG.md",
-  "releaseNotes": "### Added\n- **Expanded Device Gateway MCP & Hardware Controls:** Added 8 new loopback MCP tools alongside screen inspection (`phone_device_info`, `phone_notify`, `phone_clipboard`, `phone_torch`, `phone_vibrate`, `phone_toast`, `phone_open_url`, and SafetyGuard-checked `phone_shizuku_exec` via `rish`), plus `TorchReceiver`, `DeviceGatewayHelper`, and quick-test controls inside **Phone Control & SafetyGate**.\n- **Daemon-style Automation Triggers:** Added standard 5-field **cron expressions**, **File Watch**, **GitHub PR/Issue Watch**, **Battery Below %** triggers, and notification alerts on completion in **Automations**.\n- **Runtime Shell Wrappers & Log Export:** Provisioned `torch`, `agy-notify`, `agy-fix-paths`, `xdg-open`, `open`, and `cs` helpers into `runtime/bin`, exported `TERM=xterm-256color`, `$PREFIX`, and `ANDROID_DATA=/data`, and added **Copy Logs** & **Save Logs** in **On-Device Antigravity Runtime**.\n- **Workspace Layout Override & Haptic Feedback:** Added an instant **Auto / Desktop / Mobile** workspace layout toggle and reply-completion haptic feedback toggle in **Settings -> Appearance**."
+  "releaseNotes": "### Fixed\n- **Chronological milestone cards:** Rendered `MilestoneStackCard` and markdown response segments in exact chronological order via `ChatMilestoneKind.text`, keeping follow-up milestones (including completed background task steps) positioned naturally below the preceding chat result text instead of pinned above it.\n- **Pinned bottom streaming indicator:** Moved the live `[Antigravity (spinner) X tok/s]` indicator to the very bottom of the chat viewport right above the composer so active streaming speed and status stay visible without scrolling back up.\n- **False 3-minute idle warning with active background tasks:** Deferred `stallWatchdog` and cleared stale idle warnings whenever running tools, active subagents, native `terminal` background processes, or CI watches are still running."
 }

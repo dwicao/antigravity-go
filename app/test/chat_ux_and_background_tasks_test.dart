@@ -859,4 +859,201 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     await tester.pump(const Duration(milliseconds: 500));
   });
+
+  testWidgets(
+      'MessageBubble renders chronological milestones below preceding chat result text',
+      (tester) async {
+    final msg = ChatMessage(
+      id: 'm-chrono',
+      role: ChatRole.assistant,
+      text: 'Background tasks done, running final checks now.',
+      createdAt: DateTime(2026, 11, 24, 14, 0),
+      isStreaming: false,
+      tools: const [
+        ChatToolStep(
+          id: 't-after',
+          toolName: 'run_command',
+          state: ToolCallState.completed,
+          parameters: {'CommandLine': 'flutter test'},
+        ),
+      ],
+      steps: const [
+        ChatMilestoneStep(
+          id: 'text-0',
+          kind: ChatMilestoneKind.text,
+          text: 'Background tasks done, running final checks now.',
+        ),
+        ChatMilestoneStep(
+          id: 'thought-1',
+          kind: ChatMilestoneKind.thought,
+          text: 'Verify flutter test result',
+        ),
+        ChatMilestoneStep(
+          id: 'tool-t-after',
+          kind: ChatMilestoneKind.tool,
+          toolId: 't-after',
+        ),
+      ],
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: MessageBubble(message: msg),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final textPos = tester.getTopLeft(
+      find.textContaining('Background tasks done, running final checks now.'),
+    );
+    final milestonePos = tester.getTopLeft(find.text('Ran 1 command'));
+    expect(milestonePos.dy, greaterThan(textPos.dy));
+  });
+
+  testWidgets(
+      'ChatScreen pins Antigravity spinner and tok/s bar at the very bottom while streaming',
+      (tester) async {
+    final container = ProviderContainer(
+      overrides: [
+        sessionsProvider.overrideWith(
+          () => _FakeSessionsNotifier(const SessionsState(activeSessionId: 's1')),
+        ),
+        runtimeProvider.overrideWith(
+          () => _FakeRuntimeNotifier(const RuntimeUiState()),
+        ),
+        chatProvider.overrideWith(
+          () => _FakeChatNotifier(
+            ChatThreadState(
+              isStreaming: true,
+              tokensPerSecond: 47.2,
+              messages: [
+                ChatMessage(
+                  id: 'm-stream',
+                  role: ChatRole.assistant,
+                  text: 'Streaming detailed response…',
+                  createdAt: DateTime(2026, 11, 24, 14, 1),
+                  isStreaming: true,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(
+          home: Scaffold(body: ChatScreen()),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final bottomBar = find.byKey(const ValueKey('bottom-agent-working-bar'));
+    expect(bottomBar, findsOneWidget);
+    expect(
+      find.descendant(of: bottomBar, matching: find.text('Antigravity')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: bottomBar,
+        matching: find.byType(CircularProgressIndicator),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: bottomBar, matching: find.text('47 tok/s')),
+      findsOneWidget,
+    );
+    // Must sit below the scrollable chat list and NOT inside MessageBubble header.
+    final listRect = tester.getRect(find.byType(ListView));
+    final barRect = tester.getRect(bottomBar);
+    expect(barRect.top, greaterThanOrEqualTo(listRect.bottom - 1.0));
+    expect(
+      find.descendant(
+        of: find.byType(MessageBubble),
+        matching: find.text('47 tok/s'),
+      ),
+      findsNothing,
+    );
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(milliseconds: 500));
+  });
+
+  testWidgets(
+      'Idle 3-minute stall watchdog stays suppressed while background tasks run and warns when truly idle',
+      (tester) async {
+    final bgContainer = ProviderContainer(
+      overrides: [
+        sessionsProvider.overrideWith(
+          () => _FakeSessionsNotifier(const SessionsState(activeSessionId: 's-bg')),
+        ),
+        runtimeProvider.overrideWith(
+          () => _FakeRuntimeNotifier(
+            RuntimeUiState(
+              backgroundTasks: [
+                NativeBackgroundTask(
+                  id: 'term-1',
+                  turnId: 'turn-bg',
+                  kind: 'terminal',
+                  title: 'gradle assembleRelease',
+                  status: 'running',
+                  startedAt: DateTime(2026, 11, 24, 14, 0),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+    addTearDown(bgContainer.dispose);
+
+    bgContainer.read(chatProvider.notifier).seedStreamingTurnForTest(
+          sessionId: 's-bg',
+          turnId: 'turn-bg',
+        );
+    expect(
+      bgContainer.read(chatProvider.notifier).hasActiveBackgroundWorkForTest('s-bg'),
+      isTrue,
+    );
+
+    await tester.pump(const Duration(seconds: 185));
+    expect(bgContainer.read(chatProvider).stallWarning, isNull);
+
+    final idleContainer = ProviderContainer(
+      overrides: [
+        sessionsProvider.overrideWith(
+          () => _FakeSessionsNotifier(const SessionsState(activeSessionId: 's-idle')),
+        ),
+        runtimeProvider.overrideWith(
+          () => _FakeRuntimeNotifier(const RuntimeUiState()),
+        ),
+      ],
+    );
+    addTearDown(idleContainer.dispose);
+
+    idleContainer.read(chatProvider.notifier).seedStreamingTurnForTest(
+          sessionId: 's-idle',
+          turnId: 'turn-idle',
+        );
+    expect(
+      idleContainer.read(chatProvider.notifier).hasActiveBackgroundWorkForTest('s-idle'),
+      isFalse,
+    );
+
+    await tester.pump(const Duration(seconds: 185));
+    expect(
+      idleContainer.read(chatProvider).stallWarning,
+      contains('3 minutes'),
+    );
+  });
 }

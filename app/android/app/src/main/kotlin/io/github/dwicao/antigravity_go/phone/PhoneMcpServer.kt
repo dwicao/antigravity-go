@@ -629,7 +629,7 @@ class PhoneMcpServer(
                                     "serverInfo",
                                     JSONObject()
                                         .put("name", "phone-control")
-                                        .put("version", "1.0.23"),
+                                        .put("version", "1.0.24"),
                                 ),
                         )
                 }

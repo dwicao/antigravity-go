@@ -447,7 +447,7 @@ class AgyCliManagedItem {
   }
 }
 
-enum ChatMilestoneKind { thought, tool }
+enum ChatMilestoneKind { thought, tool, text }
 
 /// One chronological milestone/progress card inside an assistant turn
 /// (e.g. `Thinking - ...`, `Run - cd /sdcard...`, `Thinking - ...`).

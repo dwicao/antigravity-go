@@ -37,6 +37,129 @@ class MessageBubble extends StatelessWidget {
   final double? tokensPerSecond;
   final List<ActiveSubagent> activeSubagents;
 
+  List<Widget> _buildBodySegments(ThemeData theme, AgySemanticColors semantic) {
+    final hasTextSteps =
+        message.steps.any((s) => s.kind == ChatMilestoneKind.text);
+    if (!hasTextSteps) {
+      return [
+        if (message.steps.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          MilestoneStackCard(
+            key: ValueKey('steps-${message.id}'),
+            steps: message.steps,
+            tools: message.tools,
+            isStreaming: message.isStreaming,
+          ),
+        ] else ...[
+          if (message.thoughts.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            CollapsibleThoughtSection(
+              icon: Icons.psychology_outlined,
+              title: 'Reasoning & Thoughts',
+              body: AgySecretMask.mask(message.thoughts),
+            ),
+          ],
+          if (message.tools.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            FoldedToolsBar(
+              key: ValueKey('tools-${message.id}'),
+              tools: message.tools,
+            ),
+          ],
+        ],
+        if (message.text.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          AgyMarkdown(
+            text: message.text,
+            streaming: message.isStreaming,
+          ),
+        ] else if (message.isStreaming &&
+            message.steps.isEmpty &&
+            message.tools.isEmpty &&
+            message.thoughts.isEmpty) ...[
+          const SizedBox(height: 8),
+          Text(
+            'Thinking…',
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: semantic.textSecondary,
+            ),
+          ),
+        ],
+      ];
+    }
+
+    // Chronologically group steps so milestones appearing after chat result
+    // text stay rendered below that text rather than hoisted to the top.
+    final segments = <({bool isText, String text, List<ChatMilestoneStep> steps})>[];
+    var pendingSteps = <ChatMilestoneStep>[];
+    for (final step in message.steps) {
+      if (step.kind == ChatMilestoneKind.text) {
+        if (step.text.trim().isEmpty) continue;
+        if (pendingSteps.isNotEmpty) {
+          segments.add((isText: false, text: '', steps: pendingSteps));
+          pendingSteps = <ChatMilestoneStep>[];
+        }
+        segments.add((isText: true, text: step.text, steps: const []));
+      } else {
+        pendingSteps.add(step);
+      }
+    }
+    if (pendingSteps.isNotEmpty) {
+      segments.add((isText: false, text: '', steps: pendingSteps));
+    }
+
+    final coveredToolIds = <String>{
+      for (final s in message.steps)
+        if (s.toolId != null) s.toolId!,
+    };
+    final orphanTools = message.tools
+        .where((t) => !coveredToolIds.contains(t.id))
+        .toList();
+
+    final widgets = <Widget>[];
+    var milestoneGroupIdx = 0;
+    for (var i = 0; i < segments.length; i++) {
+      final seg = segments[i];
+      final isLast = i == segments.length - 1;
+      if (seg.isText) {
+        widgets.add(const SizedBox(height: 8));
+        widgets.add(
+          AgyMarkdown(
+            text: seg.text,
+            streaming: message.isStreaming && isLast,
+          ),
+        );
+      } else {
+        final stepToolIds = seg.steps
+            .map((s) => s.toolId)
+            .whereType<String>()
+            .toSet();
+        final segTools = message.tools
+            .where((t) => stepToolIds.contains(t.id))
+            .toList();
+        widgets.add(const SizedBox(height: 6));
+        widgets.add(
+          MilestoneStackCard(
+            key: ValueKey('steps-${message.id}-${milestoneGroupIdx++}'),
+            steps: seg.steps,
+            tools: segTools,
+            isStreaming: message.isStreaming && isLast,
+          ),
+        );
+      }
+    }
+    if (orphanTools.isNotEmpty) {
+      widgets.add(const SizedBox(height: 6));
+      widgets.add(
+        FoldedToolsBar(
+          key: ValueKey('tools-${message.id}'),
+          tools: orphanTools,
+        ),
+      );
+    }
+    return widgets;
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -229,27 +352,6 @@ class MessageBubble extends StatelessWidget {
                         ),
                       ),
                     ),
-                    if (message.isStreaming) ...[
-                      const SizedBox(width: 8),
-                      const SizedBox(
-                        width: 12,
-                        height: 12,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                      if (tokensPerSecond != null &&
-                          tokensPerSecond! > 0.5) ...[
-                        const SizedBox(width: 8),
-                        Flexible(
-                          child: Text(
-                            '${tokensPerSecond!.toStringAsFixed(0)} tok/s',
-                            overflow: TextOverflow.ellipsis,
-                            style: theme.textTheme.labelSmall?.copyWith(
-                              color: semantic.textSecondary,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ],
                   ],
                 ),
               ),
@@ -271,55 +373,13 @@ class MessageBubble extends StatelessWidget {
                 ),
             ],
           ),
-          if (message.steps.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            MilestoneStackCard(
-              key: ValueKey('steps-${message.id}'),
-              steps: message.steps,
-              tools: message.tools,
-              isStreaming: message.isStreaming,
-            ),
-          ] else ...[
-            if (message.thoughts.isNotEmpty) ...[
-              const SizedBox(height: 6),
-              CollapsibleThoughtSection(
-                icon: Icons.psychology_outlined,
-                title: 'Reasoning & Thoughts',
-                body: AgySecretMask.mask(message.thoughts),
-              ),
-            ],
-            if (message.tools.isNotEmpty) ...[
-              const SizedBox(height: 6),
-              FoldedToolsBar(
-                key: ValueKey('tools-${message.id}'),
-                tools: message.tools,
-              ),
-            ],
-          ],
+          ..._buildBodySegments(theme, semantic),
           if (message.tools.any(
               (t) => ChatTurnHelpers.isSubagentSpawnTool(t.toolName))) ...[
             const SizedBox(height: 6),
             _SpawnedSubagentsStrip(
               tools: message.tools,
               activeSubagents: activeSubagents,
-            ),
-          ],
-          if (message.text.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            AgyMarkdown(
-              text: message.text,
-              streaming: message.isStreaming,
-            ),
-          ] else if (message.isStreaming &&
-              message.steps.isEmpty &&
-              message.tools.isEmpty &&
-              message.thoughts.isEmpty) ...[
-            const SizedBox(height: 8),
-            Text(
-              'Thinking…',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: semantic.textSecondary,
-              ),
             ),
           ],
           if (message.requiresAuth) ...[

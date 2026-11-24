@@ -1040,6 +1040,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   ],
                 ),
         ),
+        if (isCurrentSessionBusy)
+          wrapCentered(
+            _StreamingAgentStatusBar(
+              key: const ValueKey('bottom-agent-working-bar'),
+              tokensPerSecond: chat.tokensPerSecond,
+            ),
+          ),
         if (chat.stallWarning != null)
           wrapCentered(
             Container(
@@ -1392,6 +1399,73 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _StreamingAgentStatusBar extends StatelessWidget {
+  const _StreamingAgentStatusBar({
+    super.key,
+    required this.tokensPerSecond,
+  });
+
+  final double tokensPerSecond;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final semantic = AgySemanticColors.of(context);
+    final hasSpeed = tokensPerSecond > 0.5;
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHigh.withOpacity(0.85),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: theme.colorScheme.outlineVariant.withOpacity(0.45),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.max,
+        children: [
+          CircleAvatar(
+            radius: 10,
+            backgroundColor: theme.colorScheme.primary.withOpacity(0.16),
+            child: Icon(
+              Icons.auto_awesome,
+              size: 12,
+              color: theme.colorScheme.primary,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            'Antigravity',
+            style: theme.textTheme.labelMedium?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(width: 8),
+          const SizedBox(
+            width: 12,
+            height: 12,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              hasSpeed
+                  ? '${tokensPerSecond.toStringAsFixed(0)} tok/s'
+                  : 'Working…',
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: semantic.textSecondary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
