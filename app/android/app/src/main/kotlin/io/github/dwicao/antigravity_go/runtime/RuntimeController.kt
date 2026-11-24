@@ -599,6 +599,8 @@ class RuntimeController private constructor(private val appContext: Context) {
                     clearBusyboxSymlinks()
                 }
 
+                ensureHelperScripts()
+
                 val sdcardLink = File(homeDir, "sdcard")
                 val wsStorageLink = File(workspaceDir, "phone_storage")
                 if (hasStorageAccess()) {
@@ -614,6 +616,84 @@ class RuntimeController private constructor(private val appContext: Context) {
                 }
             } catch (_: Throwable) {}
         }
+    }
+
+    private fun writeHelperScript(name: String, content: String) {
+        val target = File(binDir, name)
+        runCatching {
+            if (!target.exists() || target.readText() != content) {
+                target.writeText(content)
+            }
+            target.setExecutable(true, false)
+        }
+    }
+
+    private fun ensureHelperScripts() {
+        val shBang = if (bashFile.canExecute()) "#!${bashFile.absolutePath}" else "#!/system/bin/sh"
+        writeHelperScript(
+            "cs",
+            "$shBang\n# Placeholder stub for CLI environment probes\nexit 0\n",
+        )
+        writeHelperScript(
+            "torch",
+            """$shBang
+state="${'$'}{1:-on}"
+case "${'$'}state" in
+  off|0|false) en=false ;;
+  on|1|true) en=true ;;
+  *) echo "usage: torch [on|off]" >&2; exit 2 ;;
+esac
+am broadcast -n ${appContext.packageName}/.runtime.TorchReceiver -a ${TorchReceiver.ACTION_TORCH} --ez enabled "${'$'}en" >/dev/null 2>&1 || true
+echo "torch: ${'$'}state"
+""",
+        )
+        writeHelperScript(
+            "agy-notify",
+            """$shBang
+TITLE="Antigravity"
+MESSAGE=""
+TAG="agy_cli"
+while [ "${'$'}#" -gt 0 ]; do
+  case "${'$'}1" in
+    post) shift ;;
+    -t|--title) TITLE="${'$'}{2:-Antigravity}"; shift 2 ;;
+    -m|--message) MESSAGE="${'$'}{2:-}"; shift 2 ;;
+    --tag) TAG="${'$'}{2:-agy_cli}"; shift 2 ;;
+    *) [ -z "${'$'}MESSAGE" ] && MESSAGE="${'$'}1"; shift ;;
+  esac
+done
+if [ -n "${'$'}{AGY_PHONE_MCP_URL:-}" ] && command -v curl >/dev/null 2>&1; then
+  payload="{\"action\":\"notify\",\"title\":\"${'$'}TITLE\",\"message\":\"${'$'}MESSAGE\",\"tag\":\"${'$'}TAG\"}"
+  curl -fsSL -H "Authorization: Bearer ${'$'}{AGY_PHONE_MCP_TOKEN:-}" -H "Content-Type: application/json" -d "${'$'}payload" "${'$'}AGY_PHONE_MCP_URL" >/dev/null 2>&1 && exit 0
+fi
+cmd notification post -S bigtext -t "${'$'}TITLE" "${'$'}TAG" "${'$'}MESSAGE" >/dev/null 2>&1 || echo "[agy-notify] ${'$'}TITLE: ${'$'}MESSAGE"
+""",
+        )
+        writeHelperScript(
+            "agy-fix-paths",
+            """$shBang
+PREFIX_DIR="${'$'}{PREFIX:-${runtimeDir.absolutePath}}"
+SH_PATH="${'$'}{SHELL:-/system/bin/sh}"
+count=0
+for root in "${'$'}{@:-${'$'}PREFIX_DIR}"; do
+  [ -e "${'$'}root" ] || continue
+  while IFS= read -r f; do
+    [ -f "${'$'}f" ] || continue
+    tmp="${'$'}f.agyfix.$$"
+    sed -E "1s@^#! */usr/bin/env[[:space:]]+([^[:space:]]+)@#!${'$'}PREFIX_DIR/bin/\\1@" "${'$'}f" > "${'$'}tmp" 2>/dev/null || { rm -f "${'$'}tmp"; continue; }
+    if cmp -s "${'$'}f" "${'$'}tmp"; then rm -f "${'$'}tmp"; else mv -f "${'$'}tmp" "${'$'}f"; chmod +x "${'$'}f" 2>/dev/null || true; count=$((count + 1)); fi
+  done < <(grep -rl '^#! */usr/bin/env' "${'$'}root" 2>/dev/null || true)
+done
+echo "agy-fix-paths: updated ${'$'}count file(s) -> ${'$'}PREFIX_DIR"
+""",
+        )
+        val browserShim = """$shBang
+url="${'$'}{1:-}"
+[ -n "${'$'}url" ] || exit 0
+am start -a android.intent.action.VIEW -d "${'$'}url" >/dev/null 2>&1 || echo "[open] ${'$'}url"
+"""
+        writeHelperScript("xdg-open", browserShim)
+        writeHelperScript("open", browserShim)
     }
 
     private fun ensureSymlink(linkFile: File, targetPath: String) {
@@ -638,13 +718,18 @@ class RuntimeController private constructor(private val appContext: Context) {
     fun syncPhoneMcpRegistration() = customizationsOps.syncPhoneMcpRegistration()
 
     private fun buildEnv(extra: Map<String, String> = emptyMap()): Map<String, String> {
+        PhoneControlCoordinator.bindContext(appContext)
         ensureShellToolchain()
         val env = LinkedHashMap<String, String>()
         env.putAll(System.getenv())
         env["HOME"] = homeDir.absolutePath
+        env["PREFIX"] = runtimeDir.absolutePath
         env["XDG_CONFIG_HOME"] = File(homeDir, ".config").absolutePath
         env["XDG_CACHE_HOME"] = File(homeDir, ".cache").absolutePath
         env["TMPDIR"] = tmpDir.absolutePath
+        env["TERM"] = env["TERM"]?.takeIf { it.isNotBlank() } ?: "xterm-256color"
+        env["ANDROID_DATA"] = env["ANDROID_DATA"]?.takeIf { it.isNotBlank() } ?: "/data"
+        env["RISH_APPLICATION_ID"] = appContext.packageName
         env["SHELL"] = if (bashFile.canExecute()) bashFile.absolutePath else "/system/bin/sh"
         env["CONFIG_SHELL"] = env["SHELL"]!!
         env["ANDROID_STORAGE"] = Environment.getExternalStorageDirectory()?.absolutePath ?: "/sdcard"
@@ -1032,6 +1117,7 @@ class RuntimeController private constructor(private val appContext: Context) {
             "busyboxHealthy" to busyboxHealthy,
             "allFilesAccess" to hasStorageAccess(),
             "batteryOptimizationExempt" to batteryExempt,
+            "shizukuAvailable" to io.github.dwicao.antigravity_go.phone.DeviceGatewayHelper.isShizukuAvailable(appContext),
             "safeState" to safeState.wire,
             "networkBlocked" to networkBlocked,
             "lastFailure" to lastFailure?.toMap(),
@@ -1068,8 +1154,8 @@ class RuntimeController private constructor(private val appContext: Context) {
     }
 
     private fun appVersionName(): String = runCatching {
-        appContext.packageManager.getPackageInfo(appContext.packageName, 0).versionName ?: "1.0.16"
-    }.getOrDefault("1.0.16")
+        appContext.packageManager.getPackageInfo(appContext.packageName, 0).versionName ?: "1.0.23"
+    }.getOrDefault("1.0.23")
 
     fun startTurn(
         turnId: String,

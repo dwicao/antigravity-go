@@ -1,11 +1,15 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:agy_client/agy_client.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
+
+import '../phone/phone_bridge.dart';
 
 typedef AutomationTriggerCallback = Future<void> Function(
   AgyAutomation automation,
@@ -22,6 +26,10 @@ class AutomationsNotifier extends Notifier<List<AgyAutomation>> {
 
   Timer? _schedulerTimer;
   AutomationTriggerCallback? onAutomationDue;
+  final Map<String, DateTime> _fileMtimes = {};
+  final Map<String, int> _githubCounts = {};
+  Future<int?> Function(String repo, String endpoint)? githubOpenCountOverride;
+  Future<int?> Function()? batteryLevelOverride;
 
   @override
   List<AgyAutomation> build() {
@@ -112,14 +120,90 @@ class AutomationsNotifier extends Notifier<List<AgyAutomation>> {
     } catch (_) {}
   }
 
+  Future<bool> _isDaemonTriggerDue(AgyAutomation a, DateTime ts) async {
+    if (!a.enabled) return false;
+    switch (a.triggerType) {
+      case AutomationTriggerType.schedule:
+        return a.isDueAt(ts);
+      case AutomationTriggerType.fileWatch:
+        final p = a.triggerTarget.trim();
+        if (p.isEmpty) return false;
+        try {
+          final type = FileSystemEntity.typeSync(p);
+          if (type == FileSystemEntityType.notFound) return false;
+          final stat = type == FileSystemEntityType.directory
+              ? Directory(p).statSync()
+              : File(p).statSync();
+          final prev = _fileMtimes[a.id];
+          _fileMtimes[a.id] = stat.modified;
+          if (prev == null) return false;
+          return stat.modified.isAfter(prev);
+        } catch (_) {
+          return false;
+        }
+      case AutomationTriggerType.githubPr:
+      case AutomationTriggerType.githubIssue:
+        final repo = a.triggerTarget.trim();
+        if (!repo.contains('/')) return false;
+        final endpoint = a.triggerType == AutomationTriggerType.githubPr
+            ? 'pulls'
+            : 'issues';
+        final count = await _fetchGitHubOpenCount(repo, endpoint);
+        if (count == null) return false;
+        final prev = _githubCounts[a.id];
+        _githubCounts[a.id] = count;
+        return prev != null && count > prev;
+      case AutomationTriggerType.batteryBelow:
+        final threshold = int.tryParse(a.triggerTarget.trim());
+        if (threshold == null || threshold <= 0) return false;
+        if (a.lastRunAt != null &&
+            ts.difference(a.lastRunAt!) < const Duration(minutes: 30)) {
+          return false;
+        }
+        final pct = await _readBatteryPct();
+        return pct != null && pct <= threshold;
+    }
+  }
+
+  Future<int?> _fetchGitHubOpenCount(String repo, String endpoint) async {
+    final override = githubOpenCountOverride;
+    if (override != null) return override(repo, endpoint);
+    try {
+      final res = await http
+          .get(
+            Uri.https('api.github.com', '/repos/$repo/$endpoint', {'state': 'open'}),
+            headers: {'Accept': 'application/vnd.github+json'},
+          )
+          .timeout(const Duration(seconds: 10));
+      if (res.statusCode != 200) return null;
+      final decoded = jsonDecode(res.body);
+      if (decoded is List) return decoded.length;
+    } catch (_) {}
+    return null;
+  }
+
+  Future<int?> _readBatteryPct() async {
+    final override = batteryLevelOverride;
+    if (override != null) return override();
+    final info = await PhoneBridge.instance.getDeviceInfo();
+    return (info['battery'] as num?)?.toInt();
+  }
+
   Future<int> runDueAutomations({DateTime? now}) async {
     final cb = onAutomationDue;
     if (cb == null || state.isEmpty) return 0;
     final ts = now ?? DateTime.now();
     var count = 0;
     for (final a in state.toList()) {
-      if (!a.isDueAt(ts)) continue;
-      await markRun(a.id, 'Scheduled');
+      if (!await _isDaemonTriggerDue(a, ts)) continue;
+      await markRun(a.id, a.triggerType.label);
+      if (a.notifyOnComplete) {
+        await PhoneBridge.instance.postNotification(
+          title: 'Automation: ${a.name}',
+          message: '${a.triggerType.label} triggered',
+          tag: 'auto_${a.id}',
+        );
+      }
       await cb(a);
       count++;
     }
@@ -131,6 +215,9 @@ class AutomationsNotifier extends Notifier<List<AgyAutomation>> {
     required String prompt,
     required String scheduleLabel,
     AutomationModelTier modelTier = AutomationModelTier.flash,
+    AutomationTriggerType triggerType = AutomationTriggerType.schedule,
+    String triggerTarget = '',
+    bool notifyOnComplete = true,
     String projectId = 'default',
   }) async {
     final item = AgyAutomation(
@@ -139,6 +226,9 @@ class AutomationsNotifier extends Notifier<List<AgyAutomation>> {
       prompt: prompt.trim(),
       scheduleLabel: scheduleLabel.trim(),
       modelTier: modelTier,
+      triggerType: triggerType,
+      triggerTarget: triggerTarget.trim(),
+      notifyOnComplete: notifyOnComplete,
       projectId: projectId,
     );
     state = [item, ...state];

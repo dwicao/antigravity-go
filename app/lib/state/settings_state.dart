@@ -6,6 +6,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../runtime/runtime_bridge.dart';
 import '../theme/app_theme.dart';
 
+enum DesktopLayoutOverride {
+  auto('Auto'),
+  desktop('Desktop'),
+  mobile('Mobile');
+
+  const DesktopLayoutOverride(this.label);
+
+  final String label;
+}
+
 class AppSettings {
   const AppSettings({
     this.themeMode = ThemeMode.dark,
@@ -15,6 +25,8 @@ class AppSettings {
     this.permissionPreset = AntigravityPermissionPreset.turbo,
     this.allowNonWorkspaceAccess = true,
     this.layoutMode = AntigravityLayoutMode.softwareEngineering,
+    this.desktopLayout = DesktopLayoutOverride.auto,
+    this.hapticOnComplete = true,
     this.selectedModelId = 'Orchestrator (Neon)',
     this.reasoningEffort = 'medium',
     this.executionMode = 'default',
@@ -32,6 +44,8 @@ class AppSettings {
   final AntigravityPermissionPreset permissionPreset;
   final bool allowNonWorkspaceAccess;
   final AntigravityLayoutMode layoutMode;
+  final DesktopLayoutOverride desktopLayout;
+  final bool hapticOnComplete;
   final String selectedModelId;
   final String reasoningEffort;
   final String executionMode;
@@ -52,6 +66,8 @@ class AppSettings {
     AntigravityPermissionPreset? permissionPreset,
     bool? allowNonWorkspaceAccess,
     AntigravityLayoutMode? layoutMode,
+    DesktopLayoutOverride? desktopLayout,
+    bool? hapticOnComplete,
     String? selectedModelId,
     String? reasoningEffort,
     String? executionMode,
@@ -70,6 +86,8 @@ class AppSettings {
       allowNonWorkspaceAccess:
           allowNonWorkspaceAccess ?? this.allowNonWorkspaceAccess,
       layoutMode: layoutMode ?? this.layoutMode,
+      desktopLayout: desktopLayout ?? this.desktopLayout,
+      hapticOnComplete: hapticOnComplete ?? this.hapticOnComplete,
       selectedModelId: selectedModelId ?? this.selectedModelId,
       reasoningEffort: reasoningEffort ?? this.reasoningEffort,
       executionMode: executionMode ?? this.executionMode,
@@ -124,6 +142,7 @@ class SettingsNotifier extends Notifier<AppSettings> {
     }
 
     if (!ref.mounted) return;
+    final desktopName = prefs.getString('agy_desktop_layout');
     state = state.copyWith(
       themeMode: ThemeMode.values.firstWhere(
         (m) => m.name == themeName,
@@ -142,6 +161,11 @@ class SettingsNotifier extends Notifier<AppSettings> {
         (l) => l.name == layoutName,
         orElse: () => AntigravityLayoutMode.softwareEngineering,
       ),
+      desktopLayout: DesktopLayoutOverride.values.firstWhere(
+        (d) => d.name == desktopName,
+        orElse: () => DesktopLayoutOverride.auto,
+      ),
+      hapticOnComplete: prefs.getBool('agy_haptic_on_complete') ?? true,
       selectedModelId:
           prefs.getString('agy_selected_model') ?? 'Orchestrator (Neon)',
       reasoningEffort: prefs.getString('agy_effort') ?? 'medium',
@@ -217,6 +241,18 @@ class SettingsNotifier extends Notifier<AppSettings> {
     state = state.copyWith(layoutMode: mode);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('agy_layout_mode', mode.name);
+  }
+
+  Future<void> setDesktopLayout(DesktopLayoutOverride mode) async {
+    state = state.copyWith(desktopLayout: mode);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('agy_desktop_layout', mode.name);
+  }
+
+  Future<void> setHapticOnComplete(bool enabled) async {
+    state = state.copyWith(hapticOnComplete: enabled);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('agy_haptic_on_complete', enabled);
   }
 
   Future<void> setModel(String modelId) async {

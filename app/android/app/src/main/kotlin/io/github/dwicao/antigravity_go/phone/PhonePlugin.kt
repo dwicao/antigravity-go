@@ -20,6 +20,7 @@ class PhonePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChannel
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         appContext = binding.applicationContext
+        PhoneControlCoordinator.bindContext(appContext)
         methodChannel = MethodChannel(binding.binaryMessenger, "agy/phone")
         methodChannel.setMethodCallHandler(this)
         eventChannel = EventChannel(binding.binaryMessenger, "agy/phone/events")
@@ -61,8 +62,55 @@ class PhonePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChannel
                     "safetyGateStrict" to PhoneControlCoordinator.safetyStrict,
                     "mcpPort" to PhoneControlCoordinator.mcpServer.port,
                     "mcpToken" to PhoneControlCoordinator.mcpServer.authToken,
+                    "shizukuAvailable" to DeviceGatewayHelper.isShizukuAvailable(appContext),
                 )
             )
+            "deviceInfo" -> {
+                val info = DeviceGatewayHelper.systemInfo(appContext)
+                val map = mutableMapOf<String, Any?>()
+                val keys = info.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    map[k] = info.opt(k)?.let { if (it is org.json.JSONArray) it.toString() else it }
+                }
+                result.success(map)
+            }
+            "setTorch" -> {
+                val enabled = call.argument<Boolean>("enabled") ?: true
+                val res = DeviceGatewayHelper.setTorch(appContext, enabled)
+                result.success(res.optBoolean("ok", false))
+            }
+            "vibrate" -> {
+                val ms = (call.argument<Number>("durationMs")?.toLong()) ?: 100L
+                val res = DeviceGatewayHelper.vibrate(appContext, ms)
+                result.success(res.optBoolean("ok", false))
+            }
+            "postNotification" -> {
+                val title = call.argument<String>("title") ?: "Antigravity"
+                val message = call.argument<String>("message") ?: ""
+                val tag = call.argument<String>("tag") ?: "agy_task"
+                val channel = call.argument<String>("channel") ?: DeviceGatewayHelper.CHANNEL_ALERTS
+                val res = DeviceGatewayHelper.notify(
+                    context = appContext,
+                    action = "post",
+                    title = title,
+                    message = message,
+                    tag = tag,
+                    channel = channel,
+                )
+                result.success(res.optBoolean("ok", false))
+            }
+            "shizukuExec" -> {
+                val cmd = call.argument<String>("command") ?: ""
+                val res = DeviceGatewayHelper.shizukuExec(appContext, cmd)
+                result.success(
+                    mapOf(
+                        "ok" to res.optBoolean("ok", false),
+                        "allowed" to res.optBoolean("allowed", false),
+                        "output" to res.optString("output", res.optString("error", res.optString("reason", ""))),
+                    )
+                )
+            }
             "setEnabled" -> {
                 val enabled = call.argument<Boolean>("enabled") ?: false
                 PhoneControlCoordinator.setEnabled(enabled)

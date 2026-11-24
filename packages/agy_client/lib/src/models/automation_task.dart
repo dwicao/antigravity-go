@@ -9,6 +9,18 @@ enum AutomationModelTier {
   final String modelId;
 }
 
+enum AutomationTriggerType {
+  schedule('Schedule / Cron'),
+  fileWatch('File Watch'),
+  githubPr('GitHub PRs'),
+  githubIssue('GitHub Issues'),
+  batteryBelow('Battery Below %');
+
+  const AutomationTriggerType(this.label);
+
+  final String label;
+}
+
 class AgyAutomation {
   const AgyAutomation({
     required this.id,
@@ -17,6 +29,9 @@ class AgyAutomation {
     required this.scheduleLabel,
     this.projectId = 'default',
     this.modelTier = AutomationModelTier.flash,
+    this.triggerType = AutomationTriggerType.schedule,
+    this.triggerTarget = '',
+    this.notifyOnComplete = true,
     this.enabled = true,
     this.lastRunAt,
     this.lastStatus,
@@ -28,14 +43,18 @@ class AgyAutomation {
   final String scheduleLabel;
   final String projectId;
   final AutomationModelTier modelTier;
+  final AutomationTriggerType triggerType;
+  final String triggerTarget;
+  final bool notifyOnComplete;
   final bool enabled;
   final DateTime? lastRunAt;
   final String? lastStatus;
 
   /// Parses [scheduleLabel] (e.g. `Every 15m`, `Every 2h`, `Hourly`,
-  /// `Daily · 09:00`) and returns whether this automation is due at [now].
+  /// `Daily · 09:00`, or 5-field cron `*/15 * * * *`) and returns whether
+  /// this schedule automation is due at [now].
   bool isDueAt(DateTime now) {
-    if (!enabled) return false;
+    if (!enabled || triggerType != AutomationTriggerType.schedule) return false;
     final raw = scheduleLabel.trim().toLowerCase();
     if (raw.isEmpty) return false;
 
@@ -58,6 +77,22 @@ class AgyAutomation {
     if (raw.contains('hourly')) {
       return lastRunAt == null ||
           now.difference(lastRunAt!) >= const Duration(hours: 1);
+    }
+
+    // 5-field standard cron expression (minute hour dom month dow)
+    final cronParts = raw.split(RegExp(r'\s+'));
+    if (cronParts.length == 5) {
+      final local = now.toLocal();
+      if (_matchesCron(cronParts, local)) {
+        if (lastRunAt == null) return true;
+        final lastLocal = lastRunAt!.toLocal();
+        return lastLocal.year != local.year ||
+            lastLocal.month != local.month ||
+            lastLocal.day != local.day ||
+            lastLocal.hour != local.hour ||
+            lastLocal.minute != local.minute;
+      }
+      return false;
     }
 
     final timeMatch = RegExp(r'(\d{1,2}):(\d{2})').firstMatch(raw);
@@ -83,12 +118,59 @@ class AgyAutomation {
     return false;
   }
 
+  static bool _matchesCron(List<String> fields, DateTime local) {
+    final values = [
+      local.minute,
+      local.hour,
+      local.day,
+      local.month,
+      local.weekday % 7,
+    ];
+    for (var i = 0; i < 5; i++) {
+      if (!_matchesCronField(fields[i], values[i])) return false;
+    }
+    return true;
+  }
+
+  static bool _matchesCronField(String expr, int value) {
+    for (final part in expr.split(',')) {
+      final trimmed = part.trim();
+      if (trimmed == '*') return true;
+      if (trimmed.contains('/')) {
+        final pieces = trimmed.split('/');
+        final step = int.tryParse(pieces.last) ?? 0;
+        if (step <= 0) continue;
+        final base = pieces.first;
+        if (base == '*' && value % step == 0) return true;
+        if (base.contains('-')) {
+          final bounds = base.split('-');
+          final lo = int.tryParse(bounds.first) ?? -1;
+          final hi = int.tryParse(bounds.last) ?? -1;
+          if (value >= lo && value <= hi && (value - lo) % step == 0) {
+            return true;
+          }
+        }
+      } else if (trimmed.contains('-')) {
+        final bounds = trimmed.split('-');
+        final lo = int.tryParse(bounds.first) ?? -1;
+        final hi = int.tryParse(bounds.last) ?? -1;
+        if (value >= lo && value <= hi) return true;
+      } else {
+        if (int.tryParse(trimmed) == value) return true;
+      }
+    }
+    return false;
+  }
+
   AgyAutomation copyWith({
     String? name,
     String? prompt,
     String? scheduleLabel,
     String? projectId,
     AutomationModelTier? modelTier,
+    AutomationTriggerType? triggerType,
+    String? triggerTarget,
+    bool? notifyOnComplete,
     bool? enabled,
     DateTime? lastRunAt,
     String? lastStatus,
@@ -100,6 +182,9 @@ class AgyAutomation {
       scheduleLabel: scheduleLabel ?? this.scheduleLabel,
       projectId: projectId ?? this.projectId,
       modelTier: modelTier ?? this.modelTier,
+      triggerType: triggerType ?? this.triggerType,
+      triggerTarget: triggerTarget ?? this.triggerTarget,
+      notifyOnComplete: notifyOnComplete ?? this.notifyOnComplete,
       enabled: enabled ?? this.enabled,
       lastRunAt: lastRunAt ?? this.lastRunAt,
       lastStatus: lastStatus ?? this.lastStatus,
@@ -113,6 +198,9 @@ class AgyAutomation {
         'scheduleLabel': scheduleLabel,
         'projectId': projectId,
         'modelTier': modelTier.name,
+        'triggerType': triggerType.name,
+        if (triggerTarget.isNotEmpty) 'triggerTarget': triggerTarget,
+        'notifyOnComplete': notifyOnComplete,
         'enabled': enabled,
         if (lastRunAt != null) 'lastRunAt': lastRunAt!.toIso8601String(),
         if (lastStatus != null) 'lastStatus': lastStatus,
@@ -120,6 +208,7 @@ class AgyAutomation {
 
   factory AgyAutomation.fromJson(Map<String, dynamic> json) {
     final tierName = json['modelTier'] as String?;
+    final trigName = json['triggerType'] as String?;
     return AgyAutomation(
       id: json['id'] as String? ?? '',
       name: json['name'] as String? ?? 'Scheduled Task',
@@ -130,6 +219,12 @@ class AgyAutomation {
         (t) => t.name == tierName,
         orElse: () => AutomationModelTier.flash,
       ),
+      triggerType: AutomationTriggerType.values.firstWhere(
+        (t) => t.name == trigName,
+        orElse: () => AutomationTriggerType.schedule,
+      ),
+      triggerTarget: json['triggerTarget'] as String? ?? '',
+      notifyOnComplete: json['notifyOnComplete'] as bool? ?? true,
       enabled: json['enabled'] as bool? ?? true,
       lastRunAt: json['lastRunAt'] != null
           ? DateTime.tryParse(json['lastRunAt'] as String)

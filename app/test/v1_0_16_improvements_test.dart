@@ -1,7 +1,15 @@
+import 'dart:io';
+
 import 'package:agy_client/agy_client.dart';
 import 'package:antigravity_go/phone/phone_bridge.dart';
 import 'package:antigravity_go/remote/ssh_host.dart';
+import 'package:antigravity_go/state/automations_state.dart';
 import 'package:antigravity_go/state/chat_state.dart';
+import 'package:antigravity_go/state/settings_state.dart';
+import 'package:antigravity_go/ui/phone/phone_control_page.dart';
+import 'package:antigravity_go/ui/settings/runtime_setup_page.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -65,16 +73,121 @@ void main() {
     expect(cleared.hostname, '10.0.0.5');
   });
 
-  test('PhoneControlStatus parses mcpPort and mcpToken cleanly', () {
+  test('PhoneControlStatus parses mcpPort, mcpToken, and shizukuAvailable cleanly', () {
     final status = PhoneControlStatus.fromMap({
       'enabled': true,
       'accessibilityConnected': true,
       'safetyGateStrict': true,
+      'shizukuAvailable': true,
       'mcpPort': 43210,
       'mcpToken': 'tok123',
     });
     expect(status.enabled, isTrue);
+    expect(status.shizukuAvailable, isTrue);
     expect(status.mcpPort, 43210);
     expect(status.mcpToken, 'tok123');
+  });
+
+  test('AgyAutomation cron and AutomationsNotifier daemon triggers (fileWatch, githubPr, batteryBelow) fire accurately', () async {
+    final cronDue = AgyAutomation(
+      id: 'cron-1',
+      name: 'Morning check',
+      prompt: 'Check CI',
+      scheduleLabel: '15 9 * * *',
+    );
+    expect(cronDue.isDueAt(DateTime(2026, 11, 24, 9, 15)), isTrue);
+    expect(cronDue.isDueAt(DateTime(2026, 11, 24, 9, 16)), isFalse);
+
+    final tmpDir = Directory.systemTemp.createTempSync('agy_auto_watch_');
+    addTearDown(() => tmpDir.deleteSync(recursive: true));
+    final watchedFile = File('${tmpDir.path}/watched.txt')
+      ..writeAsStringSync('v1');
+
+    var ghCount = 2;
+    var battery = 50;
+    final fired = <String>[];
+
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final notifier = container.read(automationsProvider.notifier);
+    notifier.onAutomationDue = (a) async => fired.add(a.name);
+    notifier.githubOpenCountOverride = (_, _) async => ghCount;
+    notifier.batteryLevelOverride = () async => battery;
+
+    await notifier.add(
+      name: 'Watcher',
+      prompt: 'Inspect file',
+      scheduleLabel: 'File Watch',
+      triggerType: AutomationTriggerType.fileWatch,
+      triggerTarget: watchedFile.path,
+    );
+    await notifier.add(
+      name: 'PR Watch',
+      prompt: 'Review new PR',
+      scheduleLabel: 'GitHub PRs',
+      triggerType: AutomationTriggerType.githubPr,
+      triggerTarget: 'dwicao/antigravity-go',
+    );
+    await notifier.add(
+      name: 'Low Battery Alert',
+      prompt: 'Wrap up work',
+      scheduleLabel: 'Battery Below %',
+      triggerType: AutomationTriggerType.batteryBelow,
+      triggerTarget: '20',
+    );
+
+    // First poll establishes baselines; battery at 50% does not fire.
+    expect(await notifier.runDueAutomations(), 0);
+
+    // Touch watched file (advance mtime > 1s cleanly), open new PR, and drop battery.
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    watchedFile.writeAsStringSync('v2');
+    watchedFile.setLastModifiedSync(DateTime.now().add(const Duration(seconds: 2)));
+    ghCount = 3;
+    battery = 15;
+
+    final ran = await notifier.runDueAutomations();
+    expect(ran, 3);
+    expect(fired, containsAll(['Watcher', 'PR Watch', 'Low Battery Alert']));
+  });
+
+  testWidgets('RuntimeSetupPage exposes Copy Logs and Save Logs buttons and PhoneControlPage shows Device Gateway tools', (tester) async {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(home: RuntimeSetupPage()),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('Copy Logs'), findsOneWidget);
+    expect(find.text('Save Logs'), findsOneWidget);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(home: PhoneControlPage()),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('Device Gateway & Hardware Tools'), findsOneWidget);
+    expect(find.text('Torch On'), findsOneWidget);
+    expect(find.text('Vibrate'), findsOneWidget);
+    expect(find.text('Test Notify'), findsOneWidget);
+  });
+
+  test('DesktopLayoutOverride and hapticOnComplete persist via SettingsNotifier', () async {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final notifier = container.read(settingsProvider.notifier);
+    await notifier.setDesktopLayout(DesktopLayoutOverride.desktop);
+    await notifier.setHapticOnComplete(false);
+
+    expect(container.read(settingsProvider).desktopLayout, DesktopLayoutOverride.desktop);
+    expect(container.read(settingsProvider).hapticOnComplete, isFalse);
   });
 }

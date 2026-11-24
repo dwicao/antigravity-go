@@ -116,7 +116,9 @@ class AutomationsPage extends ConsumerWidget {
                           ],
                         ),
                         Text(
-                          '${a.scheduleLabel}$lastRunText',
+                          a.triggerType == AutomationTriggerType.schedule
+                              ? '${a.scheduleLabel}$lastRunText'
+                              : '${a.triggerType.label} (${a.triggerTarget})$lastRunText',
                           style: theme.textTheme.labelSmall?.copyWith(
                             color: theme.colorScheme.primary,
                           ),
@@ -188,8 +190,20 @@ class AutomationsPage extends ConsumerWidget {
     final schedCtrl = TextEditingController(
       text: existing?.scheduleLabel ?? 'Daily · 09:00',
     );
+    final targetCtrl = TextEditingController(
+      text: existing?.triggerTarget ?? '',
+    );
     var tier = existing?.modelTier ?? AutomationModelTier.flash;
-    const presets = ['Every 15m', 'Every 1h', 'Hourly', 'Daily · 09:00'];
+    var triggerType =
+        existing?.triggerType ?? AutomationTriggerType.schedule;
+    var notifyOnComplete = existing?.notifyOnComplete ?? true;
+    const presets = [
+      'Every 15m',
+      'Every 1h',
+      'Hourly',
+      'Daily · 09:00',
+      '*/30 * * * *',
+    ];
 
     final ok = await showDialog<bool>(
       context: context,
@@ -206,26 +220,66 @@ class AutomationsPage extends ConsumerWidget {
                   decoration: const InputDecoration(labelText: 'Name'),
                 ),
                 const SizedBox(height: 8),
-                TextField(
-                  controller: schedCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Schedule (Every 15m, Hourly, Daily · 09:00)',
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 4,
-                  children: presets
+                DropdownButtonFormField<AutomationTriggerType>(
+                  initialValue: triggerType,
+                  decoration: const InputDecoration(labelText: 'Trigger Type'),
+                  items: AutomationTriggerType.values
                       .map(
-                        (p) => ActionChip(
-                          visualDensity: VisualDensity.compact,
-                          label: Text(p),
-                          onPressed: () => schedCtrl.text = p,
+                        (t) => DropdownMenuItem(
+                          value: t,
+                          child: Text(t.label),
                         ),
                       )
                       .toList(),
+                  onChanged: (v) {
+                    if (v != null) setLocal(() => triggerType = v);
+                  },
                 ),
+                const SizedBox(height: 8),
+                if (triggerType == AutomationTriggerType.schedule) ...[
+                  TextField(
+                    controller: schedCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Schedule or 5-field cron',
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 4,
+                    children: presets
+                        .map(
+                          (p) => ActionChip(
+                            visualDensity: VisualDensity.compact,
+                            label: Text(p),
+                            onPressed: () => schedCtrl.text = p,
+                          ),
+                        )
+                        .toList(),
+                  ),
+                ] else
+                  TextField(
+                    controller: targetCtrl,
+                    decoration: InputDecoration(
+                      labelText: switch (triggerType) {
+                        AutomationTriggerType.fileWatch => 'File or Directory Path',
+                        AutomationTriggerType.githubPr ||
+                        AutomationTriggerType.githubIssue =>
+                          'GitHub Repo (owner/repo)',
+                        AutomationTriggerType.batteryBelow =>
+                          'Battery Percentage Threshold (e.g. 20)',
+                        AutomationTriggerType.schedule => 'Target',
+                      },
+                      hintText: switch (triggerType) {
+                        AutomationTriggerType.fileWatch => '/sdcard/Download',
+                        AutomationTriggerType.githubPr ||
+                        AutomationTriggerType.githubIssue =>
+                          'dwicao/antigravity-go',
+                        AutomationTriggerType.batteryBelow => '20',
+                        AutomationTriggerType.schedule => '',
+                      },
+                    ),
+                  ),
                 const SizedBox(height: 8),
                 DropdownButtonFormField<AutomationModelTier>(
                   initialValue: tier,
@@ -251,6 +305,13 @@ class AutomationsPage extends ConsumerWidget {
                     hintText: 'Summarize recent commits and check failing tests',
                   ),
                 ),
+                const SizedBox(height: 4),
+                SwitchListTile.adaptive(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Notify when triggered'),
+                  value: notifyOnComplete,
+                  onChanged: (v) => setLocal(() => notifyOnComplete = v),
+                ),
               ],
             ),
           ),
@@ -269,6 +330,9 @@ class AutomationsPage extends ConsumerWidget {
     );
 
     if (ok == true && promptCtrl.text.trim().isNotEmpty) {
+      final schedText = triggerType == AutomationTriggerType.schedule
+          ? schedCtrl.text.trim()
+          : triggerType.label;
       if (existing != null) {
         await ref.read(automationsProvider.notifier).update(
               existing.copyWith(
@@ -276,8 +340,11 @@ class AutomationsPage extends ConsumerWidget {
                     ? existing.name
                     : nameCtrl.text.trim(),
                 prompt: promptCtrl.text.trim(),
-                scheduleLabel: schedCtrl.text.trim(),
+                scheduleLabel: schedText,
                 modelTier: tier,
+                triggerType: triggerType,
+                triggerTarget: targetCtrl.text.trim(),
+                notifyOnComplete: notifyOnComplete,
               ),
             );
       } else {
@@ -287,8 +354,11 @@ class AutomationsPage extends ConsumerWidget {
                   ? 'Automation'
                   : nameCtrl.text.trim(),
               prompt: promptCtrl.text.trim(),
-              scheduleLabel: schedCtrl.text.trim(),
+              scheduleLabel: schedText,
               modelTier: tier,
+              triggerType: triggerType,
+              triggerTarget: targetCtrl.text.trim(),
+              notifyOnComplete: notifyOnComplete,
               projectId: projectId,
             );
       }
@@ -297,5 +367,6 @@ class AutomationsPage extends ConsumerWidget {
     nameCtrl.dispose();
     promptCtrl.dispose();
     schedCtrl.dispose();
+    targetCtrl.dispose();
   }
 }

@@ -287,6 +287,40 @@ class SettingsPage extends ConsumerWidget {
                           )
                           .toList(),
                     ),
+                    const SizedBox(height: 12),
+                    Text(
+                      'Workspace Layout Mode',
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    SegmentedButton<DesktopLayoutOverride>(
+                      segments: DesktopLayoutOverride.values
+                          .map(
+                            (d) => ButtonSegment(
+                              value: d,
+                              label: Text(d.label),
+                            ),
+                          )
+                          .toList(),
+                      selected: {settings.desktopLayout},
+                      onSelectionChanged: (s) => ref
+                          .read(settingsProvider.notifier)
+                          .setDesktopLayout(s.first),
+                    ),
+                    const SizedBox(height: 6),
+                    SwitchListTile.adaptive(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Haptic feedback on reply complete'),
+                      subtitle: const Text(
+                        'Gently vibrates when the agent finishes a turn',
+                      ),
+                      value: settings.hapticOnComplete,
+                      onChanged: (v) => ref
+                          .read(settingsProvider.notifier)
+                          .setHapticOnComplete(v),
+                    ),
                   ],
                 ),
               ),

@@ -8,18 +8,26 @@ class PhoneUiState {
   const PhoneUiState({
     this.status = const PhoneControlStatus.initial(),
     this.actions = const [],
+    this.deviceInfo = const {},
+    this.torchOn = false,
   });
 
   final PhoneControlStatus status;
   final List<PhoneActionLog> actions;
+  final Map<String, Object?> deviceInfo;
+  final bool torchOn;
 
   PhoneUiState copyWith({
     PhoneControlStatus? status,
     List<PhoneActionLog>? actions,
+    Map<String, Object?>? deviceInfo,
+    bool? torchOn,
   }) {
     return PhoneUiState(
       status: status ?? this.status,
       actions: actions ?? this.actions,
+      deviceInfo: deviceInfo ?? this.deviceInfo,
+      torchOn: torchOn ?? this.torchOn,
     );
   }
 }
@@ -43,7 +51,18 @@ class PhoneNotifier extends Notifier<PhoneUiState> {
 
   Future<void> refresh() async {
     final status = await PhoneBridge.instance.getStatus();
-    state = state.copyWith(status: status);
+    final info = await PhoneBridge.instance.getDeviceInfo();
+    if (!ref.mounted) return;
+    state = state.copyWith(status: status, deviceInfo: info);
+  }
+
+  Future<bool> toggleTorch() async {
+    final next = !state.torchOn;
+    final ok = await PhoneBridge.instance.setTorch(next);
+    if (ok && ref.mounted) {
+      state = state.copyWith(torchOn: next);
+    }
+    return ok;
   }
 
   Future<void> setEnabled(bool enabled) async {

@@ -18,6 +18,7 @@ import java.util.concurrent.Executors
  */
 class PhoneMcpServer(
     private val isStrictMode: () -> Boolean,
+    private val contextProvider: () -> android.content.Context? = { null },
     private val onActionLogged: (action: String, target: String, allowed: Boolean, reason: String) -> Unit,
 ) {
     private val executor = Executors.newCachedThreadPool()
@@ -186,7 +187,7 @@ class PhoneMcpServer(
             if (payload.has("jsonrpc") || payload.has("method")) {
                 val sidHeaders = mcpSessionId?.let { mapOf("Mcp-Session-Id" to it) } ?: emptyMap()
                 val rpcResp = dispatchJsonRpc(payload) { action, paramsObj ->
-                    executeAccessibilityAction(action, paramsObj)
+                    executeAction(action, paramsObj)
                 }
                 if (rpcResp == null) {
                     writeHttpResponse(sock, "202 Accepted", null, sidHeaders)
@@ -196,11 +197,98 @@ class PhoneMcpServer(
                 return
             }
 
-            // Legacy direct REST endpoints (/screen, /tap, /type)
-            val action = payload.optString("action", if (reqPath.contains("/screen")) "screen" else "tap")
-            val resp = executeAccessibilityAction(action, payload)
+            // Legacy / gateway REST endpoints (/screen, /tap, /type, /device, /notify, etc.)
+            val defaultAction = when {
+                reqPath.contains("/screen") -> "screen"
+                reqPath.contains("/device") || reqPath.contains("/system") -> "device_info"
+                reqPath.contains("/notify") -> "notify"
+                reqPath.contains("/clipboard") -> "clipboard"
+                reqPath.contains("/torch") -> "torch"
+                reqPath.contains("/vibrate") -> "vibrate"
+                reqPath.contains("/toast") -> "toast"
+                reqPath.contains("/open_url") -> "open_url"
+                else -> "tap"
+            }
+            val action = payload.optString("action", defaultAction)
+            val resp = executeAction(action, payload)
             writeJsonResponse(sock, "200 OK", resp)
         }
+    }
+
+    private fun executeAction(action: String, payload: JSONObject): JSONObject {
+        val ctx = contextProvider()
+        when (action) {
+            "device_info", "system_info" -> {
+                if (ctx == null) return JSONObject().put("allowed", false).put("error", "Android context unavailable")
+                val res = DeviceGatewayHelper.systemInfo(ctx)
+                onActionLogged("device_info", "System telemetry", res.optBoolean("allowed", true), "OK")
+                return res
+            }
+            "notify" -> {
+                if (ctx == null) return JSONObject().put("allowed", false).put("error", "Android context unavailable")
+                val mode = payload.optString("mode", "post")
+                val title = payload.optString("title", "Antigravity")
+                val msg = payload.optString("message", "")
+                val res = DeviceGatewayHelper.notify(
+                    context = ctx,
+                    action = mode,
+                    title = title,
+                    message = msg,
+                    tag = payload.optString("tag", "agy_task"),
+                    id = payload.optInt("id", 4201),
+                    progress = payload.optInt("progress", -1),
+                    ongoing = payload.optBoolean("ongoing", false),
+                    channel = payload.optString("channel", DeviceGatewayHelper.CHANNEL_TASKS),
+                )
+                onActionLogged("notify", "$title: $msg".take(64), res.optBoolean("allowed", false), res.optString("error", "Posted"))
+                return res
+            }
+            "clipboard" -> {
+                if (ctx == null) return JSONObject().put("allowed", false).put("error", "Android context unavailable")
+                val mode = payload.optString("mode", "get")
+                val text = payload.optString("text", "")
+                val res = DeviceGatewayHelper.clipboard(ctx, mode, text)
+                onActionLogged("clipboard", mode, res.optBoolean("allowed", true), if (mode == "get") "Read clipboard" else "Wrote ${text.length} chars")
+                return res
+            }
+            "torch" -> {
+                if (ctx == null) return JSONObject().put("allowed", false).put("error", "Android context unavailable")
+                val enabled = payload.optBoolean("enabled", true)
+                val res = DeviceGatewayHelper.setTorch(ctx, enabled)
+                onActionLogged("torch", if (enabled) "on" else "off", res.optBoolean("allowed", false), res.optString("error", "OK"))
+                return res
+            }
+            "vibrate" -> {
+                if (ctx == null) return JSONObject().put("allowed", false).put("error", "Android context unavailable")
+                val ms = payload.optLong("durationMs", 100L)
+                val res = DeviceGatewayHelper.vibrate(ctx, ms)
+                onActionLogged("vibrate", "${ms}ms", res.optBoolean("allowed", false), res.optString("error", "OK"))
+                return res
+            }
+            "toast" -> {
+                if (ctx == null) return JSONObject().put("allowed", false).put("error", "Android context unavailable")
+                val msg = payload.optString("message", "")
+                val res = DeviceGatewayHelper.toast(ctx, msg, payload.optBoolean("long", false))
+                onActionLogged("toast", msg.take(64), true, "OK")
+                return res
+            }
+            "open_url" -> {
+                if (ctx == null) return JSONObject().put("allowed", false).put("error", "Android context unavailable")
+                val url = payload.optString("url", "")
+                val res = DeviceGatewayHelper.openUrl(ctx, url)
+                onActionLogged("open_url", url.take(80), res.optBoolean("allowed", false), res.optString("error", "Opened"))
+                return res
+            }
+            "shizuku_exec" -> {
+                if (ctx == null) return JSONObject().put("allowed", false).put("error", "Android context unavailable")
+                val cmd = payload.optString("command", "")
+                val res = DeviceGatewayHelper.shizukuExec(ctx, cmd)
+                val allowed = res.optBoolean("allowed", false)
+                onActionLogged("shizuku_exec", cmd.take(64), allowed, res.optString("reason", res.optString("error", "OK")))
+                return res
+            }
+        }
+        return executeAccessibilityAction(action, payload)
     }
 
     private fun executeAccessibilityAction(action: String, payload: JSONObject): JSONObject {
@@ -388,7 +476,119 @@ class PhoneMcpServer(
                         .put("required", JSONArray().put("text")),
                 )
 
-            return JSONArray().put(screenTool).put(tapTool).put(typeTool)
+            val deviceInfoTool = JSONObject()
+                .put("name", "phone_device_info")
+                .put("description", "Read Android battery level, charging state, network type, free storage, memory, ABI, and Shizuku availability.")
+                .put("inputSchema", JSONObject().put("type", "object").put("properties", JSONObject()))
+
+            val notifyTool = JSONObject()
+                .put("name", "phone_notify")
+                .put("description", "Post or cancel a native Android notification (supports progress bar and alert channel).")
+                .put(
+                    "inputSchema",
+                    JSONObject()
+                        .put("type", "object")
+                        .put(
+                            "properties",
+                            JSONObject()
+                                .put("mode", JSONObject().put("type", "string").put("description", "post or cancel"))
+                                .put("title", JSONObject().put("type", "string"))
+                                .put("message", JSONObject().put("type", "string"))
+                                .put("tag", JSONObject().put("type", "string"))
+                                .put("progress", JSONObject().put("type", "integer"))
+                                .put("channel", JSONObject().put("type", "string")),
+                        ),
+                )
+
+            val clipboardTool = JSONObject()
+                .put("name", "phone_clipboard")
+                .put("description", "Read or write the Android system clipboard.")
+                .put(
+                    "inputSchema",
+                    JSONObject()
+                        .put("type", "object")
+                        .put(
+                            "properties",
+                            JSONObject()
+                                .put("mode", JSONObject().put("type", "string").put("description", "get or set"))
+                                .put("text", JSONObject().put("type", "string")),
+                        ),
+                )
+
+            val torchTool = JSONObject()
+                .put("name", "phone_torch")
+                .put("description", "Turn the Android camera flashlight torch on or off.")
+                .put(
+                    "inputSchema",
+                    JSONObject()
+                        .put("type", "object")
+                        .put(
+                            "properties",
+                            JSONObject().put("enabled", JSONObject().put("type", "boolean")),
+                        )
+                        .put("required", JSONArray().put("enabled")),
+                )
+
+            val vibrateTool = JSONObject()
+                .put("name", "phone_vibrate")
+                .put("description", "Trigger Android haptic vibration feedback.")
+                .put(
+                    "inputSchema",
+                    JSONObject()
+                        .put("type", "object")
+                        .put("properties", JSONObject().put("durationMs", JSONObject().put("type", "integer"))),
+                )
+
+            val toastTool = JSONObject()
+                .put("name", "phone_toast")
+                .put("description", "Show a short or long native Android Toast popup.")
+                .put(
+                    "inputSchema",
+                    JSONObject()
+                        .put("type", "object")
+                        .put(
+                            "properties",
+                            JSONObject()
+                                .put("message", JSONObject().put("type", "string"))
+                                .put("long", JSONObject().put("type", "boolean")),
+                        )
+                        .put("required", JSONArray().put("message")),
+                )
+
+            val openUrlTool = JSONObject()
+                .put("name", "phone_open_url")
+                .put("description", "Open an HTTP/HTTPS URL in Android's browser.")
+                .put(
+                    "inputSchema",
+                    JSONObject()
+                        .put("type", "object")
+                        .put("properties", JSONObject().put("url", JSONObject().put("type", "string")))
+                        .put("required", JSONArray().put("url")),
+                )
+
+            val shizukuTool = JSONObject()
+                .put("name", "phone_shizuku_exec")
+                .put("description", "Run an ADB-level shell command via bundled Shizuku rish when available (guarded by CommandSafetyGuard).")
+                .put(
+                    "inputSchema",
+                    JSONObject()
+                        .put("type", "object")
+                        .put("properties", JSONObject().put("command", JSONObject().put("type", "string")))
+                        .put("required", JSONArray().put("command")),
+                )
+
+            return JSONArray()
+                .put(screenTool)
+                .put(tapTool)
+                .put(typeTool)
+                .put(deviceInfoTool)
+                .put(notifyTool)
+                .put(clipboardTool)
+                .put(torchTool)
+                .put(vibrateTool)
+                .put(toastTool)
+                .put(openUrlTool)
+                .put(shizukuTool)
         }
 
         /**
@@ -429,7 +629,7 @@ class PhoneMcpServer(
                                     "serverInfo",
                                     JSONObject()
                                         .put("name", "phone-control")
-                                        .put("version", "1.0.16"),
+                                        .put("version", "1.0.23"),
                                 ),
                         )
                 }
@@ -451,6 +651,14 @@ class PhoneMcpServer(
                         "phone_screen_tree", "screen" -> "screen"
                         "phone_tap", "tap" -> "tap"
                         "phone_type", "type" -> "type"
+                        "phone_device_info", "device_info", "system_info" -> "device_info"
+                        "phone_notify", "notify" -> "notify"
+                        "phone_clipboard", "clipboard" -> "clipboard"
+                        "phone_torch", "torch" -> "torch"
+                        "phone_vibrate", "vibrate" -> "vibrate"
+                        "phone_toast", "toast" -> "toast"
+                        "phone_open_url", "open_url" -> "open_url"
+                        "phone_shizuku_exec", "shizuku_exec" -> "shizuku_exec"
                         else -> ""
                     }
                     if (action.isEmpty()) {

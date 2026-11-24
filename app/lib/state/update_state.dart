@@ -17,7 +17,7 @@ String formatUpdateBytes(int bytes) {
 }
 
 class AppUpdateState {
-  static const String fallbackVersion = '1.0.22';
+  static const String fallbackVersion = '1.0.23';
 
   const AppUpdateState({
     this.currentVersion = fallbackVersion,

@@ -28,10 +28,13 @@ class PhoneMcpServerTest {
             .put("method", "tools/list")
         val listResp = PhoneMcpServer.dispatchJsonRpc(listReq) { _, _ -> JSONObject() }
         val tools = listResp!!.getJSONObject("result").getJSONArray("tools")
-        assertEquals(3, tools.length())
+        assertEquals(11, tools.length())
         assertEquals("phone_screen_tree", tools.getJSONObject(0).getString("name"))
         assertEquals("phone_tap", tools.getJSONObject(1).getString("name"))
         assertEquals("phone_type", tools.getJSONObject(2).getString("name"))
+        assertEquals("phone_device_info", tools.getJSONObject(3).getString("name"))
+        assertEquals("phone_torch", tools.getJSONObject(6).getString("name"))
+        assertEquals("phone_shizuku_exec", tools.getJSONObject(10).getString("name"))
     }
 
     @Test

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../phone/phone_bridge.dart';
 import '../../state/automations_state.dart';
 import '../../state/chat_state.dart';
 import '../../state/permissions_state.dart';
@@ -58,10 +59,30 @@ class _HomeShellState extends ConsumerState<HomeShell> {
   Widget build(BuildContext context) {
     final width = MediaQuery.sizeOf(context).width;
     final perms = ref.watch(permissionsProvider);
+    final settings = ref.watch(settingsProvider);
     final sidePanel = ref.watch(sidePanelProvider);
-    final isTwoPane = width >= 720;
-    final isThreePane = width >= 1100;
-    final isDesktopUx = isTwoPane || perms.isDexMode;
+
+    ref.listen<bool>(chatProvider.select((c) => c.isStreaming), (prev, next) {
+      if (prev == true && !next && settings.hapticOnComplete) {
+        PhoneBridge.instance.vibrate(durationMs: 45);
+      }
+    });
+
+    final isTwoPane = switch (settings.desktopLayout) {
+      DesktopLayoutOverride.desktop => true,
+      DesktopLayoutOverride.mobile => false,
+      DesktopLayoutOverride.auto => width >= 720,
+    };
+    final isThreePane = switch (settings.desktopLayout) {
+      DesktopLayoutOverride.desktop => width >= 840,
+      DesktopLayoutOverride.mobile => false,
+      DesktopLayoutOverride.auto => width >= 1100,
+    };
+    final isDesktopUx = switch (settings.desktopLayout) {
+      DesktopLayoutOverride.desktop => true,
+      DesktopLayoutOverride.mobile => false,
+      DesktopLayoutOverride.auto => isTwoPane || perms.isDexMode,
+    };
 
     final bindings = <ShortcutActivator, VoidCallback>{
       const SingleActivator(LogicalKeyboardKey.keyN, control: true): () {

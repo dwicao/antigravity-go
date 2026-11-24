@@ -1,5 +1,9 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../../runtime/runtime_bridge.dart';
 import '../../runtime/runtime_models.dart';
@@ -25,6 +29,60 @@ class _RuntimeSetupPageState extends ConsumerState<RuntimeSetupPage> {
       _diag = res;
       _probing = false;
     });
+  }
+
+  String _formatDiagnosticReport(RuntimeStatus status, List<String> logs) {
+    final buf = StringBuffer()
+      ..writeln('Phase: ${status.phase.name}')
+      ..writeln('Message: ${status.statusMessage}')
+      ..writeln('agyVersion: ${status.agyVersion ?? "unknown"}')
+      ..writeln('Binary: ${status.binaryPath ?? "none"}')
+      ..writeln('Workspace: ${status.workspaceRoot ?? "none"}');
+    if (status.errorMessage != null) {
+      buf.writeln('Error: ${status.errorMessage}');
+    }
+    if (_diag != null && _diag!.isNotEmpty) {
+      buf.writeln('\n--- Diagnostics ---');
+      _diag!.forEach((k, v) => buf.writeln('$k: $v'));
+    }
+    if (logs.isNotEmpty) {
+      buf.writeln('\n--- Runtime Logs ---');
+      for (final l in logs) {
+        buf.writeln(l);
+      }
+    }
+    return buf.toString();
+  }
+
+  Future<void> _copyLogs(RuntimeStatus status, List<String> logs) async {
+    final report = _formatDiagnosticReport(status, logs);
+    await Clipboard.setData(ClipboardData(text: report));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(content: Text('Runtime logs copied')));
+  }
+
+  Future<void> _saveLogs(RuntimeStatus status, List<String> logs) async {
+    final report = _formatDiagnosticReport(status, logs);
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    try {
+      final downloads = Directory('/sdcard/Download');
+      if (downloads.existsSync()) {
+        final out = File('${downloads.path}/antigravity-go-logs-$ts.txt');
+        await out.writeAsString(report);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(content: Text('Saved logs to ${out.path}')),
+          );
+        return;
+      }
+    } catch (_) {}
+    await SharePlus.instance.share(
+      ShareParams(text: report, subject: 'Antigravity Go Runtime Logs'),
+    );
   }
 
   @override
@@ -202,11 +260,27 @@ class _RuntimeSetupPageState extends ConsumerState<RuntimeSetupPage> {
             ),
           ),
           const SizedBox(height: 14),
-          Text(
-            'Runtime Logs',
-            style: theme.textTheme.titleSmall?.copyWith(
-              fontWeight: FontWeight.w700,
-            ),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Runtime Logs',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              TextButton.icon(
+                onPressed: () => _copyLogs(status, runtime.logs),
+                icon: const Icon(Icons.copy_rounded, size: 16),
+                label: const Text('Copy Logs'),
+              ),
+              TextButton.icon(
+                onPressed: () => _saveLogs(status, runtime.logs),
+                icon: const Icon(Icons.save_alt_rounded, size: 16),
+                label: const Text('Save Logs'),
+              ),
+            ],
           ),
           const SizedBox(height: 8),
           Container(

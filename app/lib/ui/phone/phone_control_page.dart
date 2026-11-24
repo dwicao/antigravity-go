@@ -13,6 +13,7 @@ class PhoneControlPage extends ConsumerStatefulWidget {
 
 class _PhoneControlPageState extends ConsumerState<PhoneControlPage> {
   String? _screenDump;
+  String? _gatewayOutput;
 
   @override
   Widget build(BuildContext context) {
@@ -119,6 +120,126 @@ class _PhoneControlPageState extends ConsumerState<PhoneControlPage> {
               ),
             ),
           ],
+          const SizedBox(height: 12),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.devices_other_rounded, size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Device Gateway & Hardware Tools',
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      Chip(
+                        visualDensity: VisualDensity.compact,
+                        label: Text(
+                          phone.status.shizukuAvailable
+                              ? 'Shizuku rish ready'
+                              : 'Standard user',
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Exposes 11 MCP tools to Antigravity agents: screen, tap, type, telemetry, notify, clipboard, flashlight torch, vibrate, toast, browser URL, and Shizuku rish.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  if (phone.deviceInfo.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      children: [
+                        if (phone.deviceInfo['battery'] != null)
+                          Chip(
+                            visualDensity: VisualDensity.compact,
+                            label: Text(
+                              'Battery ${phone.deviceInfo['battery']}%${phone.deviceInfo['charging'] == true ? ' (charging)' : ''}',
+                            ),
+                          ),
+                        if (phone.deviceInfo['network'] != null)
+                          Chip(
+                            visualDensity: VisualDensity.compact,
+                            label: Text('Net: ${phone.deviceInfo['network']}'),
+                          ),
+                        if (phone.deviceInfo['storageFreeMb'] != null)
+                          Chip(
+                            visualDensity: VisualDensity.compact,
+                            label: Text(
+                              'Free: ${phone.deviceInfo['storageFreeMb']} MB',
+                            ),
+                          ),
+                      ],
+                    ),
+                  ],
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: () =>
+                            ref.read(phoneProvider.notifier).toggleTorch(),
+                        icon: Icon(
+                          phone.torchOn
+                              ? Icons.flashlight_on_rounded
+                              : Icons.flashlight_off_rounded,
+                          size: 16,
+                        ),
+                        label: Text(phone.torchOn ? 'Torch Off' : 'Torch On'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: () => PhoneBridge.instance.vibrate(durationMs: 70),
+                        icon: const Icon(Icons.vibration, size: 16),
+                        label: const Text('Vibrate'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: () => PhoneBridge.instance.postNotification(
+                          title: 'Antigravity Go',
+                          message: 'Phone Gateway notification check succeeded.',
+                        ),
+                        icon: const Icon(Icons.notifications_active_outlined, size: 16),
+                        label: const Text('Test Notify'),
+                      ),
+                      if (phone.status.shizukuAvailable)
+                        OutlinedButton.icon(
+                          onPressed: () async {
+                            final res = await PhoneBridge.instance.shizukuExec('id');
+                            if (mounted) {
+                              setState(
+                                () => _gatewayOutput =
+                                    res['output']?.toString() ?? res.toString(),
+                              );
+                            }
+                          },
+                          icon: const Icon(Icons.admin_panel_settings_outlined, size: 16),
+                          label: const Text('Shizuku id'),
+                        ),
+                    ],
+                  ),
+                  if (_gatewayOutput != null && _gatewayOutput!.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    SelectableText(
+                      _gatewayOutput!,
+                      style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
           const SizedBox(height: 16),
           Text(
             'Recent Phone Actions',

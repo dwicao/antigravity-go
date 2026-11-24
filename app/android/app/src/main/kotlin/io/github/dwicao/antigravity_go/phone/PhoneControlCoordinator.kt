@@ -20,14 +20,22 @@ object PhoneControlCoordinator {
     var safetyStrict: Boolean = true
 
     @Volatile
+    private var appContext: android.content.Context? = null
+
+    @Volatile
     private var actionListener: ((String, String, Boolean, String) -> Unit)? = null
 
     val mcpServer = PhoneMcpServer(
         isStrictMode = { safetyStrict },
+        contextProvider = { appContext },
         onActionLogged = { action, target, allowed, reason ->
             actionListener?.invoke(action, target, allowed, reason)
         },
     )
+
+    fun bindContext(context: android.content.Context) {
+        appContext = context.applicationContext
+    }
 
     fun setListener(listener: ((String, String, Boolean, String) -> Unit)?) {
         actionListener = listener
