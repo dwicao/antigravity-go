@@ -16,6 +16,8 @@ class AgySessionSummary {
     this.remoteConversationId,
     this.messageCount = 0,
     this.lastPreview,
+    this.pinned = false,
+    this.folder = '',
   });
 
   final String id;
@@ -30,6 +32,8 @@ class AgySessionSummary {
   final String? remoteConversationId;
   final int messageCount;
   final String? lastPreview;
+  final bool pinned;
+  final String folder;
 
   AgySessionSummary copyWith({
     String? title,
@@ -41,6 +45,8 @@ class AgySessionSummary {
     bool clearRemoteConversationId = false,
     int? messageCount,
     String? lastPreview,
+    bool? pinned,
+    String? folder,
   }) {
     return AgySessionSummary(
       id: id,
@@ -57,6 +63,8 @@ class AgySessionSummary {
           : (remoteConversationId ?? this.remoteConversationId),
       messageCount: messageCount ?? this.messageCount,
       lastPreview: lastPreview ?? this.lastPreview,
+      pinned: pinned ?? this.pinned,
+      folder: folder ?? this.folder,
     );
   }
 
@@ -74,6 +82,8 @@ class AgySessionSummary {
           'remoteConversationId': remoteConversationId,
         'messageCount': messageCount,
         if (lastPreview != null) 'lastPreview': lastPreview,
+        if (pinned) 'pinned': true,
+        if (folder.isNotEmpty) 'folder': folder,
       };
 
   factory AgySessionSummary.fromJson(Map<String, dynamic> json) {
@@ -91,6 +101,8 @@ class AgySessionSummary {
       remoteConversationId: json['remoteConversationId'] as String?,
       messageCount: (json['messageCount'] as num?)?.toInt() ?? 0,
       lastPreview: json['lastPreview'] as String?,
+      pinned: json['pinned'] == true,
+      folder: json['folder'] as String? ?? '',
     );
   }
 }

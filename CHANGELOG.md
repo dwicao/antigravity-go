@@ -2,6 +2,14 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.25] - 2026-11-24
+
+### Added
+- **Android OS Integrations (from DSH Go):** Added the **New Chat Quick Settings Tile** (`NewChatTileService`), Android Launcher **App Shortcuts** (`New Chat`, `Terminal`, `Phone Control`, `Usage Limits`), Android 12+ **Follow Wallpaper Dynamic Color**, and `agy/performance` **120Hz+ Display Refresh Rate** control (`Auto` / `Max` / `System`) with **Reduce Motion** & **Reduce Blur** switches.
+- **Sessions Folders, Pinning, Full-Text Search, Replay & Export:** Added pinning and folder tags on `AgySessionSummary` and `SessionsDrawer`, cross-session transcript search (`SessionSearchPage`), interactive step-by-step **Conversation Replay**, Markdown/JSON export, styled **Reply Share Cards** (with PNG download), and **Quote in Reply** directly from message bubbles.
+- **Phone Control Self-Check, Action Log & Per-App Rules:** Persisted phone control action logs and custom per-package `SafetyGate` rules (`allow` / `confirm` / `block`) alongside a 6-point **Phone Control Self-Check** card.
+- **Background Alerts, Battery Keep-Alive Guide, Redacted Diagnostics & Searchable Settings:** Added background notifications for finished replies and tool approvals, an **OEM Background Keep-Alive Guide** (`BackgroundGuidePage`), redacted Markdown **Diagnostics Bundle** export (`DiagnosticsPage`), and live settings search.
+
 ## [1.0.24] - 2026-11-24
 
 ### Fixed

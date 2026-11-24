@@ -309,8 +309,7 @@ class PhoneMcpServer(
         val combinedTarget = listOf(callerTarget, actualLabel)
             .filter { it.isNotBlank() }
             .joinToString(" | ")
-        val decision = SafetyGate.evaluate(
-            strictMode = isStrictMode(),
+        val decision = PhoneControlCoordinator.evaluateWithRules(
             packageName = svc.currentPackageName(),
             action = action,
             targetLabel = combinedTarget,
@@ -629,7 +628,7 @@ class PhoneMcpServer(
                                     "serverInfo",
                                     JSONObject()
                                         .put("name", "phone-control")
-                                        .put("version", "1.0.24"),
+                                        .put("version", "1.0.25"),
                                 ),
                         )
                 }

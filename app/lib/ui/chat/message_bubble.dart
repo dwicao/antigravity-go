@@ -13,6 +13,7 @@ import 'message_metrics_footer.dart';
 import 'milestone_stack_card.dart';
 import 'render/agy_markdown.dart';
 import 'secret_mask.dart';
+import 'share_card_sheet.dart';
 
 export 'message_metrics_footer.dart'
     show formatChatTimestamp, formatDurationSeconds, formatTokenCount;
@@ -24,6 +25,7 @@ class MessageBubble extends StatelessWidget {
     this.onRegenerate,
     this.onEditResend,
     this.onRewind,
+    this.onQuote,
     this.onOpenDiff,
     this.tokensPerSecond,
     this.activeSubagents = const [],
@@ -33,6 +35,7 @@ class MessageBubble extends StatelessWidget {
   final VoidCallback? onRegenerate;
   final ValueChanged<String>? onEditResend;
   final VoidCallback? onRewind;
+  final ValueChanged<String>? onQuote;
   final VoidCallback? onOpenDiff;
   final double? tokensPerSecond;
   final List<ActiveSubagent> activeSubagents;
@@ -269,6 +272,22 @@ class MessageBubble extends StatelessWidget {
                       ),
                     ),
                   ],
+                  if (onQuote != null && message.text.trim().isNotEmpty) ...[
+                    const SizedBox(width: 2),
+                    IconButton(
+                      iconSize: 15,
+                      padding: EdgeInsets.zero,
+                      constraints:
+                          const BoxConstraints(minWidth: 24, minHeight: 24),
+                      visualDensity: VisualDensity.compact,
+                      tooltip: 'Quote in reply',
+                      onPressed: () => onQuote!(message.text.trim()),
+                      icon: Icon(
+                        Icons.format_quote_rounded,
+                        color: theme.colorScheme.onPrimaryContainer,
+                      ),
+                    ),
+                  ],
                   if (onRewind != null) ...[
                     const SizedBox(width: 2),
                     IconButton(
@@ -355,7 +374,7 @@ class MessageBubble extends StatelessWidget {
                   ],
                 ),
               ),
-              if (message.text.isNotEmpty)
+              if (message.text.isNotEmpty) ...[
                 IconButton(
                   iconSize: 16,
                   visualDensity: VisualDensity.compact,
@@ -363,6 +382,23 @@ class MessageBubble extends StatelessWidget {
                   onPressed: () => _copyResponseText(context, message.text),
                   icon: const Icon(Icons.copy_all_outlined),
                 ),
+                if (onQuote != null && !message.isStreaming)
+                  IconButton(
+                    iconSize: 16,
+                    visualDensity: VisualDensity.compact,
+                    tooltip: 'Quote in reply',
+                    onPressed: () => onQuote!(message.text.trim()),
+                    icon: const Icon(Icons.format_quote_rounded),
+                  ),
+                if (!message.isStreaming)
+                  IconButton(
+                    iconSize: 16,
+                    visualDensity: VisualDensity.compact,
+                    tooltip: 'Share Card',
+                    onPressed: () => ShareCardSheet.show(context, message),
+                    icon: const Icon(Icons.style_outlined),
+                  ),
+              ],
               if (onRegenerate != null && !message.isStreaming)
                 IconButton(
                   iconSize: 16,

@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../state/auth_state.dart';
+import '../../state/performance_state.dart';
 import '../../state/permissions_state.dart';
 import '../../state/phone_state.dart';
 import '../../state/settings_state.dart';
@@ -16,14 +17,30 @@ import '../remote/custom_providers_page.dart';
 import '../remote/ssh_hosts_page.dart';
 import '../update/update_sheet.dart';
 import '../usage/usage_page.dart';
+import 'background_guide_page.dart';
+import 'diagnostics_page.dart';
 import 'runtime_setup_page.dart';
 
-class SettingsPage extends ConsumerWidget {
+class SettingsPage extends ConsumerStatefulWidget {
   const SettingsPage({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<SettingsPage> createState() => _SettingsPageState();
+}
+
+class _SettingsPageState extends ConsumerState<SettingsPage> {
+  String _searchQuery = '';
+
+  bool _matches(String keywords) {
+    final q = _searchQuery.trim().toLowerCase();
+    if (q.isEmpty) return true;
+    return keywords.toLowerCase().contains(q);
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final settings = ref.watch(settingsProvider);
+    final perf = ref.watch(performanceProvider);
     final auth = ref.watch(authProvider);
     final perms = ref.watch(permissionsProvider);
     final update = ref.watch(appUpdateProvider);
@@ -35,6 +52,24 @@ class SettingsPage extends ConsumerWidget {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: TextField(
+                onChanged: (v) => setState(() => _searchQuery = v),
+                decoration: InputDecoration(
+                  hintText: 'Search settings, performance, wallpaper, diagnostics…',
+                  prefixIcon: const Icon(Icons.search, size: 18),
+                  isDense: true,
+                  suffixIcon: _searchQuery.isEmpty
+                      ? null
+                      : IconButton(
+                          icon: const Icon(Icons.close, size: 18),
+                          onPressed: () => setState(() => _searchQuery = ''),
+                        ),
+                ),
+              ),
+            ),
+            if (_matches('google account sign in gemini enterprise plan tier'))
             Card(
               child: ListTile(
                 leading: Icon(
@@ -58,6 +93,7 @@ class SettingsPage extends ConsumerWidget {
               ),
             ),
             const SizedBox(height: 10),
+            if (_matches('usage quota runtime ssh remote hosts external models phone control safetygate'))
             Card(
               child: Column(
                 children: [
@@ -122,6 +158,7 @@ class SettingsPage extends ConsumerWidget {
               ),
             ),
             const SizedBox(height: 12),
+            if (_matches('android permissions dex all files storage notifications microphone accessibility battery'))
             Card(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -234,6 +271,7 @@ class SettingsPage extends ConsumerWidget {
               ),
             ),
             const SizedBox(height: 12),
+            if (_matches('appearance theme dark light accent workspace layout haptic wallpaper dynamic color'))
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(14),
@@ -321,11 +359,133 @@ class SettingsPage extends ConsumerWidget {
                           .read(settingsProvider.notifier)
                           .setHapticOnComplete(v),
                     ),
+                    SwitchListTile.adaptive(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Follow wallpaper color (Android 12+)'),
+                      subtitle: const Text(
+                        'Adapt accent colors dynamically from your home wallpaper',
+                      ),
+                      value: settings.followWallpaperColor,
+                      onChanged: (v) => ref
+                          .read(settingsProvider.notifier)
+                          .setFollowWallpaperColor(v),
+                    ),
                   ],
                 ),
               ),
             ),
             const SizedBox(height: 12),
+            if (_matches('display performance refresh rate 120hz motion blur thermal hardware'))
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          'Display & Performance',
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const Spacer(),
+                        Chip(
+                          visualDensity: VisualDensity.compact,
+                          label: Text(
+                            '${perf.snapshot.tier.toUpperCase()} · ${perf.snapshot.maxRefreshHz.round()}Hz',
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    SegmentedButton<RefreshRateMode>(
+                      segments: RefreshRateMode.values
+                          .map(
+                            (m) => ButtonSegment(
+                              value: m,
+                              label: Text(m.name.toUpperCase()),
+                            ),
+                          )
+                          .toList(),
+                      selected: {perf.refreshRateMode},
+                      onSelectionChanged: (s) => ref
+                          .read(performanceProvider.notifier)
+                          .setRefreshRateMode(s.first),
+                    ),
+                    const SizedBox(height: 6),
+                    SwitchListTile.adaptive(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Reduce Motion'),
+                      subtitle: const Text(
+                        'Disable page transitions and heavy animations',
+                      ),
+                      value: perf.reduceMotion,
+                      onChanged: (v) => ref
+                          .read(performanceProvider.notifier)
+                          .setReduceMotion(v),
+                    ),
+                    SwitchListTile.adaptive(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Reduce Blur Effects'),
+                      subtitle: const Text(
+                        'Prefer solid translucent surfaces over GPU glass blur',
+                      ),
+                      value: perf.reduceBlur,
+                      onChanged: (v) => ref
+                          .read(performanceProvider.notifier)
+                          .setReduceBlur(v),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            if (_matches('notifications alerts reply approval background'))
+            const SizedBox(height: 12),
+            if (_matches('notifications alerts reply approval background'))
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Notifications & Background Alerts',
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    SwitchListTile.adaptive(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Notify when reply finishes'),
+                      value: settings.notifyOnTurnComplete,
+                      onChanged: (v) => ref
+                          .read(settingsProvider.notifier)
+                          .setNotifyOnTurnComplete(v),
+                    ),
+                    SwitchListTile.adaptive(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Notify when tool approval needed'),
+                      value: settings.notifyOnApproval,
+                      onChanged: (v) => ref
+                          .read(settingsProvider.notifier)
+                          .setNotifyOnApproval(v),
+                    ),
+                    SwitchListTile.adaptive(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Only notify while app is backgrounded'),
+                      value: settings.notifyBackgroundOnly,
+                      onChanged: (v) => ref
+                          .read(settingsProvider.notifier)
+                          .setNotifyBackgroundOnly(v),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            if (_matches('agent permissions preset turbo standard non-workspace file layout software'))
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(14),
@@ -396,24 +556,58 @@ class SettingsPage extends ConsumerWidget {
               ),
             ),
             const SizedBox(height: 12),
+            if (_matches('battery keep-alive oem samsung xiaomi oppo vivo diagnostics report cli flags'))
             Card(
-              child: ListTile(
-                leading: const Icon(Icons.terminal),
-                title: const Text('Antigravity CLI & Flags'),
-                subtitle: Text(
-                  settings.activeAgent.isNotEmpty
-                      ? 'Agent: ${settings.activeAgent} · Manage mcp, plugin, remote-control'
-                      : 'Manage mcp, plugin, agent, remote-control, & CLI flags',
-                ),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const CliManagerPage(),
+              child: Column(
+                children: [
+                  ListTile(
+                    leading: const Icon(Icons.battery_saver_rounded),
+                    title: const Text('Background Keep-Alive Guide'),
+                    subtitle: const Text(
+                      'Battery optimization check & Samsung/Xiaomi/OPPO/vivo setup',
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const BackgroundGuidePage(),
+                      ),
+                    ),
                   ),
-                ),
+                  const Divider(height: 1),
+                  ListTile(
+                    leading: const Icon(Icons.bug_report_outlined),
+                    title: const Text('Diagnostics Bundle'),
+                    subtitle: const Text(
+                      'Inspect, copy, share or export redacted diagnostics (.md)',
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const DiagnosticsPage(),
+                      ),
+                    ),
+                  ),
+                  const Divider(height: 1),
+                  ListTile(
+                    leading: const Icon(Icons.terminal),
+                    title: const Text('Antigravity CLI & Flags'),
+                    subtitle: Text(
+                      settings.activeAgent.isNotEmpty
+                          ? 'Agent: ${settings.activeAgent} · Manage mcp, plugin, remote-control'
+                          : 'Manage mcp, plugin, agent, remote-control, & CLI flags',
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const CliManagerPage(),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
             const SizedBox(height: 12),
+            if (_matches('updates check release notes version apk install'))
             Card(
               child: Column(
                 children: [

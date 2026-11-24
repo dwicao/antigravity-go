@@ -53,12 +53,48 @@ class PhoneActionLog {
   final DateTime timestamp;
 
   factory PhoneActionLog.fromMap(Map<Object?, Object?> map) {
+    final tsMs = (map['timestampMs'] as num?)?.toInt();
     return PhoneActionLog(
       action: map['action']?.toString() ?? 'unknown',
       target: map['target']?.toString() ?? '',
       allowed: map['allowed'] as bool? ?? false,
       reason: map['reason']?.toString() ?? '',
-      timestamp: DateTime.now(),
+      timestamp: tsMs != null
+          ? DateTime.fromMillisecondsSinceEpoch(tsMs)
+          : DateTime.now(),
+    );
+  }
+}
+
+class PhoneSelfCheckResult {
+  const PhoneSelfCheckResult({
+    this.accessibilityConnected = false,
+    this.notificationsGranted = false,
+    this.storageGranted = false,
+    this.batteryOptimizationIgnored = false,
+    this.shizukuAvailable = false,
+    this.mcpRunning = false,
+    this.mcpPort,
+  });
+
+  final bool accessibilityConnected;
+  final bool notificationsGranted;
+  final bool storageGranted;
+  final bool batteryOptimizationIgnored;
+  final bool shizukuAvailable;
+  final bool mcpRunning;
+  final int? mcpPort;
+
+  factory PhoneSelfCheckResult.fromMap(Map<Object?, Object?> map) {
+    return PhoneSelfCheckResult(
+      accessibilityConnected: map['accessibilityConnected'] as bool? ?? false,
+      notificationsGranted: map['notificationsGranted'] as bool? ?? false,
+      storageGranted: map['storageGranted'] as bool? ?? false,
+      batteryOptimizationIgnored:
+          map['batteryOptimizationIgnored'] as bool? ?? false,
+      shizukuAvailable: map['shizukuAvailable'] as bool? ?? false,
+      mcpRunning: map['mcpRunning'] as bool? ?? false,
+      mcpPort: (map['mcpPort'] as num?)?.toInt(),
     );
   }
 }
@@ -175,6 +211,67 @@ class PhoneBridge {
       return const {};
     } catch (_) {
       return const {};
+    }
+  }
+
+  Future<List<PhoneActionLog>> getActionLog() async {
+    try {
+      final raw = await _method.invokeMethod<List<Object?>>('actionLog');
+      if (raw == null) return const [];
+      return raw
+          .whereType<Map<Object?, Object?>>()
+          .map(PhoneActionLog.fromMap)
+          .toList();
+    } on MissingPluginException {
+      return const [];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<void> clearActionLog() async {
+    try {
+      await _method.invokeMethod<void>('clearActionLog');
+    } catch (_) {}
+  }
+
+  Future<Map<String, String>> getAppRules() async {
+    try {
+      final raw = await _method.invokeMethod<Map<Object?, Object?>>('getAppRules');
+      if (raw == null) return const {};
+      return raw.map((k, v) => MapEntry(k.toString(), v?.toString() ?? 'confirm'));
+    } on MissingPluginException {
+      return const {};
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  Future<Map<String, String>> setAppRule(String packageName, String? mode) async {
+    try {
+      final raw = await _method.invokeMethod<Map<Object?, Object?>>(
+        'setAppRule',
+        {'packageName': packageName, 'mode': mode},
+      );
+      if (raw == null) return const {};
+      return raw.map((k, v) => MapEntry(k.toString(), v?.toString() ?? 'confirm'));
+    } on MissingPluginException {
+      return const {};
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  Future<PhoneSelfCheckResult?> runSelfCheck() async {
+    try {
+      final raw =
+          await _method.invokeMethod<Map<Object?, Object?>>('runSelfCheck');
+      if (raw == null) return null;
+      return PhoneSelfCheckResult.fromMap(raw);
+    } on MissingPluginException {
+      return null;
+    } catch (_) {
+      return null;
     }
   }
 }

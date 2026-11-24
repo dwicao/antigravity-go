@@ -12,9 +12,11 @@ import '../auth/google_login_sheet.dart';
 import '../automations/automations_page.dart';
 import '../customizations/customizations_page.dart';
 import '../remote/ssh_hosts_page.dart';
+import '../replay/conversation_replay_page.dart';
 import '../settings/settings_page.dart';
 import '../usage/usage_page.dart';
 import 'command_palette.dart';
+import 'session_search_page.dart';
 
 /// 1:1 Antigravity Desktop Left Sidebar:
 /// - Google Account profile pill + Command Palette (Ctrl+K)
@@ -32,6 +34,7 @@ class SessionsDrawer extends ConsumerStatefulWidget {
 
 class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
   String _query = '';
+  String _folderFilter = '';
 
   @override
   Widget build(BuildContext context) {
@@ -44,10 +47,25 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
     final auth = ref.watch(authProvider);
     final theme = Theme.of(context);
 
+    final folders = sessions.sessions
+        .map((s) => s.folder.trim())
+        .where((f) => f.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+
     final filtered = sessions.sessions.where((s) {
+      if (_folderFilter == '__pinned__' && !s.pinned) return false;
+      if (_folderFilter.isNotEmpty &&
+          _folderFilter != '__pinned__' &&
+          s.folder != _folderFilter) {
+        return false;
+      }
       if (_query.isEmpty) return true;
-      return s.title.toLowerCase().contains(_query.toLowerCase()) ||
-          (s.lastPreview?.toLowerCase().contains(_query.toLowerCase()) ?? false);
+      final q = _query.toLowerCase();
+      return s.title.toLowerCase().contains(q) ||
+          s.folder.toLowerCase().contains(q) ||
+          (s.lastPreview?.toLowerCase().contains(q) ?? false);
     }).toList();
 
     return SafeArea(
@@ -247,15 +265,78 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
 
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              child: TextField(
-                onChanged: (v) => setState(() => _query = v),
-                decoration: const InputDecoration(
-                  hintText: 'Filter conversations…',
-                  prefixIcon: Icon(Icons.filter_list, size: 18),
-                  isDense: true,
-                ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      onChanged: (v) => setState(() => _query = v),
+                      decoration: const InputDecoration(
+                        hintText: 'Filter conversations…',
+                        prefixIcon: Icon(Icons.filter_list, size: 18),
+                        isDense: true,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  IconButton(
+                    tooltip: 'Search all chat messages',
+                    iconSize: 18,
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const SessionSearchPage(),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.manage_search),
+                  ),
+                ],
               ),
             ),
+            if (folders.isNotEmpty || sessions.sessions.any((s) => s.pinned))
+              SizedBox(
+                height: 36,
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: ChoiceChip(
+                        label: const Text('All'),
+                        selected: _folderFilter.isEmpty,
+                        visualDensity: VisualDensity.compact,
+                        onSelected: (_) => setState(() => _folderFilter = ''),
+                      ),
+                    ),
+                    if (sessions.sessions.any((s) => s.pinned))
+                      Padding(
+                        padding: const EdgeInsets.only(right: 6),
+                        child: ChoiceChip(
+                          label: const Text('Pinned'),
+                          selected: _folderFilter == '__pinned__',
+                          visualDensity: VisualDensity.compact,
+                          onSelected: (_) => setState(
+                            () => _folderFilter =
+                                _folderFilter == '__pinned__' ? '' : '__pinned__',
+                          ),
+                        ),
+                      ),
+                    for (final f in folders)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 6),
+                        child: ChoiceChip(
+                          label: Text(f),
+                          selected: _folderFilter == f,
+                          visualDensity: VisualDensity.compact,
+                          onSelected: (_) => setState(
+                            () => _folderFilter = _folderFilter == f ? '' : f,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
             const Divider(height: 10),
           ];
 
@@ -311,6 +392,19 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
           Widget buildSessionTile(AgySessionSummary s) {
             final active = s.id == sessions.activeSessionId;
             final isRunning = bgSessionIds.contains(s.id);
+            final menuItems = [
+              PopupMenuItem(
+                value: 'pin',
+                child: Text(s.pinned ? 'Unpin' : 'Pin'),
+              ),
+              const PopupMenuItem(value: 'folder', child: Text('Folder')),
+              const PopupMenuItem(
+                value: 'replay',
+                child: Text('Replay & Export'),
+              ),
+              const PopupMenuItem(value: 'rename', child: Text('Rename')),
+              const PopupMenuItem(value: 'delete', child: Text('Delete')),
+            ];
             return GestureDetector(
               onSecondaryTapUp: (details) async {
                 final action = await showMenu<String>(
@@ -321,17 +415,10 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
                     details.globalPosition.dx,
                     details.globalPosition.dy,
                   ),
-                  items: const [
-                    PopupMenuItem(value: 'rename', child: Text('Rename')),
-                    PopupMenuItem(value: 'delete', child: Text('Delete')),
-                  ],
+                  items: menuItems,
                 );
-                if (action == 'delete') {
-                  await ref
-                      .read(sessionsProvider.notifier)
-                      .deleteSession(s.id);
-                } else if (action == 'rename' && context.mounted) {
-                  await _promptRename(context, s);
+                if (action != null && context.mounted) {
+                  await _handleSessionAction(context, s, action);
                 }
               },
               child: ListTile(
@@ -347,9 +434,11 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
                         ),
                       )
                     : Icon(
-                        s.hostKind == AgyHostKind.ssh
-                            ? Icons.computer
-                            : Icons.chat_bubble_outline,
+                        s.pinned
+                            ? Icons.push_pin
+                            : (s.hostKind == AgyHostKind.ssh
+                                ? Icons.computer
+                                : Icons.chat_bubble_outline),
                         size: 16,
                       ),
                 title: Text(
@@ -358,25 +447,18 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
                   overflow: TextOverflow.ellipsis,
                 ),
                 subtitle: Text(
-                  '${s.hostName} · ${s.modelId}',
+                  [
+                    if (s.folder.isNotEmpty) '[${s.folder}]',
+                    s.hostName,
+                    s.modelId,
+                  ].join(' · '),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
                 trailing: PopupMenuButton<String>(
                   iconSize: 16,
-                  onSelected: (action) async {
-                    if (action == 'delete') {
-                      await ref
-                          .read(sessionsProvider.notifier)
-                          .deleteSession(s.id);
-                    } else if (action == 'rename') {
-                      await _promptRename(context, s);
-                    }
-                  },
-                  itemBuilder: (_) => const [
-                    PopupMenuItem(value: 'rename', child: Text('Rename')),
-                    PopupMenuItem(value: 'delete', child: Text('Delete')),
-                  ],
+                  onSelected: (action) => _handleSessionAction(context, s, action),
+                  itemBuilder: (_) => menuItems,
                 ),
                 onTap: () {
                   ref.read(sessionsProvider.notifier).selectSession(s.id);
@@ -495,6 +577,65 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
       await ref
           .read(sessionsProvider.notifier)
           .renameSession(session.id, updated);
+    }
+  }
+
+  Future<void> _handleSessionAction(
+    BuildContext context,
+    AgySessionSummary s,
+    String action,
+  ) async {
+    if (action == 'pin') {
+      await ref.read(sessionsProvider.notifier).togglePinSession(s.id);
+    } else if (action == 'folder') {
+      await _promptFolder(context, s);
+    } else if (action == 'replay') {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ConversationReplayPage(session: s),
+        ),
+      );
+    } else if (action == 'delete') {
+      await ref.read(sessionsProvider.notifier).deleteSession(s.id);
+    } else if (action == 'rename') {
+      await _promptRename(context, s);
+    }
+  }
+
+  Future<void> _promptFolder(
+    BuildContext context,
+    AgySessionSummary session,
+  ) async {
+    final ctrl = TextEditingController(text: session.folder);
+    final updated = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Assign Session Folder'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'Folder name (leave blank to clear)',
+            hintText: 'e.g. Work, Bugfixes, Research',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(ctrl.text),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (updated != null) {
+      await ref
+          .read(sessionsProvider.notifier)
+          .setSessionFolder(session.id, updated);
     }
   }
 }

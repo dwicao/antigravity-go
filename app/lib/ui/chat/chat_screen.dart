@@ -74,6 +74,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   String? _draftSessionId;
   bool _draftAppliedForSession = false;
   bool _compactBannerDismissed = false;
+  String? _quotedText;
 
   @override
   void initState() {
@@ -417,9 +418,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
 
     final files = List<String>.from(_attachments);
+    final quote = _quotedText?.trim();
+    final outgoing = (quote != null && quote.isNotEmpty)
+        ? '> ${quote.replaceAll('\n', '\n> ')}\n\n$text'
+        : text;
     _clearInputMenus(clearAttachments: true);
+    if (_quotedText != null && mounted) {
+      setState(() => _quotedText = null);
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
-    await ref.read(chatProvider.notifier).sendPrompt(text, attachments: files);
+    await ref.read(chatProvider.notifier).sendPrompt(outgoing, attachments: files);
   }
 
   void _clearInputMenus({bool clearAttachments = false}) {
@@ -960,6 +968,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                           m.role == ChatRole.user
                                       ? () => _handleRewind(m.id)
                                       : null,
+                                  onQuote: m.text.trim().isNotEmpty
+                                      ? (excerpt) => setState(() => _quotedText = excerpt)
+                                      : null,
                                   onOpenDiff: () => ref
                                       .read(sidePanelProvider.notifier)
                                       .openTab(
@@ -1369,6 +1380,42 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       ),
                     )
                     .toList(),
+              ),
+            ),
+          ),
+        if (_quotedText != null && _quotedText!.isNotEmpty)
+          wrapCentered(
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+              padding: const EdgeInsets.fromLTRB(12, 6, 4, 6),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceContainerHigh,
+                borderRadius: BorderRadius.circular(12),
+                border: Border(
+                  left: BorderSide(
+                    color: theme.colorScheme.primary,
+                    width: 3,
+                  ),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _quotedText!,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall,
+                    ),
+                  ),
+                  IconButton(
+                    iconSize: 16,
+                    visualDensity: VisualDensity.compact,
+                    tooltip: 'Clear quote',
+                    onPressed: () => setState(() => _quotedText = null),
+                    icon: const Icon(Icons.close),
+                  ),
+                ],
               ),
             ),
           ),

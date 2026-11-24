@@ -1,9 +1,14 @@
 package io.github.dwicao.antigravity_go.phone
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.provider.Settings
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.EventChannel
@@ -131,6 +136,49 @@ class PhonePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChannel
             "dumpScreen" -> {
                 val dump = AgyAccessibilityService.instance?.dumpTree() ?: ""
                 result.success(dump)
+            }
+            "actionLog" -> result.success(PhoneControlCoordinator.getActionLog())
+            "clearActionLog" -> {
+                PhoneControlCoordinator.clearActionLog()
+                result.success(null)
+            }
+            "getAppRules" -> result.success(PhoneControlCoordinator.getAppRules())
+            "setAppRule" -> {
+                val pkg = call.argument<String>("packageName") ?: ""
+                val mode = call.argument<String>("mode")
+                PhoneControlCoordinator.setAppRule(pkg, mode)
+                result.success(PhoneControlCoordinator.getAppRules())
+            }
+            "runSelfCheck" -> {
+                val notificationsGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    appContext.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
+                        PackageManager.PERMISSION_GRANTED
+                } else {
+                    true
+                }
+                val storageGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    Environment.isExternalStorageManager()
+                } else {
+                    appContext.checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) ==
+                        PackageManager.PERMISSION_GRANTED
+                }
+                val batteryIgnored = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    val pm = appContext.getSystemService(Context.POWER_SERVICE) as? PowerManager
+                    pm?.isIgnoringBatteryOptimizations(appContext.packageName) ?: false
+                } else {
+                    true
+                }
+                result.success(
+                    mapOf(
+                        "accessibilityConnected" to (AgyAccessibilityService.instance != null),
+                        "notificationsGranted" to notificationsGranted,
+                        "storageGranted" to storageGranted,
+                        "batteryOptimizationIgnored" to batteryIgnored,
+                        "shizukuAvailable" to DeviceGatewayHelper.isShizukuAvailable(appContext),
+                        "mcpRunning" to (PhoneControlCoordinator.currentMcpEndpoint() != null),
+                        "mcpPort" to PhoneControlCoordinator.mcpServer.port,
+                    ),
+                )
             }
             else -> result.notImplemented()
         }

@@ -231,11 +231,12 @@ class AgyTheme {
   static ThemeData build({
     required Brightness brightness,
     required AgyAccentPreset accent,
+    Color? customSeed,
   }) {
     final isDark = brightness == Brightness.dark;
     final semantic = isDark ? AgySemanticColors.dark : AgySemanticColors.light;
     final baseScheme = ColorScheme.fromSeed(
-      seedColor: accent.seed,
+      seedColor: customSeed ?? accent.seed,
       brightness: brightness,
     );
 

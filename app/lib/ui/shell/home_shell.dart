@@ -5,12 +5,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../phone/phone_bridge.dart';
 import '../../state/automations_state.dart';
 import '../../state/chat_state.dart';
+import '../../state/performance_state.dart';
 import '../../state/permissions_state.dart';
 import '../../state/sessions_state.dart';
 import '../../state/settings_state.dart';
 import '../../state/side_panel_state.dart';
 import '../../state/update_state.dart';
 import '../chat/chat_screen.dart';
+import '../phone/phone_control_page.dart';
 import '../settings/settings_page.dart';
 import '../side_panel/overview_panel.dart';
 import '../side_panel/side_panel_tabs.dart';
@@ -29,30 +31,92 @@ class HomeShell extends ConsumerStatefulWidget {
   ConsumerState<HomeShell> createState() => _HomeShellState();
 }
 
-class _HomeShellState extends ConsumerState<HomeShell> {
+class _HomeShellState extends ConsumerState<HomeShell>
+    with WidgetsBindingObserver {
+  static const MethodChannel _systemChannel = MethodChannel('agy/system');
   final _scaffoldKey = GlobalKey<ScaffoldState>();
   bool _showLeftSidebar = true;
   bool _showOverviewPanel = true;
+  AppLifecycleState _lifecycleState = AppLifecycleState.resumed;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        ref.read(appUpdateProvider.notifier).autoCheckIfDue();
-        ref.read(automationsProvider.notifier).onAutomationDue = (task) async {
-          if (!mounted) return;
-          if (ref.read(chatProvider).isStreaming) return;
-          await ref
-              .read(settingsProvider.notifier)
-              .setModel(task.modelTier.modelId);
-          await ref
-              .read(sessionsProvider.notifier)
-              .createSession(title: 'Auto: ${task.name}');
-          await ref.read(chatProvider.notifier).sendPrompt(task.prompt);
-        };
+    WidgetsBinding.instance.addObserver(this);
+    _systemChannel.setMethodCallHandler((call) async {
+      if (call.method == 'onShortcutAction' && call.arguments is String) {
+        _handleShortcutAction(call.arguments as String);
       }
     });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref.read(appUpdateProvider.notifier).autoCheckIfDue();
+      // Touch performanceProvider so saved refresh-rate mode syncs cleanly to MainActivity.
+      ref.read(performanceProvider);
+      _consumeInitialShortcut();
+      ref.read(automationsProvider.notifier).onAutomationDue = (task) async {
+        if (!mounted) return;
+        if (ref.read(chatProvider).isStreaming) return;
+        await ref
+            .read(settingsProvider.notifier)
+            .setModel(task.modelTier.modelId);
+        await ref
+            .read(sessionsProvider.notifier)
+            .createSession(title: 'Auto: ${task.name}');
+        await ref.read(chatProvider.notifier).sendPrompt(task.prompt);
+      };
+    });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _systemChannel.setMethodCallHandler(null);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _lifecycleState = state;
+  }
+
+  Future<void> _consumeInitialShortcut() async {
+    try {
+      final pending =
+          await _systemChannel.invokeMethod<String>('consumePendingAction');
+      if (pending != null && pending.isNotEmpty && mounted) {
+        _handleShortcutAction(pending);
+      }
+    } catch (_) {}
+  }
+
+  void _handleShortcutAction(String action) {
+    if (!mounted) return;
+    switch (action) {
+      case 'new_chat':
+        ref.read(sessionsProvider.notifier).createSession();
+      case 'terminal':
+        ref.read(sidePanelProvider.notifier).openTab(
+              const SidePanelTab(
+                id: 'terminal',
+                kind: SidePanelTabKind.terminal,
+                title: 'Terminal',
+              ),
+            );
+      case 'phone':
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(builder: (_) => const PhoneControlPage()),
+        );
+      case 'usage':
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(builder: (_) => const UsagePage()),
+        );
+    }
+  }
+
+  bool _shouldPostAlert(AppSettings settings) {
+    if (!settings.notifyBackgroundOnly) return true;
+    return _lifecycleState != AppLifecycleState.resumed;
   }
 
   @override
@@ -63,8 +127,33 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     final sidePanel = ref.watch(sidePanelProvider);
 
     ref.listen<bool>(chatProvider.select((c) => c.isStreaming), (prev, next) {
-      if (prev == true && !next && settings.hapticOnComplete) {
-        PhoneBridge.instance.vibrate(durationMs: 45);
+      if (prev == true && !next) {
+        if (settings.hapticOnComplete) {
+          PhoneBridge.instance.vibrate(durationMs: 45);
+        }
+        if (settings.notifyOnTurnComplete && _shouldPostAlert(settings)) {
+          final activeTitle =
+              ref.read(sessionsProvider).activeSession?.title ?? 'Antigravity Go';
+          PhoneBridge.instance.postNotification(
+            title: 'Reply finished',
+            message: '$activeTitle completed its turn.',
+            tag: 'agy_turn_complete',
+          );
+        }
+      }
+    });
+
+    ref.listen<Object?>(chatProvider.select((c) => c.pendingPermission),
+        (prev, next) {
+      if (prev == null &&
+          next != null &&
+          settings.notifyOnApproval &&
+          _shouldPostAlert(settings)) {
+        PhoneBridge.instance.postNotification(
+          title: 'Approval needed',
+          message: 'An agent action is waiting for your confirmation.',
+          tag: 'agy_approval_needed',
+        );
       }
     });
 

@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="new_chat"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_new_chat"
+        android:shortcutLongLabel="@string/shortcut_new_chat">
+        <intent
+            android:action="io.github.dwicao.antigravity_go.SHORTCUT"
+            android:targetPackage="io.github.dwicao.antigravity_go"
+            android:targetClass="io.github.dwicao.antigravity_go.MainActivity">
+            <extra android:name="agy_action" android:value="new_chat" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:shortcutId="terminal"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_terminal"
+        android:shortcutLongLabel="@string/shortcut_terminal">
+        <intent
+            android:action="io.github.dwicao.antigravity_go.SHORTCUT"
+            android:targetPackage="io.github.dwicao.antigravity_go"
+            android:targetClass="io.github.dwicao.antigravity_go.MainActivity">
+            <extra android:name="agy_action" android:value="terminal" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:shortcutId="phone"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_phone"
+        android:shortcutLongLabel="@string/shortcut_phone">
+        <intent
+            android:action="io.github.dwicao.antigravity_go.SHORTCUT"
+            android:targetPackage="io.github.dwicao.antigravity_go"
+            android:targetClass="io.github.dwicao.antigravity_go.MainActivity">
+            <extra android:name="agy_action" android:value="phone" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:shortcutId="usage"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_usage"
+        android:shortcutLongLabel="@string/shortcut_usage">
+        <intent
+            android:action="io.github.dwicao.antigravity_go.SHORTCUT"
+            android:targetPackage="io.github.dwicao.antigravity_go"
+            android:targetClass="io.github.dwicao.antigravity_go.MainActivity">
+            <extra android:name="agy_action" android:value="usage" />
+        </intent>
+    </shortcut>
+</shortcuts>

@@ -241,11 +241,137 @@ class _PhoneControlPageState extends ConsumerState<PhoneControlPage> {
             ),
           ),
           const SizedBox(height: 16),
-          Text(
-            'Recent Phone Actions',
-            style: theme.textTheme.titleSmall?.copyWith(
-              fontWeight: FontWeight.w700,
+          // Self-Check Diagnostics Card (adopted from DSH Go)
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          'Phone Control Self-Check',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                      FilledButton.tonalIcon(
+                        onPressed: () =>
+                            ref.read(phoneProvider.notifier).runSelfCheck(),
+                        icon: const Icon(Icons.fact_check_outlined, size: 16),
+                        label: const Text('Run Self-Check'),
+                      ),
+                    ],
+                  ),
+                  if (phone.selfCheck != null) ...[
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      children: [
+                        _CheckPill(
+                          label: 'Accessibility',
+                          ok: phone.selfCheck!.accessibilityConnected,
+                        ),
+                        _CheckPill(
+                          label: 'Notifications',
+                          ok: phone.selfCheck!.notificationsGranted,
+                        ),
+                        _CheckPill(
+                          label: 'All Files Storage',
+                          ok: phone.selfCheck!.storageGranted,
+                        ),
+                        _CheckPill(
+                          label: 'Battery Unrestricted',
+                          ok: phone.selfCheck!.batteryOptimizationIgnored,
+                        ),
+                        _CheckPill(
+                          label: 'Shizuku rish',
+                          ok: phone.selfCheck!.shizukuAvailable,
+                        ),
+                        _CheckPill(
+                          label: phone.selfCheck!.mcpPort != null
+                              ? 'MCP :${phone.selfCheck!.mcpPort}'
+                              : 'MCP Loopback',
+                          ok: phone.selfCheck!.mcpRunning,
+                        ),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
             ),
+          ),
+          const SizedBox(height: 12),
+          // Per-App SafetyGate Rules Card (adopted from DSH Go)
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          'Per-App Rules',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                      TextButton.icon(
+                        onPressed: () => _showAddRuleDialog(context),
+                        icon: const Icon(Icons.add, size: 16),
+                        label: const Text('Add Rule'),
+                      ),
+                    ],
+                  ),
+                  Text(
+                    'Override SafetyGate per Android package (Allow, Confirm, or Block). Sensitive password fields stay protected.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  if (phone.appRules.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    for (final entry in phone.appRules.entries)
+                      ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(entry.key),
+                        subtitle: Text('Mode: ${entry.value}'),
+                        trailing: IconButton(
+                          icon: const Icon(Icons.delete_outline, size: 18),
+                          tooltip: 'Remove rule',
+                          onPressed: () => ref
+                              .read(phoneProvider.notifier)
+                              .setAppRule(entry.key, null),
+                        ),
+                      ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Recent Phone Actions',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              if (phone.actions.isNotEmpty)
+                TextButton.icon(
+                  onPressed: () =>
+                      ref.read(phoneProvider.notifier).clearActionLog(),
+                  icon: const Icon(Icons.clear_all, size: 16),
+                  label: const Text('Clear'),
+                ),
+            ],
           ),
           const SizedBox(height: 8),
           if (phone.actions.isEmpty)
@@ -262,11 +388,87 @@ class _PhoneControlPageState extends ConsumerState<PhoneControlPage> {
                   color: a.allowed ? Colors.green : theme.colorScheme.error,
                 ),
                 title: Text('${a.action} · ${a.target}'),
-                subtitle: Text(a.reason),
+                subtitle: Text(
+                  '${a.reason} · ${a.timestamp.hour.toString().padLeft(2, '0')}:${a.timestamp.minute.toString().padLeft(2, '0')}:${a.timestamp.second.toString().padLeft(2, '0')}',
+                ),
               ),
             ),
         ],
       ),
+    );
+  }
+
+  Future<void> _showAddRuleDialog(BuildContext context) async {
+    final pkgController = TextEditingController();
+    var mode = 'block';
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setStateDialog) => AlertDialog(
+          title: const Text('Add Per-App Safety Rule'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: pkgController,
+                decoration: const InputDecoration(
+                  labelText: 'Package name or token',
+                  hintText: 'e.g. com.whatsapp',
+                ),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                value: mode,
+                decoration: const InputDecoration(labelText: 'Action policy'),
+                items: const [
+                  DropdownMenuItem(value: 'allow', child: Text('Allow')),
+                  DropdownMenuItem(value: 'confirm', child: Text('Confirm')),
+                  DropdownMenuItem(value: 'block', child: Text('Block')),
+                ],
+                onChanged: (v) {
+                  if (v != null) setStateDialog(() => mode = v);
+                },
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+    final pkg = pkgController.text.trim();
+    pkgController.dispose();
+    if (saved == true && pkg.isNotEmpty && context.mounted) {
+      await ref.read(phoneProvider.notifier).setAppRule(pkg, mode);
+    }
+  }
+}
+
+class _CheckPill extends StatelessWidget {
+  const _CheckPill({required this.label, required this.ok});
+
+  final String label;
+  final bool ok;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Chip(
+      visualDensity: VisualDensity.compact,
+      avatar: Icon(
+        ok ? Icons.check_circle : Icons.error_outline,
+        size: 16,
+        color: ok ? Colors.green : theme.colorScheme.error,
+      ),
+      label: Text(label),
     );
   }
 }

@@ -10,9 +10,13 @@ import '../customizations/customizations_page.dart';
 import '../harness/harness_page.dart';
 import '../phone/phone_control_page.dart';
 import '../remote/ssh_hosts_page.dart';
+import '../replay/conversation_replay_page.dart';
+import '../settings/background_guide_page.dart';
+import '../settings/diagnostics_page.dart';
 import '../settings/settings_page.dart';
 import '../update/update_sheet.dart';
 import '../usage/usage_page.dart';
+import 'session_search_page.dart';
 
 /// Antigravity Desktop `Ctrl+K` Search & Command Palette.
 class CommandPaletteDialog extends ConsumerStatefulWidget {
@@ -192,6 +196,57 @@ class _CommandPaletteDialogState extends ConsumerState<CommandPaletteDialog> {
           Navigator.of(context).pop();
           Navigator.of(context).push(
             MaterialPageRoute<void>(builder: (_) => const PhoneControlPage()),
+          );
+        },
+      ),
+      (
+        'Search All Conversations',
+        'Full-text search across every chat transcript and folder',
+        Icons.manage_search,
+        () {
+          Navigator.of(context).pop();
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(builder: (_) => const SessionSearchPage()),
+          );
+        },
+      ),
+      (
+        'Replay & Export Active Chat',
+        'Step-by-step playback, Markdown/JSON export & Android share',
+        Icons.play_circle_outline,
+        () {
+          final active = ref.read(sessionsProvider).activeSession;
+          Navigator.of(context).pop();
+          if (active != null) {
+            Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => ConversationReplayPage(session: active),
+              ),
+            );
+          }
+        },
+      ),
+      (
+        'Background Keep-Alive Guide',
+        'Check battery optimization & OEM background settings',
+        Icons.battery_saver_rounded,
+        () {
+          Navigator.of(context).pop();
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => const BackgroundGuidePage(),
+            ),
+          );
+        },
+      ),
+      (
+        'Diagnostics Bundle Export',
+        'Build & export redacted device/runtime report',
+        Icons.bug_report_outlined,
+        () {
+          Navigator.of(context).pop();
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(builder: (_) => const DiagnosticsPage()),
           );
         },
       ),

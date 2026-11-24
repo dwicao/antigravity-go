@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:agy_client/agy_client.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -20,6 +23,11 @@ class AppSettings {
   const AppSettings({
     this.themeMode = ThemeMode.dark,
     this.accent = AgyAccentPreset.indigo,
+    this.followWallpaperColor = false,
+    this.dynamicAccentArgb,
+    this.notifyOnTurnComplete = true,
+    this.notifyOnApproval = true,
+    this.notifyBackgroundOnly = true,
     this.localeCode = 'en',
     this.useG1Credits = false,
     this.permissionPreset = AntigravityPermissionPreset.turbo,
@@ -39,6 +47,11 @@ class AppSettings {
 
   final ThemeMode themeMode;
   final AgyAccentPreset accent;
+  final bool followWallpaperColor;
+  final int? dynamicAccentArgb;
+  final bool notifyOnTurnComplete;
+  final bool notifyOnApproval;
+  final bool notifyBackgroundOnly;
   final String localeCode;
   final bool useG1Credits;
   final AntigravityPermissionPreset permissionPreset;
@@ -61,6 +74,11 @@ class AppSettings {
   AppSettings copyWith({
     ThemeMode? themeMode,
     AgyAccentPreset? accent,
+    bool? followWallpaperColor,
+    int? dynamicAccentArgb,
+    bool? notifyOnTurnComplete,
+    bool? notifyOnApproval,
+    bool? notifyBackgroundOnly,
     String? localeCode,
     bool? useG1Credits,
     AntigravityPermissionPreset? permissionPreset,
@@ -80,6 +98,11 @@ class AppSettings {
     return AppSettings(
       themeMode: themeMode ?? this.themeMode,
       accent: accent ?? this.accent,
+      followWallpaperColor: followWallpaperColor ?? this.followWallpaperColor,
+      dynamicAccentArgb: dynamicAccentArgb ?? this.dynamicAccentArgb,
+      notifyOnTurnComplete: notifyOnTurnComplete ?? this.notifyOnTurnComplete,
+      notifyOnApproval: notifyOnApproval ?? this.notifyOnApproval,
+      notifyBackgroundOnly: notifyBackgroundOnly ?? this.notifyBackgroundOnly,
       localeCode: localeCode ?? this.localeCode,
       useG1Credits: useG1Credits ?? this.useG1Credits,
       permissionPreset: permissionPreset ?? this.permissionPreset,
@@ -172,6 +195,18 @@ class SettingsNotifier extends Notifier<AppSettings> {
       hapticOnComplete: _dirtyKeys.contains('agy_haptic_on_complete')
           ? state.hapticOnComplete
           : (prefs.getBool('agy_haptic_on_complete') ?? true),
+      followWallpaperColor: _dirtyKeys.contains('agy_follow_wallpaper')
+          ? state.followWallpaperColor
+          : (prefs.getBool('agy_follow_wallpaper') ?? false),
+      notifyOnTurnComplete: _dirtyKeys.contains('agy_notify_turn_complete')
+          ? state.notifyOnTurnComplete
+          : (prefs.getBool('agy_notify_turn_complete') ?? true),
+      notifyOnApproval: _dirtyKeys.contains('agy_notify_approval')
+          ? state.notifyOnApproval
+          : (prefs.getBool('agy_notify_approval') ?? true),
+      notifyBackgroundOnly: _dirtyKeys.contains('agy_notify_bg_only')
+          ? state.notifyBackgroundOnly
+          : (prefs.getBool('agy_notify_bg_only') ?? true),
       selectedModelId:
           prefs.getString('agy_selected_model') ?? 'Orchestrator (Neon)',
       reasoningEffort: prefs.getString('agy_effort') ?? 'medium',
@@ -183,6 +218,9 @@ class SettingsNotifier extends Notifier<AppSettings> {
       continueLast: prefs.getBool('agy_continue_last') ?? false,
       remoteAgent: prefs.getString('agy_remote_agent') ?? '',
     );
+    if (state.followWallpaperColor) {
+      unawaited(refreshDynamicWallpaperColor());
+    }
   }
 
   Future<void> setThemeMode(ThemeMode mode) async {
@@ -261,6 +299,48 @@ class SettingsNotifier extends Notifier<AppSettings> {
     state = state.copyWith(hapticOnComplete: enabled);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('agy_haptic_on_complete', enabled);
+  }
+
+  Future<void> setFollowWallpaperColor(bool enabled) async {
+    _dirtyKeys.add('agy_follow_wallpaper');
+    state = state.copyWith(followWallpaperColor: enabled);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('agy_follow_wallpaper', enabled);
+    if (enabled) {
+      await refreshDynamicWallpaperColor();
+    }
+  }
+
+  Future<void> refreshDynamicWallpaperColor() async {
+    try {
+      const ch = MethodChannel('agy/dynamic_color');
+      final palette = await ch.invokeMethod<Map<Object?, Object?>>('palette');
+      final argb = (palette?['accent'] as num?)?.toInt();
+      if (argb != null && ref.mounted) {
+        state = state.copyWith(dynamicAccentArgb: argb);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> setNotifyOnTurnComplete(bool enabled) async {
+    _dirtyKeys.add('agy_notify_turn_complete');
+    state = state.copyWith(notifyOnTurnComplete: enabled);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('agy_notify_turn_complete', enabled);
+  }
+
+  Future<void> setNotifyOnApproval(bool enabled) async {
+    _dirtyKeys.add('agy_notify_approval');
+    state = state.copyWith(notifyOnApproval: enabled);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('agy_notify_approval', enabled);
+  }
+
+  Future<void> setNotifyBackgroundOnly(bool enabled) async {
+    _dirtyKeys.add('agy_notify_bg_only');
+    state = state.copyWith(notifyBackgroundOnly: enabled);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('agy_notify_bg_only', enabled);
   }
 
   Future<void> setModel(String modelId) async {

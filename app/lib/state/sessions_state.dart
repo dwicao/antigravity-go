@@ -75,11 +75,16 @@ class SessionsNotifier extends Notifier<SessionsState> {
       return;
     }
 
-    loaded.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    loaded.sort(_compareSessions);
     state = SessionsState(
       sessions: loaded,
       activeSessionId: loaded.first.id,
     );
+  }
+
+  static int _compareSessions(AgySessionSummary a, AgySessionSummary b) {
+    if (a.pinned != b.pinned) return a.pinned ? -1 : 1;
+    return b.updatedAt.compareTo(a.updatedAt);
   }
 
   AgySessionSummary _createDefaultSession() {
@@ -122,9 +127,21 @@ class SessionsNotifier extends Notifier<SessionsState> {
     final next = state.sessions
         .map((s) => s.id == updated.id ? updated : s)
         .toList()
-      ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+      ..sort(_compareSessions);
     state = state.copyWith(sessions: next);
     await _persist(next);
+  }
+
+  Future<void> togglePinSession(String id) async {
+    final target = state.sessions.where((s) => s.id == id).firstOrNull;
+    if (target == null) return;
+    await updateSession(target.copyWith(pinned: !target.pinned));
+  }
+
+  Future<void> setSessionFolder(String id, String folder) async {
+    final target = state.sessions.where((s) => s.id == id).firstOrNull;
+    if (target == null) return;
+    await updateSession(target.copyWith(folder: folder.trim()));
   }
 
   Future<void> renameSession(String id, String title) async {

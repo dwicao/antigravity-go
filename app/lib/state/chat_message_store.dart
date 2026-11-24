@@ -1,11 +1,24 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:agy_client/agy_client.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'chat_models.dart';
+
+class SessionSearchHit {
+  const SessionSearchHit({
+    required this.session,
+    required this.snippet,
+    this.matchedMessageId,
+  });
+
+  final AgySessionSummary session;
+  final String snippet;
+  final String? matchedMessageId;
+}
 
 /// Persists redacted per-session chat transcripts into individual atomic JSON files
 /// inside application support storage, migrating legacy `SharedPreferences` keys and
@@ -116,5 +129,49 @@ class ChatMessageStore {
     }
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('$_legacyPrefix$sessionId');
+  }
+
+  Future<List<SessionSearchHit>> searchSessions(
+    String rawQuery,
+    List<AgySessionSummary> sessions,
+  ) async {
+    final query = rawQuery.trim().toLowerCase();
+    if (query.isEmpty) return const [];
+    final hits = <SessionSearchHit>[];
+    for (final s in sessions) {
+      if (s.title.toLowerCase().contains(query) ||
+          s.folder.toLowerCase().contains(query) ||
+          (s.lastPreview?.toLowerCase().contains(query) ?? false)) {
+        hits.add(
+          SessionSearchHit(
+            session: s,
+            snippet: s.lastPreview?.trim().isNotEmpty == true
+                ? s.lastPreview!
+                : s.title,
+          ),
+        );
+        continue;
+      }
+      final msgs = await load(s.id);
+      for (final m in msgs.reversed) {
+        if (m.text.toLowerCase().contains(query)) {
+          final text = m.text.trim();
+          final idx = text.toLowerCase().indexOf(query);
+          final start = idx > 30 ? idx - 30 : 0;
+          final end = (idx + 90).clamp(0, text.length);
+          final prefix = start > 0 ? '…' : '';
+          final suffix = end < text.length ? '…' : '';
+          hits.add(
+            SessionSearchHit(
+              session: s,
+              matchedMessageId: m.id,
+              snippet: '$prefix${text.substring(start, end)}$suffix',
+            ),
+          );
+          break;
+        }
+      }
+    }
+    return hits;
   }
 }

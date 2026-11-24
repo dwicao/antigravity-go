@@ -3,4 +3,9 @@
     <string name="app_name">Antigravity Go</string>
     <string name="phone_a11y_label">Antigravity Go Phone Control</string>
     <string name="phone_a11y_description">Allows Antigravity AI agents to inspect screen elements and perform user-approved actions.</string>
+    <string name="tile_new_chat_label">New Chat</string>
+    <string name="shortcut_new_chat">New Chat</string>
+    <string name="shortcut_terminal">Terminal</string>
+    <string name="shortcut_phone">Phone Control</string>
+    <string name="shortcut_usage">Usage Limits</string>
 </resources>
