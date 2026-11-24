@@ -763,18 +763,18 @@ class _GoogleLoginSheetState extends ConsumerState<GoogleLoginSheet> {
     if (sourceChoice == null || !mounted) return;
 
     if (sourceChoice == 'file') {
-      final files = await FilePicker.pickFiles(
-        type: FileType.any,
-        allowMultiple: true,
-      );
+      final files = await FilePicker.pickFiles(type: FileType.any);
       if (files.isEmpty || !mounted) return;
       for (final f in files) {
         String? raw;
         final path = f.path;
         if (path != null && path.isNotEmpty) {
           raw = await File(path).readAsString();
-        } else if (f.bytes != null) {
-          raw = utf8.decode(f.bytes!);
+        } else {
+          final bytes = await f.readAsBytes();
+          if (bytes.isNotEmpty) {
+            raw = utf8.decode(bytes);
+          }
         }
         if (raw != null && raw.trim().isNotEmpty) {
           entries.add((label: f.name, json: raw.trim()));
