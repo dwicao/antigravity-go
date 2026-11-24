@@ -69,7 +69,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   bool _listeningVoice = false;
   bool _enterToSend = true;
   bool _isAtBottom = true;
-  bool _followLatest = false;
+  bool _followLatest = true;
   bool _isProgrammaticScroll = false;
   bool _userActivelyScrollingUp = false;
   int _remainingOpenSnapFrames = 0;
@@ -92,9 +92,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final pos = _scrollController.position;
     final distFromBottom = pos.maxScrollExtent - pos.pixels;
     final atBottom = distFromBottom <= _atBottomThreshold;
-    if (atBottom != _isAtBottom && mounted) {
+    var nextFollow = _followLatest;
+    if (atBottom && !_userActivelyScrollingUp) {
+      nextFollow = true;
+    }
+    if ((atBottom != _isAtBottom || nextFollow != _followLatest) && mounted) {
       setState(() {
         _isAtBottom = atBottom;
+        _followLatest = nextFollow;
       });
     }
   }
@@ -134,6 +139,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     if (!_scrollController.hasClients) return;
     final target = _scrollController.position.maxScrollExtent;
     _userActivelyScrollingUp = false;
+    if (mounted && !_followLatest) {
+      setState(() => _followLatest = true);
+    } else {
+      _followLatest = true;
+    }
     _isProgrammaticScroll = true;
     try {
       if (animate) {
@@ -154,19 +164,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final Map<String, GlobalKey> _turnKeys = {};
   int? _turnCursor;
   bool _reconnectDismissed = false;
-
-  void _toggleFollowLatest() {
-    final next = !_followLatest;
-    _userActivelyScrollingUp = false;
-    setState(() => _followLatest = next);
-    if (next) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && _followLatest) {
-          _jumpToBottomImmediate();
-        }
-      });
-    }
-  }
 
   Future<void> _jumpUserTurn(
     List<ChatMessage> messages, {
@@ -758,16 +755,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       }
     });
     if (_observedActiveSessionId != activeSessionId) {
-      final transitionedFromPlaceholder =
-          _observedActiveSessionId == 'new_session' &&
-              activeSessionId != 'new_session';
       _observedActiveSessionId = activeSessionId;
       _userActivelyScrollingUp = false;
       _lastAutoScrolledSessionKey = null;
       _compactBannerDismissed = false;
-      if (!transitionedFromPlaceholder) {
-        _followLatest = false;
-      }
+      _followLatest = true;
     }
     if (chat.messages.isNotEmpty) {
       final readyForActive = chat.loadedSessionId == null ||
@@ -1047,8 +1039,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ],
         ),
         if (activeCustom == null &&
-            (!auth.isAuthenticated ||
-                (!runtime.status.isReady && hosts.isLocalActive)))
+            ((auth.initialized && !auth.isAuthenticated) ||
+                (runtime.initialized &&
+                    !runtime.status.isReady &&
+                    hosts.isLocalActive)))
           wrapCentered(
             ChatOnboardingBanner(
               isAuthenticated: auth.isAuthenticated,
@@ -1094,11 +1088,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                               notification.metrics.maxScrollExtent -
                                   notification.metrics.pixels;
                           if (delta < -1.5 &&
-                              distFromBottom > _atBottomThreshold &&
-                              _followLatest) {
+                              distFromBottom > _atBottomThreshold) {
                             _remainingOpenSnapFrames = 0;
-                            if (mounted) {
-                              setState(() => _followLatest = false);
+                            if (mounted && (_followLatest || _isAtBottom)) {
+                              setState(() {
+                                _followLatest = false;
+                                _isAtBottom = false;
+                              });
+                            } else {
+                              _followLatest = false;
+                              _isAtBottom = false;
                             }
                           }
                           return false;
@@ -1251,62 +1250,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                             ),
                             const SizedBox(width: 6),
                           ],
-                          (!_isAtBottom && !_followLatest)
-                              ? FloatingActionButton.small(
-                                  heroTag: 'jump-to-latest-chat',
-                                  tooltip: 'Jump to latest',
-                                  onPressed: () => _jumpToBottom(animate: true),
-                                  child: const Icon(Icons.arrow_downward_rounded),
-                                )
-                              : Tooltip(
-                                  message: _followLatest
-                                      ? 'Following latest messages (tap to pause)'
-                                      : 'Follow chat (always scroll to latest)',
-                                  child: Material(
-                                    elevation: 3,
-                                    color: _followLatest
-                                        ? theme.colorScheme.primary
-                                        : theme.colorScheme.surfaceContainerHigh,
-                                    borderRadius: BorderRadius.circular(20),
-                                    clipBehavior: Clip.antiAlias,
-                                    child: InkWell(
-                                      onTap: _toggleFollowLatest,
-                                      child: Padding(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 12,
-                                          vertical: 8,
-                                        ),
-                                        child: Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            Icon(
-                                              Icons.vertical_align_bottom_rounded,
-                                              size: 16,
-                                              color: _followLatest
-                                                  ? theme.colorScheme.onPrimary
-                                                  : theme.colorScheme
-                                                      .onSurfaceVariant,
-                                            ),
-                                            const SizedBox(width: 6),
-                                            Text(
-                                              _followLatest
-                                                  ? 'Following'
-                                                  : 'Follow',
-                                              style: theme.textTheme.labelMedium
-                                                  ?.copyWith(
-                                                fontWeight: FontWeight.w600,
-                                                color: _followLatest
-                                                    ? theme.colorScheme.onPrimary
-                                                    : theme.colorScheme
-                                                        .onSurfaceVariant,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ),
+                          if (!_isAtBottom || !_followLatest)
+                            FloatingActionButton.small(
+                              heroTag: 'jump-to-latest-chat',
+                              tooltip: 'Jump to latest',
+                              onPressed: () => _jumpToBottom(animate: true),
+                              child: const Icon(Icons.arrow_downward_rounded),
+                            ),
                         ],
                       ),
                     ),

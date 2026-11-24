@@ -2,6 +2,14 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.27] - 2026-11-24
+
+### Improved
+- **Automatic Bottom-Follow Scrolling:** Removed the redundant bottom-right `Follow` / `Following` pill in `ChatScreen`. Being at the bottom of a conversation now auto-follows incoming messages by default; scrolling upward pauses auto-follow and shows only the **Jump to latest** arrow button (`Icons.arrow_downward_rounded`), and scrolling back to the bottom (or tapping the arrow) seamlessly resumes auto-follow.
+
+### Fixed
+- **Suppress Misleading Startup Sign-In Prompt When Logged In:** Cached signed-in auth state cleanly via `SharedPreferences` (`agy_auth_profile_json`) and deferred `ChatOnboardingBanner` until initial auth/runtime hydration completes (`auth.initialized` / `runtime.initialized`) so signed-in users no longer see a false `"Google Sign-In"` prompt on launch.
+
 ## [1.0.26] - 2026-11-24
 
 ### Added

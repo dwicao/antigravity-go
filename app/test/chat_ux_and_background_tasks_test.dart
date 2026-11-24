@@ -172,7 +172,7 @@ void main() {
   });
 
   testWidgets(
-      'ChatScreen auto-jumps to bottom on open, shows Follow toggle at bottom, Jump to latest when scrolled up, and auto-follows new messages',
+      'ChatScreen auto-follows at bottom by default, pauses on scroll up to show Jump to latest arrow, and resumes auto-follow at bottom',
       (tester) async {
     final longMessages = List.generate(
       25,
@@ -208,28 +208,13 @@ void main() {
     await tester.pump();
     await tester.pumpAndSettle();
 
-    // Opening a chat auto-jumps to the very bottom and shows Follow instead of Jump to latest.
+    // Opening a chat auto-jumps to bottom, auto-follows by default, and hides Follow/Jump pills.
     expect(find.textContaining('Message #24'), findsOneWidget);
     expect(find.byTooltip('Jump to latest'), findsNothing);
-    expect(find.text('Follow'), findsOneWidget);
-
-    // Scrolling up shows Jump to latest and hides Follow.
-    await tester.drag(find.byType(ListView), const Offset(0, 600));
-    await tester.pumpAndSettle();
-    expect(find.byTooltip('Jump to latest'), findsOneWidget);
     expect(find.text('Follow'), findsNothing);
+    expect(find.text('Following'), findsNothing);
 
-    // Tapping Jump to latest scrolls back to bottom and shows Follow again.
-    await tester.tap(find.byTooltip('Jump to latest'));
-    await tester.pumpAndSettle();
-    expect(find.byTooltip('Jump to latest'), findsNothing);
-    expect(find.text('Follow'), findsOneWidget);
-
-    // Tapping Follow enables Following mode and keeps scrolling to new messages.
-    await tester.tap(find.text('Follow'));
-    await tester.pumpAndSettle();
-    expect(find.text('Following'), findsOneWidget);
-
+    // New messages arriving while at the bottom automatically scroll into view.
     fakeChat.setMessages([
       ...longMessages,
       ChatMessage(
@@ -241,13 +226,29 @@ void main() {
     ]);
     await tester.pumpAndSettle();
     expect(find.textContaining('Message #25 latest follow item'), findsOneWidget);
-    expect(find.text('Following'), findsOneWidget);
+    expect(find.byTooltip('Jump to latest'), findsNothing);
 
-    // Manually scrolling up while Following pauses auto-follow and shows Jump to latest.
+    // Scrolling up pauses auto-follow and reveals the Jump to latest arrow button.
     await tester.drag(find.byType(ListView), const Offset(0, 600));
     await tester.pumpAndSettle();
     expect(find.byTooltip('Jump to latest'), findsOneWidget);
-    expect(find.text('Following'), findsNothing);
+
+    // Tapping Jump to latest scrolls back to bottom, hides the arrow, and resumes auto-follow.
+    await tester.tap(find.byTooltip('Jump to latest'));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Jump to latest'), findsNothing);
+
+    fakeChat.setMessages([
+      ...container.read(chatProvider).messages,
+      ChatMessage(
+        id: 'm-26',
+        role: ChatRole.assistant,
+        text: 'Message #26 resumed auto-follow item',
+        createdAt: DateTime(2026, 11, 23, 7, 31),
+      ),
+    ]);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Message #26 resumed auto-follow item'), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox());
     await tester.pump(const Duration(milliseconds: 500));
@@ -672,7 +673,7 @@ void main() {
   });
 
   testWidgets(
-      'ChatScreen Follow toggle stays active across horizontal scroll and pauses only on vertical scroll up',
+      'ChatScreen automatic bottom-follow stays active across horizontal scroll and pauses only on vertical scroll up',
       (tester) async {
     final longLines = List.generate(
       24,
@@ -723,13 +724,12 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
 
-    // Tap Follow pill and confirm it switches to Following.
-    expect(find.text('Follow'), findsOneWidget);
-    await tester.tap(find.text('Follow'));
-    await tester.pump();
-    expect(find.text('Following'), findsOneWidget);
+    // At bottom by default without any Follow/Jump pill.
+    expect(find.text('Follow'), findsNothing);
+    expect(find.text('Following'), findsNothing);
+    expect(find.byTooltip('Jump to latest'), findsNothing);
 
-    // Simulate appended streaming chunks — Following must remain active.
+    // Simulate appended streaming chunks — auto-follow stays active.
     chatNotifier.setMessages([
       ...container.read(chatProvider).messages,
       ChatMessage(
@@ -742,13 +742,12 @@ void main() {
     ]);
     await tester.pump();
     await tester.pump();
-    expect(find.text('Following'), findsOneWidget);
+    expect(find.byTooltip('Jump to latest'), findsNothing);
 
-    // Intentionally drag main vertical chat ListView upward away from bottom -> Follow pauses.
+    // Intentionally drag main vertical chat ListView upward away from bottom -> pauses and shows arrow.
     await tester.drag(find.byType(ListView), const Offset(0, 320));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
-    expect(find.text('Following'), findsNothing);
     expect(find.byTooltip('Jump to latest'), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox());

@@ -37,6 +37,7 @@ enum AntigravityPlanTier {
 class AgyAuthStatus {
   const AgyAuthStatus({
     required this.isAuthenticated,
+    this.initialized = true,
     this.method = AgyAuthMethod.googlePersonal,
     this.planTier = AntigravityPlanTier.free,
     this.email,
@@ -49,7 +50,7 @@ class AgyAuthStatus {
     this.errorMessage,
   });
 
-  const AgyAuthStatus.signedOut()
+  const AgyAuthStatus.signedOut({this.initialized = true})
       : isAuthenticated = false,
         method = AgyAuthMethod.googlePersonal,
         planTier = AntigravityPlanTier.free,
@@ -63,6 +64,7 @@ class AgyAuthStatus {
         errorMessage = null;
 
   final bool isAuthenticated;
+  final bool initialized;
   final AgyAuthMethod method;
   final AntigravityPlanTier planTier;
   final String? email;
@@ -76,6 +78,7 @@ class AgyAuthStatus {
 
   AgyAuthStatus copyWith({
     bool? isAuthenticated,
+    bool? initialized,
     AgyAuthMethod? method,
     AntigravityPlanTier? planTier,
     String? email,
@@ -89,6 +92,7 @@ class AgyAuthStatus {
   }) {
     return AgyAuthStatus(
       isAuthenticated: isAuthenticated ?? this.isAuthenticated,
+      initialized: initialized ?? this.initialized,
       method: method ?? this.method,
       planTier: planTier ?? this.planTier,
       email: email ?? this.email,

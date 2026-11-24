@@ -628,7 +628,7 @@ class PhoneMcpServer(
                                     "serverInfo",
                                     JSONObject()
                                         .put("name", "phone-control")
-                                        .put("version", "1.0.26"),
+                                        .put("version", "1.0.27"),
                                 ),
                         )
                 }

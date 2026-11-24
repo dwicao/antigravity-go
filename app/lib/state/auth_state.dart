@@ -43,8 +43,20 @@ class AuthNotifier extends Notifier<AgyAuthStatus> {
       }
     });
     ref.onDispose(() => _sub?.cancel());
-    Future.microtask(() => refresh(verifyWithCli: true));
-    return const AgyAuthStatus.signedOut();
+    Future.microtask(_bootstrap);
+    return const AgyAuthStatus.signedOut(initialized: false);
+  }
+
+  Future<void> _bootstrap() async {
+    final svc = ref.read(authServiceProvider);
+    final cached = await svc.readCachedStatus();
+    if (!ref.mounted) return;
+    if (cached != null) {
+      state = cached;
+      await refresh(verifyWithCli: false);
+      return;
+    }
+    await refresh(verifyWithCli: true);
   }
 
   Future<void> refresh({bool verifyWithCli = false}) async {
@@ -54,22 +66,26 @@ class AuthNotifier extends Notifier<AgyAuthStatus> {
         .loadStatus(verifyWithCli: verifyWithCli);
     if (!ref.mounted) return;
     if (!verifyWithCli && wasTurnVerified && !loaded.isAuthenticated) {
+      state = state.copyWith(initialized: true);
       return;
     }
-    state = loaded;
+    state = loaded.copyWith(initialized: true);
   }
 
   /// Marks state authenticated immediately when an `agy` turn or model probe succeeds.
   void markAuthenticatedFromTurn({String? email}) {
     if (state.isAuthenticated) return;
-    state = state.copyWith(
+    final next = state.copyWith(
       isAuthenticated: true,
+      initialized: true,
       email: email ?? state.email,
       displayName: email ?? state.displayName ?? 'Google Account',
       awaitingCode: false,
       errorMessage: null,
       lastAuthenticatedAt: DateTime.now(),
     );
+    state = next;
+    unawaited(ref.read(authServiceProvider).cacheStatus(next));
     Future.microtask(() => refresh(verifyWithCli: false));
   }
 
@@ -109,7 +125,10 @@ class AuthNotifier extends Notifier<AgyAuthStatus> {
   }
 
   Future<void> signOut() async {
+    await ref.read(authServiceProvider).cacheStatus(
+          const AgyAuthStatus.signedOut(initialized: true),
+        );
     await ref.read(authServiceProvider).signOut();
-    state = const AgyAuthStatus.signedOut();
+    state = const AgyAuthStatus.signedOut(initialized: true);
   }
 }

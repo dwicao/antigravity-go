@@ -1,5 +1,8 @@
+import 'dart:convert';
+
 import 'package:agy_client/agy_client.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../runtime/runtime_bridge.dart';
@@ -19,10 +22,45 @@ class GoogleAuthService {
   final RuntimeBridge _runtime;
   final FlutterSecureStorage _secureStorage;
 
+  Future<AgyAuthStatus?> readCachedStatus() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_authProfileKey);
+      if (raw == null || raw.isEmpty) return null;
+      final decoded = jsonDecode(raw);
+      if (decoded is Map<String, dynamic>) {
+        final parsed = AgyAuthStatus.fromJson(decoded);
+        if (parsed.isAuthenticated) {
+          return parsed.copyWith(initialized: true);
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  Future<void> cacheStatus(AgyAuthStatus status) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (!status.isAuthenticated) {
+        await prefs.remove(_authProfileKey);
+        return;
+      }
+      await prefs.setString(_authProfileKey, jsonEncode(status.toJson()));
+    } catch (_) {}
+  }
+
+  Future<String?> _readApiKeySafely() async {
+    try {
+      return await _secureStorage.read(key: _apiKeyStorageKey);
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<AgyAuthStatus> loadStatus({bool verifyWithCli = false}) async {
-    final apiKey = await _secureStorage.read(key: _apiKeyStorageKey);
+    final apiKey = await _readApiKeySafely();
     var native = await _runtime.checkAuthStatus();
-    if (verifyWithCli || native['isAuthenticated'] != true) {
+    if (verifyWithCli && native['isAuthenticated'] != true) {
       final verified = await _runtime.verifyAuth();
       if (verified['isAuthenticated'] == true) {
         native = verified;
@@ -32,16 +70,23 @@ class GoogleAuthService {
         (apiKey != null && apiKey.isNotEmpty);
 
     if (!isAuth) {
-      return const AgyAuthStatus.signedOut();
+      final cached = await readCachedStatus();
+      if (cached != null) {
+        return cached;
+      }
+      return const AgyAuthStatus.signedOut(initialized: true);
     }
 
     if (apiKey != null && apiKey.isNotEmpty && native['isAuthenticated'] != true) {
-      return const AgyAuthStatus(
+      const apiKeyStatus = AgyAuthStatus(
         isAuthenticated: true,
+        initialized: true,
         method: AgyAuthMethod.geminiApiKey,
         planTier: AntigravityPlanTier.apiKey,
         displayName: 'Gemini API Key',
       );
+      await cacheStatus(apiKeyStatus);
+      return apiKeyStatus;
     }
 
     final email = native['email']?.toString();
@@ -52,8 +97,9 @@ class GoogleAuthService {
       orElse: () => AgyAuthMethod.googlePersonal,
     );
 
-    return AgyAuthStatus(
+    final status = AgyAuthStatus(
       isAuthenticated: true,
+      initialized: true,
       method: method,
       planTier: AntigravityPlanTier.fromString(planStr),
       email: email,
@@ -62,6 +108,8 @@ class GoogleAuthService {
       gcpLocation: native['gcpLocation']?.toString(),
       lastAuthenticatedAt: DateTime.now(),
     );
+    await cacheStatus(status);
+    return status;
   }
 
   Future<void> launchGoogleSignIn({bool enterprise = false}) async {

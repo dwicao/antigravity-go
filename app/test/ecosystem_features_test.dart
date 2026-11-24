@@ -1,5 +1,8 @@
+import 'dart:convert';
+
 import 'package:agy_client/agy_client.dart';
 import 'package:antigravity_go/runtime/runtime_models.dart';
+import 'package:antigravity_go/state/auth_state.dart';
 import 'package:antigravity_go/state/chat_state.dart';
 import 'package:antigravity_go/state/runtime_state.dart';
 import 'package:antigravity_go/state/sessions_state.dart';
@@ -410,5 +413,50 @@ Weekly limit: 70% remaining (resets in 5d)
       200,
     );
     expect(find.text("What's New"), findsOneWidget);
+  });
+
+  testWidgets('ChatScreen suppresses sign-in banner during hydration and when cached user is signed in', (tester) async {
+    SharedPreferences.setMockInitialValues({
+      'agy_auth_profile_json': jsonEncode(
+        const AgyAuthStatus(
+          isAuthenticated: true,
+          email: 'user@example.com',
+          displayName: 'user@example.com',
+        ).toJson(),
+      ),
+    });
+
+    final container = ProviderContainer(
+      overrides: [
+        runtimeProvider.overrideWith(
+          () => _FakeRuntimeNotifier(
+            const RuntimeUiState(
+              status: RuntimeStatus(
+                phase: RuntimePhase.running,
+                statusMessage: 'Running',
+              ),
+              initialized: true,
+            ),
+          ),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          theme: _testTheme(),
+          home: const Scaffold(body: ChatScreen()),
+        ),
+      ),
+    );
+    // Frame 0 (before async bootstrap finishes) must not flash Google Sign-In.
+    expect(find.text('Google Sign-In'), findsNothing);
+
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(container.read(authProvider).isAuthenticated, isTrue);
+    expect(find.text('Google Sign-In'), findsNothing);
   });
 }

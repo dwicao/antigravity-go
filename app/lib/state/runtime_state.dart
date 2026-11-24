@@ -10,24 +10,28 @@ class RuntimeUiState {
     this.status = const RuntimeStatus.initial(),
     this.logs = const [],
     this.busy = false,
+    this.initialized = true,
     this.backgroundTasks = const [],
   });
 
   final RuntimeStatus status;
   final List<String> logs;
   final bool busy;
+  final bool initialized;
   final List<NativeBackgroundTask> backgroundTasks;
 
   RuntimeUiState copyWith({
     RuntimeStatus? status,
     List<String>? logs,
     bool? busy,
+    bool? initialized,
     List<NativeBackgroundTask>? backgroundTasks,
   }) {
     return RuntimeUiState(
       status: status ?? this.status,
       logs: logs ?? this.logs,
       busy: busy ?? this.busy,
+      initialized: initialized ?? this.initialized,
       backgroundTasks: backgroundTasks ?? this.backgroundTasks,
     );
   }
@@ -59,7 +63,7 @@ class RuntimeNotifier extends Notifier<RuntimeUiState> {
     });
     ref.onDispose(() => _sub?.cancel());
     Future.microtask(refresh);
-    return const RuntimeUiState();
+    return const RuntimeUiState(initialized: false);
   }
 
   Future<void> refresh() async {
@@ -70,6 +74,7 @@ class RuntimeNotifier extends Notifier<RuntimeUiState> {
     state = state.copyWith(
       status: status,
       logs: logs,
+      initialized: true,
       backgroundTasks: tasks,
     );
   }
