@@ -107,6 +107,7 @@ int __wrap_faccessat(int fd, const char *path, int amode, int flag) {
 }
 SECCOMPEOF
       gcc -Os -Wall -Wextra -c /tmp/seccomp_compat.c -o /tmp/seccomp_compat.o
+      ar rcs /tmp/libseccomp_compat.a /tmp/seccomp_compat.o
 
       # Build BusyBox from source with SUID/syslog/utmp/adjtimex disabled so Android seccomp
       # does not terminate applet dispatch with SIGSYS (exit 159).
@@ -128,9 +129,11 @@ SECCOMPEOF
         -e "s|^CONFIG_HWCLOCK=y|# CONFIG_HWCLOCK is not set|" \
         -e "s|^CONFIG_SHA1_HWACCEL=y|# CONFIG_SHA1_HWACCEL is not set|" \
         -e "s|^CONFIG_SHA256_HWACCEL=y|# CONFIG_SHA256_HWACCEL is not set|" \
-        -e "s|^CONFIG_EXTRA_LDFLAGS=.*|CONFIG_EXTRA_LDFLAGS=\"-Wl,--wrap=faccessat /tmp/seccomp_compat.o\"|" \
+        -e "s|^CONFIG_EXTRA_LDFLAGS=.*|CONFIG_EXTRA_LDFLAGS=\"-Wl,--wrap=faccessat -L/tmp\"|" \
+        -e "s|^CONFIG_EXTRA_LDLIBS=.*|CONFIG_EXTRA_LDLIBS=\"seccomp_compat\"|" \
         .config
-      grep -q "^CONFIG_EXTRA_LDFLAGS=" .config || echo "CONFIG_EXTRA_LDFLAGS=\"-Wl,--wrap=faccessat /tmp/seccomp_compat.o\"" >> .config
+      grep -q "^CONFIG_EXTRA_LDFLAGS=" .config || echo "CONFIG_EXTRA_LDFLAGS=\"-Wl,--wrap=faccessat -L/tmp\"" >> .config
+      grep -q "^CONFIG_EXTRA_LDLIBS=" .config || echo "CONFIG_EXTRA_LDLIBS=\"seccomp_compat\"" >> .config
       yes "" | make oldconfig >/dev/null 2>&1 || true
       make -j"$(nproc)"
       strip busybox
@@ -141,13 +144,13 @@ SECCOMPEOF
       cd /tmp/bash-src
       CC=gcc \
       CFLAGS="-Os -Wno-implicit-function-declaration -Wno-incompatible-pointer-types" \
-      LDFLAGS="-static -Wl,--wrap=faccessat /tmp/seccomp_compat.o" \
+      LDFLAGS="-static" \
       ./configure \
         --enable-static-link \
         --without-bash-malloc \
         --disable-nls \
         --with-curses
-      make -j"$(nproc)"
+      make -j"$(nproc)" LOCAL_LDFLAGS="-Wl,--wrap=faccessat /tmp/seccomp_compat.o"
       strip bash
       cp bash /out/libbash.so
 
