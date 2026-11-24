@@ -290,11 +290,11 @@ object DeviceGatewayHelper {
         if (cmd.isEmpty()) {
             return JSONObject().put("allowed", false).put("error", "Empty command")
         }
-        val safety = CommandSafetyGuard.inspect(cmd)
+        val safety = CommandSafetyGuard.evaluateCommand(cmd)
         if (!safety.allowed) {
             return JSONObject()
                 .put("allowed", false)
-                .put("reason", safety.reason ?: "Blocked by CommandSafetyGuard")
+                .put("reason", safety.reason.ifBlank { "Blocked by CommandSafetyGuard" })
         }
         val rish = findRishBinary(context)
             ?: return JSONObject()

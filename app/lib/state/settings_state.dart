@@ -105,6 +105,8 @@ final settingsProvider =
     NotifierProvider<SettingsNotifier, AppSettings>(SettingsNotifier.new);
 
 class SettingsNotifier extends Notifier<AppSettings> {
+  final Set<String> _dirtyKeys = <String>{};
+
   @override
   AppSettings build() {
     Future.microtask(_load);
@@ -161,11 +163,15 @@ class SettingsNotifier extends Notifier<AppSettings> {
         (l) => l.name == layoutName,
         orElse: () => AntigravityLayoutMode.softwareEngineering,
       ),
-      desktopLayout: DesktopLayoutOverride.values.firstWhere(
-        (d) => d.name == desktopName,
-        orElse: () => DesktopLayoutOverride.auto,
-      ),
-      hapticOnComplete: prefs.getBool('agy_haptic_on_complete') ?? true,
+      desktopLayout: _dirtyKeys.contains('agy_desktop_layout')
+          ? state.desktopLayout
+          : DesktopLayoutOverride.values.firstWhere(
+              (d) => d.name == desktopName,
+              orElse: () => DesktopLayoutOverride.auto,
+            ),
+      hapticOnComplete: _dirtyKeys.contains('agy_haptic_on_complete')
+          ? state.hapticOnComplete
+          : (prefs.getBool('agy_haptic_on_complete') ?? true),
       selectedModelId:
           prefs.getString('agy_selected_model') ?? 'Orchestrator (Neon)',
       reasoningEffort: prefs.getString('agy_effort') ?? 'medium',
@@ -244,12 +250,14 @@ class SettingsNotifier extends Notifier<AppSettings> {
   }
 
   Future<void> setDesktopLayout(DesktopLayoutOverride mode) async {
+    _dirtyKeys.add('agy_desktop_layout');
     state = state.copyWith(desktopLayout: mode);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('agy_desktop_layout', mode.name);
   }
 
   Future<void> setHapticOnComplete(bool enabled) async {
+    _dirtyKeys.add('agy_haptic_on_complete');
     state = state.copyWith(hapticOnComplete: enabled);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('agy_haptic_on_complete', enabled);
