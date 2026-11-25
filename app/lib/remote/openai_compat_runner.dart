@@ -258,6 +258,7 @@ class OpenAiCompatRunner {
     required String prompt,
     required String workspacePath,
     required bool dangerouslySkipPermissions,
+    String systemInstructions = '',
     List<({String role, String text})> history = const [],
     List<String> attachments = const [],
     SshHostConfig? sshHost,
@@ -277,6 +278,7 @@ class OpenAiCompatRunner {
         if (ws.isNotEmpty) 'Active workspace directory: $ws',
         if (profile.supportsTools)
           'You have tools (`run_command`, `read_file`, `write_file`, `list_dir`) to inspect and edit files.',
+        if (systemInstructions.trim().isNotEmpty) systemInstructions.trim(),
         if (profile.systemPrompt.trim().isNotEmpty) profile.systemPrompt.trim(),
       ];
 

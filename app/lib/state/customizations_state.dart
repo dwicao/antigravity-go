@@ -13,20 +13,47 @@ final customizationsProvider =
 class CustomizationsNotifier extends Notifier<List<CustomizationItem>> {
   @override
   List<CustomizationItem> build() {
+    ref.listen(
+      projectsProvider.select((p) => p.activeProjectId),
+      (_, _) => Future.microtask(refresh),
+    );
     Future.microtask(refresh);
     return const [];
   }
 
-  Future<void> refresh() async {
+  String _resolveCwd() {
     final projDir = ref.read(projectsProvider).activeProject.primaryFolder;
     final runtimeRoot = ref.read(runtimeProvider).status.workspaceRoot ?? '';
-    final cwd = projDir.isNotEmpty ? projDir : runtimeRoot;
-    state = await RuntimeBridge.instance.listCustomizations(cwd);
+    return projDir.isNotEmpty ? projDir : runtimeRoot;
+  }
+
+  Future<void> refresh() async {
+    final cwd = _resolveCwd();
+    final items = await RuntimeBridge.instance.listCustomizations(cwd);
+    if (!ref.mounted) return;
+    state = items;
   }
 
   Future<bool> saveFile(String path, String content) async {
     final ok = await RuntimeBridge.instance.writeWorkspaceFile(path, content);
     if (ok) await refresh();
     return ok;
+  }
+
+  Future<String?> createSkill({
+    required String name,
+    String description = '',
+    String scope = 'Project',
+    String? content,
+  }) async {
+    final path = await RuntimeBridge.instance.createSkill(
+      name: name,
+      description: description,
+      scope: scope,
+      cwd: _resolveCwd(),
+      content: content,
+    );
+    if (path != null) await refresh();
+    return path;
   }
 }

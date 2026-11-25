@@ -6,6 +6,7 @@ import io.github.dwicao.antigravity_go.phone.PhoneControlCoordinator
 import io.github.dwicao.antigravity_go.phone.SafetyGate
 import io.github.dwicao.antigravity_go.runtime.CrashRecorder
 import io.github.dwicao.antigravity_go.runtime.CredentialTransferHelper
+import io.github.dwicao.antigravity_go.runtime.CustomizationsOps
 import io.github.dwicao.antigravity_go.runtime.MultiAccountVault
 import io.github.dwicao.antigravity_go.runtime.UrlSafetyGuard
 import java.io.File
@@ -241,5 +242,61 @@ class DshAdoptFeaturesTest {
         assertEquals(true, removeRes["wasActive"])
         assertFalse(File(deviceHome, ".gemini/antigravity-cli/antigravity-oauth-token").exists())
         assertEquals(2, MultiAccountVault.listAccounts(deviceHome, accountsDir).size)
+    }
+
+    @Test
+    fun customizationsOpsDiscoversAgentsMdAndSkillsWithFrontmatter() {
+        val homeDir = tempFolder.newFolder("cust-home")
+        val workspaceDir = tempFolder.newFolder("cust-ws")
+        val projectDir = tempFolder.newFolder("cust-proj")
+        val ops = CustomizationsOps(
+            homeDir = homeDir,
+            workspaceDir = workspaceDir,
+            bashFile = File("/system/bin/sh"),
+            tmpDir = tempFolder.newFolder("cust-tmp"),
+            settingsFile = File(homeDir, ".gemini/antigravity-cli/settings.json"),
+            atomicWriteText = { file, text ->
+                file.parentFile?.mkdirs()
+                file.writeText(text)
+            },
+        )
+
+        val globalAgents = File(homeDir, ".agents/AGENTS.md")
+        globalAgents.parentFile?.mkdirs()
+        globalAgents.writeText("# Global Agents\nAlways verify diffs.")
+
+        val projectAgents = File(projectDir, "AGENTS.md")
+        projectAgents.writeText("# Project Agents\nRun tests before commit.")
+
+        val skillPath = ops.createSkill(
+            name = "Deploy Check",
+            description = "Validate release artifacts before tagging",
+            scope = "Project",
+            cwd = projectDir.absolutePath,
+        )
+        assertTrue(File(skillPath).isFile)
+
+        val globalSkill = File(homeDir, ".gemini/antigravity-cli/skills/audit/SKILL.md")
+        globalSkill.parentFile?.mkdirs()
+        globalSkill.writeText("---\nname: security-audit\ndescription: \"Audit auth flows\"\n---\nCheck tokens.")
+
+        val items = ops.listCustomizations(projectDir.absolutePath)
+        val projectAgentsItem = items.firstOrNull { it["path"] == projectAgents.absolutePath }
+        assertEquals("rule", projectAgentsItem?.get("kind"))
+        assertEquals(true, projectAgentsItem?.get("enabled"))
+
+        val globalAgentsItem = items.firstOrNull { it["path"] == globalAgents.absolutePath }
+        assertEquals("rule", globalAgentsItem?.get("kind"))
+        assertEquals(true, globalAgentsItem?.get("enabled"))
+
+        val projectSkill = items.firstOrNull { it["name"] == "deploy-check" }
+        assertEquals("skill", projectSkill?.get("kind"))
+        assertEquals("Project", projectSkill?.get("scope"))
+        assertEquals("Validate release artifacts before tagging", projectSkill?.get("description"))
+
+        val auditSkill = items.firstOrNull { it["name"] == "security-audit" }
+        assertEquals("skill", auditSkill?.get("kind"))
+        assertEquals("Global", auditSkill?.get("scope"))
+        assertEquals("Audit auth flows", auditSkill?.get("description"))
     }
 }

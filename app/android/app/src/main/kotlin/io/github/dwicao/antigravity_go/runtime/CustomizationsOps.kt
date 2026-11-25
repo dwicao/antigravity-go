@@ -6,10 +6,10 @@ import org.json.JSONObject
 import java.io.File
 
 /**
- * Manages managed `GEMINI.md` context, `settings.json`, customizations listing, and
- * `$HOME/.gemini/config/mcp_config.json` synchronization (e.g. `phone-control` MCP).
+ * Manages `GEMINI.md`, `AGENTS.md`, `SKILL.md` agent skills, `settings.json`,
+ * customizations discovery/scaffolding, and `$HOME/.gemini/config/mcp_config.json`.
  */
-internal class CustomizationsOps(
+class CustomizationsOps(
     private val homeDir: File,
     private val workspaceDir: File,
     private val bashFile: File,
@@ -18,6 +18,52 @@ internal class CustomizationsOps(
     private val atomicWriteText: (File, String) -> Unit,
 ) {
     private val mcpConfigFile: File get() = File(homeDir, ".gemini/config/mcp_config.json")
+
+    data class SkillFrontmatterMeta(
+        val name: String,
+        val description: String,
+    )
+
+    companion object {
+        fun parseSkillFrontmatter(raw: String, fallbackName: String): SkillFrontmatterMeta {
+            val normalized = raw.replace("\r\n", "\n").trimStart()
+            if (!normalized.startsWith("---")) {
+                val firstLine = normalized.lineSequence()
+                    .map { it.trim() }
+                    .firstOrNull { it.isNotEmpty() && !it.startsWith("#") }
+                    ?: "SKILL.md loaded"
+                return SkillFrontmatterMeta(name = fallbackName, description = firstLine)
+            }
+            val afterOpen = normalized.indexOf('\n')
+            if (afterOpen < 0) {
+                return SkillFrontmatterMeta(name = fallbackName, description = "SKILL.md loaded")
+            }
+            val rest = normalized.substring(afterOpen + 1)
+            val closeMatch = Regex("""^---\s*$""", RegexOption.MULTILINE).find(rest)
+                ?: return SkillFrontmatterMeta(name = fallbackName, description = "SKILL.md loaded")
+            val yamlBlock = rest.substring(0, closeMatch.range.first)
+
+            var parsedName: String? = null
+            var parsedDesc: String? = null
+            for (line in yamlBlock.lineSequence()) {
+                val idx = line.indexOf(':')
+                if (idx <= 0) continue
+                val key = line.substring(0, idx).trim().lowercase()
+                var value = line.substring(idx + 1).trim()
+                if ((value.startsWith('"') && value.endsWith('"') && value.length >= 2) ||
+                    (value.startsWith('\'') && value.endsWith('\'') && value.length >= 2)
+                ) {
+                    value = value.substring(1, value.length - 1)
+                }
+                if (key == "name" && value.isNotEmpty()) parsedName = value
+                if (key == "description" && value.isNotEmpty()) parsedDesc = value
+            }
+            return SkillFrontmatterMeta(
+                name = parsedName ?: fallbackName,
+                description = parsedDesc ?: "SKILL.md loaded",
+            )
+        }
+    }
 
     fun syncManagedGeminiMd(allowStorage: Boolean) {
         try {
@@ -118,58 +164,181 @@ internal class CustomizationsOps(
         } catch (_: Throwable) {}
     }
 
+    fun createSkill(
+        name: String,
+        description: String,
+        scope: String,
+        cwd: String?,
+        content: String? = null,
+    ): String {
+        val slug = name.trim()
+            .lowercase()
+            .replace(Regex("[^a-z0-9_-]+"), "-")
+            .trim('-')
+            .ifEmpty { "custom-skill" }
+        val projectDir = if (!cwd.isNullOrBlank()) File(cwd) else workspaceDir
+        val skillsRoot = if (scope.equals("Global", ignoreCase = true)) {
+            File(homeDir, ".gemini/skills")
+        } else {
+            File(projectDir, ".agents/skills")
+        }
+        val skillFile = File(skillsRoot, "$slug/SKILL.md")
+        skillFile.parentFile?.mkdirs()
+        val body = content?.takeIf { it.isNotBlank() } ?: """
+            |---
+            |name: $slug
+            |description: ${description.trim().ifEmpty { "Describe when and how the agent should use this skill." }}
+            |---
+            |
+            |# $slug
+            |
+            |## Instructions
+            |1. Inspect relevant files in the workspace first.
+            |2. Follow instructions in `AGENTS.md` and `GEMINI.md`.
+            |3. Verify changes before concluding.
+            |""".trimMargin()
+        atomicWriteText(skillFile, body)
+        return skillFile.absolutePath
+    }
+
     fun listCustomizations(cwd: String?): List<Map<String, Any?>> {
         val items = mutableListOf<Map<String, Any?>>()
         val projectDir = if (!cwd.isNullOrBlank()) File(cwd) else workspaceDir
+        val seenPaths = HashSet<String>()
 
-        val globalGeminiMd = File(homeDir, ".gemini/GEMINI.md")
-        items.add(
-            mapOf(
-                "kind" to "rule",
-                "name" to "Global Rules (GEMINI.md)",
-                "scope" to "Global",
-                "path" to globalGeminiMd.absolutePath,
-                "description" to "Global instructions applied to every conversation",
-                "enabled" to globalGeminiMd.exists(),
-                "content" to if (globalGeminiMd.exists()) globalGeminiMd.readText() else "",
-            )
-        )
-        val projectRulesDir = File(projectDir, ".agents/rules")
-        if (projectRulesDir.exists() && projectRulesDir.isDirectory) {
-            projectRulesDir.listFiles()?.filter { it.isFile }?.forEach { f ->
-                items.add(
-                    mapOf(
-                        "kind" to "rule",
-                        "name" to f.name,
-                        "scope" to "Project",
-                        "path" to f.absolutePath,
-                        "description" to "Workspace rule",
-                        "enabled" to true,
-                        "content" to f.readText(),
-                    )
+        fun addRuleFile(
+            file: File,
+            name: String,
+            scope: String,
+            description: String,
+            includeWhenMissing: Boolean = false,
+        ) {
+            val canonical = runCatching { file.canonicalPath }.getOrDefault(file.absolutePath)
+            if (!seenPaths.add(canonical)) return
+            val exists = file.isFile
+            if (!exists && !includeWhenMissing) return
+            items.add(
+                mapOf(
+                    "kind" to "rule",
+                    "name" to name,
+                    "scope" to scope,
+                    "path" to file.absolutePath,
+                    "description" to description,
+                    "enabled" to exists,
+                    "content" to if (exists) runCatching { file.readText() }.getOrDefault("") else "",
                 )
+            )
+        }
+
+        // Global rules (GEMINI.md + AGENTS.md)
+        addRuleFile(
+            file = File(homeDir, ".gemini/GEMINI.md"),
+            name = "Global Rules (GEMINI.md)",
+            scope = "Global",
+            description = "Global Antigravity instructions applied to every conversation",
+            includeWhenMissing = true,
+        )
+        val globalAgentsCandidates = listOf(
+            File(homeDir, ".agents/AGENTS.md"),
+            File(homeDir, ".gemini/AGENTS.md"),
+            File(homeDir, ".gemini/antigravity-cli/AGENTS.md"),
+        )
+        val hasAnyGlobalAgents = globalAgentsCandidates.any { it.isFile }
+        addRuleFile(
+            file = globalAgentsCandidates.first(),
+            name = "Global Agents (AGENTS.md)",
+            scope = "Global",
+            description = "Cross-agent global instructions (AGENTS.md)",
+            includeWhenMissing = !hasAnyGlobalAgents,
+        )
+        for (extraGlobalAgents in globalAgentsCandidates.drop(1)) {
+            addRuleFile(
+                file = extraGlobalAgents,
+                name = "Global Agents (AGENTS.md)",
+                scope = "Global",
+                description = "Cross-agent global instructions (AGENTS.md)",
+            )
+        }
+
+        // Project AGENTS.md & workspace rules
+        addRuleFile(
+            file = File(projectDir, "AGENTS.md"),
+            name = "Project Agents (AGENTS.md)",
+            scope = "Project",
+            description = "Repository-level agent instructions & conventions (AGENTS.md)",
+            includeWhenMissing = true,
+        )
+        addRuleFile(
+            file = File(projectDir, "AGENTS.override.md"),
+            name = "Project Agents Override (AGENTS.override.md)",
+            scope = "Project",
+            description = "Local override instructions (AGENTS.override.md)",
+        )
+        addRuleFile(
+            file = File(projectDir, ".agents/AGENTS.md"),
+            name = "Workspace .agents/AGENTS.md",
+            scope = "Project",
+            description = "Workspace agent instructions (.agents/AGENTS.md)",
+        )
+        addRuleFile(
+            file = File(projectDir, ".gemini/AGENTS.md"),
+            name = "Workspace .gemini/AGENTS.md",
+            scope = "Project",
+            description = "Workspace agent instructions (.gemini/AGENTS.md)",
+        )
+
+        for (rulesDir in listOf(
+            File(projectDir, ".agents/rules"),
+            File(projectDir, ".gemini/rules"),
+        )) {
+            if (rulesDir.exists() && rulesDir.isDirectory) {
+                rulesDir.listFiles()?.filter { it.isFile }?.sortedBy { it.name }?.forEach { f ->
+                    addRuleFile(
+                        file = f,
+                        name = f.name,
+                        scope = "Project",
+                        description = "Workspace rule",
+                    )
+                }
             }
         }
 
+        // Skills (SKILL.md) across Project, Global, and Built-in directories
+        val seenSkills = HashSet<String>()
         for ((scope, root) in listOf(
-            "Global" to File(homeDir, ".gemini/skills"),
             "Project" to File(projectDir, ".agents/skills"),
+            "Project" to File(projectDir, ".gemini/skills"),
+            "Project" to File(projectDir, ".claude/skills"),
+            "Global" to File(homeDir, ".gemini/antigravity-cli/skills"),
+            "Global" to File(homeDir, ".gemini/skills"),
+            "Global" to File(homeDir, ".agents/skills"),
+            "Built-in" to File(homeDir, ".gemini/antigravity-cli/builtin/skills"),
         )) {
-            if (root.exists() && root.isDirectory) {
-                root.listFiles()?.filter { it.isDirectory }?.forEach { dir ->
-                    val skillMd = File(dir, "SKILL.md")
-                    items.add(
-                        mapOf(
-                            "kind" to "skill",
-                            "name" to dir.name,
-                            "scope" to scope,
-                            "path" to skillMd.absolutePath,
-                            "description" to if (skillMd.exists()) "SKILL.md loaded" else "Skill folder",
-                            "enabled" to skillMd.exists(),
-                            "content" to if (skillMd.exists()) skillMd.readText() else "",
-                        )
-                    )
+            if (!root.exists() || !root.isDirectory) continue
+            root.listFiles()?.filter { it.isDirectory }?.sortedBy { it.name }?.forEach { dir ->
+                val skillMd = File(dir, "SKILL.md")
+                val canonical = runCatching { skillMd.canonicalPath }.getOrDefault(skillMd.absolutePath)
+                if (!seenPaths.add(canonical)) return@forEach
+                val exists = skillMd.isFile
+                val rawContent = if (exists) runCatching { skillMd.readText() }.getOrDefault("") else ""
+                val meta = if (exists) {
+                    parseSkillFrontmatter(rawContent, dir.name)
+                } else {
+                    SkillFrontmatterMeta(name = dir.name, description = "Skill folder (missing SKILL.md)")
                 }
+                val dedupKey = "${scope.lowercase()}:${meta.name.lowercase()}"
+                if (!seenSkills.add(dedupKey)) return@forEach
+                items.add(
+                    mapOf(
+                        "kind" to "skill",
+                        "name" to meta.name,
+                        "scope" to scope,
+                        "path" to skillMd.absolutePath,
+                        "description" to meta.description,
+                        "enabled" to exists,
+                        "content" to rawContent,
+                    )
+                )
             }
         }
 

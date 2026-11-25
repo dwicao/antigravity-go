@@ -38,7 +38,7 @@ Inspired by [dsh-Go](https://github.com/ccch1mneyyy/dsh-Go) and powered by the o
 ### Workspace, Terminal & Adaptive Samsung DeX Shell
 - **Responsive 1/2/3-Pane Shell:** Adapts between Mobile drawers, Tablet 2-pane, and Samsung DeX / Desktop 3-pane workspace with an instant **Auto / Desktop / Mobile** layout override and keyboard shortcuts (`Ctrl+K` Command Palette, `Ctrl+N`, `Ctrl+B`, `Ctrl+U`, `Ctrl+,`, `Esc`).
 - **Organized Sessions Sidebar:** Compact sidebar with session **Pinning**, **Folders**, **Archiving**, running/subagent badges, and **Full-Text Message Search** across all conversations.
-- **Workspace, Diffs & Terminal:** Browse local or remote workspaces, review unified Git diffs and commit/push changes, manage **Customizations** (`Rules`, `Skills`, `Workflows`, `MCP Servers`), and run interactive shells or `agy` TUI inside the embedded `xterm` PTY terminal.
+- **Workspace, Diffs & Terminal:** Browse local or remote workspaces, review unified Git diffs and commit/push changes, manage **Customizations** (`GEMINI.md`, `AGENTS.md`, `SKILL.md` agent skills with `/` invocation, `MCP Servers`), and run interactive shells or `agy` TUI inside the embedded `xterm` PTY terminal.
 
 ### Remote Connections & External `/v1` Models
 - **SSH Remote Hosts:** Connect to your PC/Mac/Linux workstation over SSH (`dartssh2`) to drive `agy` and remote repositories from your phone.

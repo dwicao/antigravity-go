@@ -5,6 +5,7 @@ import 'package:agy_client/agy_client.dart';
 import 'package:antigravity_go/runtime/runtime_models.dart';
 import 'package:antigravity_go/state/auth_state.dart';
 import 'package:antigravity_go/state/chat_state.dart';
+import 'package:antigravity_go/state/customizations_state.dart';
 import 'package:antigravity_go/state/runtime_state.dart';
 import 'package:antigravity_go/state/sessions_state.dart';
 import 'package:antigravity_go/state/settings_state.dart';
@@ -17,6 +18,7 @@ import 'package:antigravity_go/ui/chat/chat_screen.dart';
 import 'package:antigravity_go/ui/chat/message_bubble.dart';
 import 'package:antigravity_go/ui/chat/message_metrics_footer.dart';
 import 'package:antigravity_go/ui/chat/render/agy_markdown.dart';
+import 'package:antigravity_go/ui/customizations/customizations_page.dart';
 import 'package:antigravity_go/ui/settings/settings_page.dart';
 import 'package:antigravity_go/ui/shell/sessions_drawer.dart';
 import 'package:antigravity_go/ui/usage/usage_page.dart';
@@ -62,6 +64,17 @@ class _FakeAuthNotifier extends AuthNotifier {
   Future<void> switchAccount(String accountId) async {
     switchedAccountId = accountId;
   }
+}
+
+class _FakeCustomizationsNotifier extends CustomizationsNotifier {
+  _FakeCustomizationsNotifier(this._initial);
+  final List<CustomizationItem> _initial;
+
+  @override
+  List<CustomizationItem> build() => _initial;
+
+  @override
+  Future<void> refresh() async {}
 }
 
 ThemeData _testTheme() => AgyTheme.build(
@@ -732,5 +745,56 @@ Weekly limit: 70% remaining (resets in 5d)
     await tester.tap(find.byIcon(Icons.close_rounded).first);
     await tester.pump();
     expect(removedPath, imgFile.path);
+  });
+
+  testWidgets('CustomizationsPage displays and edits AGENTS.md and SKILL.md items', (tester) async {
+    final container = ProviderContainer(
+      overrides: [
+        customizationsProvider.overrideWith(
+          () => _FakeCustomizationsNotifier(const [
+            CustomizationItem(
+              kind: CustomizationKind.rule,
+              name: 'Project Agents (AGENTS.md)',
+              scope: 'Project',
+              pathOrCommand: '/proj/AGENTS.md',
+              description: 'Repository-level agent instructions',
+              enabled: true,
+              content: '# AGENTS.md\nAlways run tests.',
+            ),
+            CustomizationItem(
+              kind: CustomizationKind.skill,
+              name: 'deploy-check',
+              scope: 'Project',
+              pathOrCommand: '/proj/.agents/skills/deploy-check/SKILL.md',
+              description: 'Verify build artifacts before release',
+              enabled: true,
+              content: '---\nname: deploy-check\ndescription: Verify build artifacts\n---\nCheck SHA256SUMS.',
+            ),
+          ]),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          theme: _testTheme(),
+          home: const CustomizationsPage(),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Project Agents (AGENTS.md)'), findsOneWidget);
+    expect(find.text('deploy-check'), findsOneWidget);
+
+    await tester.tap(find.text('deploy-check'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Edit deploy-check'), findsOneWidget);
+    expect(find.textContaining('/deploy-check'), findsOneWidget);
+    expect(find.text('Copy /cmd'), findsOneWidget);
   });
 }

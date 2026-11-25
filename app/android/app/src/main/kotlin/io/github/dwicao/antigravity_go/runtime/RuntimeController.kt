@@ -1480,6 +1480,13 @@ am start -a android.intent.action.VIEW -d "${'$'}url" >/dev/null 2>&1 || echo "[
 
     fun writeTextFile(path: String, content: String): Boolean = workspaceOps.writeTextFile(path, content)
     fun listCustomizations(cwd: String?): List<Map<String, Any?>> = customizationsOps.listCustomizations(cwd)
+    fun createSkill(
+        name: String,
+        description: String,
+        scope: String,
+        cwd: String?,
+        content: String? = null,
+    ): String = customizationsOps.createSkill(name, description, scope, cwd, content)
     fun gitDiff(cwd: String?): Map<String, String> = workspaceOps.gitDiff(cwd)
     fun gitCommitAndPush(cwd: String?, message: String, stageAll: Boolean, push: Boolean): Map<String, Any?> =
         workspaceOps.gitCommitAndPush(cwd, message, stageAll, push)

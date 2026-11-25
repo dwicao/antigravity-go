@@ -167,8 +167,8 @@ class _CommandPaletteDialogState extends ConsumerState<CommandPaletteDialog> {
         },
       ),
       (
-        'Customizations (Rules, Skills, MCP)',
-        'Edit GEMINI.md rules, skills & MCP servers',
+        'Customizations (Rules, AGENTS.md, SKILL.md, MCP)',
+        'Edit GEMINI.md, AGENTS.md, SKILL.md & MCP servers',
         Icons.extension_outlined,
         () {
           Navigator.of(context).pop();

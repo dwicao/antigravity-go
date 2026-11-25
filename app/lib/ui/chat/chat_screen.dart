@@ -17,6 +17,7 @@ import '../../state/auth_state.dart';
 import '../../state/background_tasks_state.dart';
 import '../../state/chat_state.dart';
 import '../../state/custom_providers_state.dart';
+import '../../state/customizations_state.dart';
 import '../../state/draft_store.dart';
 import '../../state/harness_state.dart';
 import '../../state/hosts_state.dart';
@@ -804,10 +805,26 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     final theme = Theme.of(context);
     final semantic = AgySemanticColors.of(context);
+    final customItems = ref.watch(customizationsProvider);
+    final skillSlashItems = customItems
+        .where((c) => c.kind == CustomizationKind.skill && c.enabled)
+        .map(
+          (s) => AgySlashCommand(
+            command: '/${SkillFrontmatter.sanitizeSlug(s.name)}',
+            argHint: '<task>',
+            description: 'Skill (${s.scope}): ${s.description}',
+          ),
+        )
+        .where(
+          (cmd) => !AgyCliCatalog.slashCommands
+              .any((builtIn) => builtIn.command == cmd.command),
+        )
+        .toList();
     final slashMatches = _showSlashMenu
-        ? AgyCliCatalog.slashCommands
-            .where((c) => c.matches(_inputController.text))
-            .toList()
+        ? [
+            ...AgyCliCatalog.slashCommands,
+            ...skillSlashItems,
+          ].where((c) => c.matches(_inputController.text)).toList()
         : const <AgySlashCommand>[];
 
     final activeModel = AgyModelCatalog.resolve(settings.selectedModelId);

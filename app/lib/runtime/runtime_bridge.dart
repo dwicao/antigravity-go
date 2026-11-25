@@ -448,6 +448,26 @@ class RuntimeBridge {
     }
   }
 
+  Future<String?> createSkill({
+    required String name,
+    String description = '',
+    String scope = 'Project',
+    String? cwd,
+    String? content,
+  }) async {
+    try {
+      return await _method.invokeMethod<String>('createSkill', {
+        'name': name,
+        'description': description,
+        'scope': scope,
+        'cwd': ?cwd,
+        'content': ?content,
+      });
+    } on MissingPluginException {
+      return null;
+    }
+  }
+
   Future<(String status, String diff)> gitDiff(String cwd) async {
     final detailed = await gitDiffDetailed(cwd);
     return (detailed.status, detailed.diff);

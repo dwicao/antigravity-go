@@ -16,6 +16,7 @@ import 'chat_models.dart';
 import 'chat_turn_helpers.dart';
 import 'ci_watch_state.dart';
 import 'custom_providers_state.dart';
+import 'customizations_state.dart';
 import 'harness_state.dart';
 import 'hosts_state.dart';
 import 'permissions_state.dart';
@@ -793,14 +794,17 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     );
 
     if (session.messageCount == 0) {
-      final title = prompt.length > 36 ? '${prompt.substring(0, 36)}…' : prompt;
+      final baseTitle = prompt.isNotEmpty ? prompt : 'Image attachment';
+      final title = baseTitle.length > 36
+          ? '${baseTitle.substring(0, 36)}…'
+          : baseTitle;
       session = session.copyWith(title: title);
     }
     await ref.read(sessionsProvider.notifier).updateSession(
           session.copyWith(
             updatedAt: DateTime.now(),
             messageCount: nextMessages.length,
-            lastPreview: prompt,
+            lastPreview: prompt.isNotEmpty ? prompt : '[Image attachment]',
           ),
         );
     if (!ref.mounted || _sessionTurnTokens[session.id] != streamToken) return;
@@ -813,6 +817,17 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     final allowNonWorkspace = project.allowNonWorkspaceAccess ??
         (settings.allowNonWorkspaceAccess || perms.allFilesAccess);
 
+    var customizations = ref.read(customizationsProvider);
+    if (!runtime.status.safeMode && customizations.isEmpty) {
+      try {
+        await ref.read(customizationsProvider.notifier).refresh();
+        if (!ref.mounted || _sessionTurnTokens[session.id] != streamToken) {
+          return;
+        }
+        customizations = ref.read(customizationsProvider);
+      } catch (_) {}
+    }
+
     final effectiveWorkspace = session.workspacePath.isNotEmpty
         ? session.workspacePath
         : (project.primaryFolder.isNotEmpty
@@ -823,14 +838,47 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     final effectiveMode =
         sshHost != null ? requestedMode : requestedMode.androidSafe;
 
-    final requestPrompt = carryCompactContext
-        ? '[Compacted Session Context]\n${priorMsgs[prevCompactIdx].text.trim()}\n\n[User Request]\n$effectivePrompt'
+    final firstSlash = prompt.startsWith('/')
+        ? prompt.split(RegExp(r'\s+')).first.toLowerCase()
+        : '';
+    final isBuiltInSlash = firstSlash.isNotEmpty &&
+        AgyCliCatalog.slashCommands.any(
+          (c) => c.command == firstSlash || c.aliases.contains(firstSlash),
+        );
+    final skillExpandedPrompt = (!runtime.status.safeMode && !isBuiltInSlash)
+        ? AgentCustomizationHelper.resolveInvokedSkillPrompt(
+            prompt,
+            customizations,
+          )
+        : null;
+    final promptWithSkill = skillExpandedPrompt != null
+        ? '$skillExpandedPrompt$attachmentNote'
         : effectivePrompt;
+
+    final isNewRemoteSession = session.remoteConversationId == null ||
+        session.remoteConversationId!.isEmpty;
+    final agentsContext = (!runtime.status.safeMode &&
+            activeCustom == null &&
+            isNewRemoteSession)
+        ? AgentCustomizationHelper.buildAgentsContextBlock(customizations)
+        : '';
+    final promptWithAgents = agentsContext.isNotEmpty
+        ? '$agentsContext\n\n$promptWithSkill'
+        : promptWithSkill;
+
+    final requestPrompt = carryCompactContext
+        ? '[Compacted Session Context]\n${priorMsgs[prevCompactIdx].text.trim()}\n\n[User Request]\n$promptWithAgents'
+        : promptWithAgents;
 
     final Stream<AgyChatEvent> stream;
     AgyPromptRequest? localRequest;
     try {
       if (activeCustom != null) {
+        final systemCustomizations = runtime.status.safeMode
+            ? ''
+            : AgentCustomizationHelper.buildOpenAiSystemCustomizations(
+                customizations,
+              );
         final customKey = await ref
             .read(customProvidersProvider.notifier)
             .readApiKey(activeCustom.id);
@@ -899,6 +947,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           prompt: requestPrompt,
           workspacePath: effectiveWorkspace,
           dangerouslySkipPermissions: skipPerms,
+          systemInstructions: systemCustomizations,
           history: historyTurns,
           attachments: attachments,
           sshHost: sshHost,

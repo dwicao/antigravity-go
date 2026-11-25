@@ -251,6 +251,14 @@ class RuntimePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChann
                 val cwd = call.argument<String>("cwd")
                 runAsync(result) { ctrl.listCustomizations(cwd) }
             }
+            "createSkill" -> {
+                val name = call.argument<String>("name") ?: "custom-skill"
+                val description = call.argument<String>("description") ?: ""
+                val scope = call.argument<String>("scope") ?: "Project"
+                val cwd = call.argument<String>("cwd")
+                val content = call.argument<String>("content")
+                runAsync(result) { ctrl.createSkill(name, description, scope, cwd, content) }
+            }
             "gitDiff" -> {
                 val cwd = call.argument<String>("cwd")
                 runAsync(result) { ctrl.gitDiff(cwd) }
