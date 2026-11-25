@@ -2,6 +2,11 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.32] - 2026-11-25
+
+### Added
+- **`AGENTS.md` & `SKILL.md` Full Support:** Added discovery across Global, Project, and Built-in directories (`~/.agents/`, `~/.gemini/`, `.agents/skills/`, `.gemini/skills/`, `.claude/skills/`), YAML frontmatter parsing (`name`, `description`), in-app creation & editing in `CustomizationsPage`, `/` slash command autocomplete & expansion in chat, `<agents_instructions>` context injection for new `agy`/SSH sessions, and system prompt integration for `/v1` OpenAI-compatible models.
+
 ## [1.0.31] - 2026-11-25
 
 ### Added

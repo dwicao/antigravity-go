@@ -1,7 +1,7 @@
 {
-  "version": "1.0.31",
+  "version": "1.0.32",
   "buildNumber": 1,
-  "tag": "v1.0.31",
+  "tag": "v1.0.32",
   "changelogUrl": "https://github.com/dwicao/antigravity-go/blob/main/CHANGELOG.md",
-  "releaseNotes": "### Added\n- **Inline Image Attachment Previews & Sent Chat Images:** Added `AttachmentPreviewStrip`, `AttachmentImageThumbnail`, and full-screen zoom preview (`showAttachmentImagePreviewDialog`) above the chat text input, multi-image gallery picking (`pickMultiImage`), empty-text image sending, and inline image rendering inside sent user chat bubbles (`MessageBubble`).\n\n### Docs\n- **Complete Feature List & Mobile Screenshot:** Expanded `README.md` with all implemented capabilities through `v1.0.31` and added a mobile screenshot (`docs/screenshots/mobile-chat.jpg`) alongside Samsung DeX."
+  "releaseNotes": "### Added\n- **`AGENTS.md` & `SKILL.md` Full Support:** Added discovery across Global, Project, and Built-in directories (`~/.agents/`, `~/.gemini/`, `.agents/skills/`, `.gemini/skills/`, `.claude/skills/`), YAML frontmatter parsing (`name`, `description`), in-app creation & editing in `CustomizationsPage`, `/` slash command autocomplete & expansion in chat, `<agents_instructions>` context injection for new `agy`/SSH sessions, and system prompt integration for `/v1` OpenAI-compatible models."
 }
