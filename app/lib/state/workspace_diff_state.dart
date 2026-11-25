@@ -5,7 +5,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../remote/ssh_agy_runner.dart';
 import '../runtime/runtime_bridge.dart';
-import 'chat_models.dart';
 import 'chat_state.dart';
 import 'hosts_state.dart';
 import 'projects_state.dart';
