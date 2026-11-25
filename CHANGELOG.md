@@ -2,6 +2,15 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.33] - 2026-11-25
+
+### Fixed
+- **Anchored Mobile Slash (`/`) & `@` Mention Overlays:** Moved `/` command and `@` file autocomplete popups out of the main `Column` into a `Positioned` overlay inside the chat `Stack` (`ChatScreen`), preventing the composer bar from jumping halfway up the screen with blank space below when typing `/` on mobile keyboards.
+
+### Improved
+- **Chat UI & UX Polish:** Refined `ChatComposerBar` and `ChatPickerPill` borders/radii/chevrons, polished `ChatEmptyHero` icon badge and suggestion chips, styled user message bubbles and header dividers, formatted streaming token counts `>= 1,000,000` cleanly as `M tok` (e.g. `106.8M tok`), and hid floating turn-navigation buttons while `/` or `@` menus are open.
+- **Long Chat History & Streaming Performance:** Windowed initial chat rendering to the latest 40 messages with **Load earlier / Show all** controls, wrapped message rows in `RepaintBoundary`, collapsed `MilestoneStackCard` details on older messages (`globalIdx < totalCount - 4`), memoized `_StreamingAgentStatusBar` stats across 1-second timer ticks, skipped `SelectionArea` wrapping while streaming markdown, and coalesced `ChatNotifier` delta UI emits to 33ms batches.
+
 ## [1.0.32] - 2026-11-25
 
 ### Added

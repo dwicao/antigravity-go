@@ -1,7 +1,7 @@
 {
-  "version": "1.0.32",
+  "version": "1.0.33",
   "buildNumber": 1,
-  "tag": "v1.0.32",
+  "tag": "v1.0.33",
   "changelogUrl": "https://github.com/dwicao/antigravity-go/blob/main/CHANGELOG.md",
-  "releaseNotes": "### Added\n- **`AGENTS.md` & `SKILL.md` Full Support:** Added discovery across Global, Project, and Built-in directories (`~/.agents/`, `~/.gemini/`, `.agents/skills/`, `.gemini/skills/`, `.claude/skills/`), YAML frontmatter parsing (`name`, `description`), in-app creation & editing in `CustomizationsPage`, `/` slash command autocomplete & expansion in chat, `<agents_instructions>` context injection for new `agy`/SSH sessions, and system prompt integration for `/v1` OpenAI-compatible models."
+  "releaseNotes": "### Fixed\n- **Anchored Mobile Slash (`/`) & `@` Mention Overlays:** Moved `/` command and `@` file autocomplete popups out of the main `Column` into a `Positioned` overlay inside the chat `Stack` (`ChatScreen`), preventing the composer bar from jumping halfway up the screen with blank space below when typing `/` on mobile keyboards.\n\n### Improved\n- **Chat UI & UX Polish:** Refined `ChatComposerBar` and `ChatPickerPill` borders/radii/chevrons, polished `ChatEmptyHero` icon badge and suggestion chips, styled user message bubbles and header dividers, formatted streaming token counts `>= 1,000,000` cleanly as `M tok` (e.g. `106.8M tok`), and hid floating turn-navigation buttons while `/` or `@` menus are open.\n- **Long Chat History & Streaming Performance:** Windowed initial chat rendering to the latest 40 messages with **Load earlier / Show all** controls, wrapped message rows in `RepaintBoundary`, collapsed `MilestoneStackCard` details on older messages (`globalIdx < totalCount - 4`), memoized `_StreamingAgentStatusBar` stats across 1-second timer ticks, skipped `SelectionArea` wrapping while streaming markdown, and coalesced `ChatNotifier` delta UI emits to 33ms batches."
 }
