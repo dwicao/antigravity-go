@@ -98,7 +98,13 @@ class ModelPricingCatalog {
   }
 
   static double estimateTurnCostUsd(String modelId, TokenUsage usage) {
-    if (usage.totalTokens <= 0) return 0.0;
+    if (usage.totalTokens <= 0 &&
+        usage.inputTokens <= 0 &&
+        usage.outputTokens <= 0 &&
+        usage.thinkingTokens <= 0 &&
+        usage.cacheReadTokens <= 0) {
+      return 0.0;
+    }
     final tier = resolve(modelId);
     final cacheCostRate =
         tier.cacheReadPerMillionUsd ?? (tier.inputPerMillionUsd * 0.25);

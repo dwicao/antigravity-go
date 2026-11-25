@@ -131,6 +131,7 @@ void main() {
       usage: const TokenUsage(
         inputTokens: 10000,
         outputTokens: 2000,
+        totalTokens: 12000,
       ),
     );
 

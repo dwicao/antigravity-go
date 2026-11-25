@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../phone/phone_bridge.dart';
@@ -62,13 +60,9 @@ final devicePolicyProvider =
 );
 
 class DevicePolicyNotifier extends Notifier<DevicePolicyState> {
-  Timer? _pollTimer;
-
   @override
   DevicePolicyState build() {
-    ref.onDispose(() => _pollTimer?.cancel());
     Future.microtask(refresh);
-    _pollTimer = Timer.periodic(const Duration(seconds: 45), (_) => refresh());
     return const DevicePolicyState();
   }
 

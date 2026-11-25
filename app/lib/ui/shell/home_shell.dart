@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../phone/phone_bridge.dart';
 import '../../state/automations_state.dart';
 import '../../state/chat_state.dart';
+import '../../state/device_policy_state.dart';
 import '../../state/performance_state.dart';
 import '../../state/permissions_state.dart';
 import '../../state/runtime_state.dart';
@@ -91,6 +92,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
     _lifecycleState = state;
     if (state == AppLifecycleState.resumed) {
       ref.read(runtimeProvider.notifier).ensureRunningOnResume();
+      ref.read(devicePolicyProvider.notifier).refresh();
     }
   }
 

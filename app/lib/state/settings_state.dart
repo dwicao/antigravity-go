@@ -236,7 +236,9 @@ class SettingsNotifier extends Notifier<AppSettings> {
           : (prefs.getBool('agy_notify_bg_only') ?? true),
       selectedModelId:
           prefs.getString('agy_selected_model') ?? 'Orchestrator (Neon)',
-      reasoningEffort: prefs.getString('agy_effort') ?? 'medium',
+      reasoningEffort: _dirtyKeys.contains('agy_effort')
+          ? state.reasoningEffort
+          : (prefs.getString('agy_effort') ?? 'medium'),
       executionMode: savedExecMode,
       activeAgent: prefs.getString('agy_active_agent') ?? '',
       printTimeoutSeconds: prefs.getInt('agy_print_timeout') ?? 0,
@@ -387,6 +389,7 @@ class SettingsNotifier extends Notifier<AppSettings> {
   }
 
   Future<void> setEffort(String effort) async {
+    _dirtyKeys.add('agy_effort');
     state = state.copyWith(reasoningEffort: effort);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('agy_effort', effort);
