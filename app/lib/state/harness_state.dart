@@ -20,6 +20,8 @@ class HarnessState {
     this.autoCheckpointEnabled = true,
     this.autoVerifyEnabled = false,
     this.guardrailsEnabled = true,
+    this.autoCompactEnabled = true,
+    this.repoMapEnabled = true,
     this.initialized = false,
     this.loading = false,
     this.workspacePath = '',
@@ -27,12 +29,18 @@ class HarnessState {
     this.customVerifyCommand,
     this.features = const <HarnessFeatureItem>[],
     this.progressLog = '',
+    this.repoMapPreview = '',
+    this.hooksConfig = const LifecycleHooksConfig(
+      rules: LifecycleHooksConfig.defaults,
+    ),
   });
 
   final bool loopBreakerEnabled;
   final bool autoCheckpointEnabled;
   final bool autoVerifyEnabled;
   final bool guardrailsEnabled;
+  final bool autoCompactEnabled;
+  final bool repoMapEnabled;
   final bool initialized;
   final bool loading;
   final String workspacePath;
@@ -40,6 +48,8 @@ class HarnessState {
   final String? customVerifyCommand;
   final List<HarnessFeatureItem> features;
   final String progressLog;
+  final String repoMapPreview;
+  final LifecycleHooksConfig hooksConfig;
 
   String? get effectiveVerifyCommand {
     final custom = customVerifyCommand?.trim();
@@ -67,6 +77,8 @@ class HarnessState {
     bool? autoCheckpointEnabled,
     bool? autoVerifyEnabled,
     bool? guardrailsEnabled,
+    bool? autoCompactEnabled,
+    bool? repoMapEnabled,
     bool? initialized,
     bool? loading,
     String? workspacePath,
@@ -76,6 +88,8 @@ class HarnessState {
     bool clearCustomVerify = false,
     List<HarnessFeatureItem>? features,
     String? progressLog,
+    String? repoMapPreview,
+    LifecycleHooksConfig? hooksConfig,
   }) {
     return HarnessState(
       loopBreakerEnabled: loopBreakerEnabled ?? this.loopBreakerEnabled,
@@ -83,6 +97,8 @@ class HarnessState {
           autoCheckpointEnabled ?? this.autoCheckpointEnabled,
       autoVerifyEnabled: autoVerifyEnabled ?? this.autoVerifyEnabled,
       guardrailsEnabled: guardrailsEnabled ?? this.guardrailsEnabled,
+      autoCompactEnabled: autoCompactEnabled ?? this.autoCompactEnabled,
+      repoMapEnabled: repoMapEnabled ?? this.repoMapEnabled,
       initialized: initialized ?? this.initialized,
       loading: loading ?? this.loading,
       workspacePath: workspacePath ?? this.workspacePath,
@@ -94,6 +110,8 @@ class HarnessState {
           : (customVerifyCommand ?? this.customVerifyCommand),
       features: features ?? this.features,
       progressLog: progressLog ?? this.progressLog,
+      repoMapPreview: repoMapPreview ?? this.repoMapPreview,
+      hooksConfig: hooksConfig ?? this.hooksConfig,
     );
   }
 }
@@ -216,6 +234,9 @@ class HarnessNotifier extends Notifier<HarnessState> {
   static const _kAutoCheckpoint = 'agy_harness_auto_checkpoint';
   static const _kAutoVerify = 'agy_harness_auto_verify';
   static const _kGuardrails = 'agy_harness_guardrails';
+  static const _kAutoCompact = 'agy_harness_auto_compact';
+  static const _kRepoMap = 'agy_harness_repo_map';
+  static const _kHooksJson = 'agy_harness_lifecycle_hooks';
   static const _kCustomVerify = 'agy_harness_custom_verify';
 
   @override
@@ -238,14 +259,20 @@ class HarnessNotifier extends Notifier<HarnessState> {
       final prefs = await SharedPreferences.getInstance();
       if (!ref.mounted) return;
       final guardrails = prefs.getBool(_kGuardrails) ?? true;
+      final hooksRaw = prefs.getString(_kHooksJson) ?? '';
+      final hooks = LifecycleHooksConfig.decodeJson(hooksRaw);
       state = state.copyWith(
         loopBreakerEnabled: prefs.getBool(_kLoopBreaker) ?? true,
         autoCheckpointEnabled: prefs.getBool(_kAutoCheckpoint) ?? true,
         autoVerifyEnabled: prefs.getBool(_kAutoVerify) ?? false,
         guardrailsEnabled: guardrails,
+        autoCompactEnabled: prefs.getBool(_kAutoCompact) ?? true,
+        repoMapEnabled: prefs.getBool(_kRepoMap) ?? true,
         customVerifyCommand: prefs.getString(_kCustomVerify),
+        hooksConfig: hooks,
       );
       unawaited(RuntimeBridge.instance.setGuardrailsEnabled(guardrails));
+      unawaited(RuntimeBridge.instance.setLifecycleHooks(hooks.encodeJson()));
     } catch (_) {}
   }
 
@@ -272,6 +299,59 @@ class HarnessNotifier extends Notifier<HarnessState> {
     unawaited(RuntimeBridge.instance.setGuardrailsEnabled(value));
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kGuardrails, value);
+  }
+
+  Future<void> setAutoCompact(bool value) async {
+    state = state.copyWith(autoCompactEnabled: value);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kAutoCompact, value);
+  }
+
+  Future<void> setRepoMapEnabled(bool value) async {
+    state = state.copyWith(repoMapEnabled: value);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kRepoMap, value);
+  }
+
+  Future<void> toggleHookRule(String ruleId, bool enabled) async {
+    final nextRules = state.hooksConfig.rules
+        .map((r) => r.id == ruleId ? r.copyWith(enabled: enabled) : r)
+        .toList(growable: false);
+    final next = LifecycleHooksConfig(rules: nextRules);
+    await _saveHooks(next);
+  }
+
+  Future<void> addCustomHookRule(LifecycleHookRule rule) async {
+    final next = LifecycleHooksConfig(rules: [...state.hooksConfig.rules, rule]);
+    await _saveHooks(next);
+  }
+
+  Future<void> removeHookRule(String ruleId) async {
+    final next = LifecycleHooksConfig(
+      rules: state.hooksConfig.rules.where((r) => r.id != ruleId).toList(),
+    );
+    await _saveHooks(next);
+  }
+
+  Future<void> _saveHooks(LifecycleHooksConfig config) async {
+    state = state.copyWith(hooksConfig: config);
+    final encoded = config.encodeJson();
+    unawaited(RuntimeBridge.instance.setLifecycleHooks(encoded));
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kHooksJson, encoded);
+  }
+
+  Future<String> refreshRepoMap({int maxTokens = 1400}) async {
+    final cwd = _activeWorkspace();
+    if (cwd.isEmpty) return '';
+    final mapText = await RepoMapBuilder.buildFromDirectory(
+      cwd,
+      maxTokens: maxTokens,
+    );
+    if (ref.mounted) {
+      state = state.copyWith(repoMapPreview: mapText);
+    }
+    return mapText;
   }
 
   Future<void> setCustomVerifyCommand(String? command) async {

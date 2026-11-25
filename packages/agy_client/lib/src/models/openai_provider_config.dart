@@ -50,6 +50,18 @@ class OpenAiProviderConfig {
 
   Uri get modelsUri => Uri.parse('$normalizedBaseUrl/models');
 
+  bool get isLocalEndpoint {
+    final host = Uri.tryParse(normalizedBaseUrl)?.host.toLowerCase() ?? '';
+    return host == '127.0.0.1' ||
+        host == 'localhost' ||
+        host == '0.0.0.0' ||
+        host == '::1' ||
+        host.startsWith('192.168.') ||
+        host.startsWith('10.') ||
+        host.endsWith('.local') ||
+        host.endsWith('.ts.net');
+  }
+
   OpenAiProviderConfig copyWith({
     String? name,
     String? baseUrl,

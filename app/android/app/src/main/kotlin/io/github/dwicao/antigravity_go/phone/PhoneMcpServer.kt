@@ -287,6 +287,27 @@ class PhoneMcpServer(
                 onActionLogged("shizuku_exec", cmd.take(64), allowed, res.optString("reason", res.optString("error", "OK")))
                 return res
             }
+            "shizuku_logcat" -> {
+                if (ctx == null) return JSONObject().put("allowed", false).put("error", "Android context unavailable")
+                val tag = payload.optString("tag", "")
+                val lines = payload.optInt("lines", 120)
+                val res = DeviceGatewayHelper.shizukuLogcat(ctx, tag, lines)
+                onActionLogged("shizuku_logcat", tag.ifEmpty { "all ($lines)" }, res.optBoolean("allowed", false), res.optString("error", "OK"))
+                return res
+            }
+            "shizuku_install" -> {
+                if (ctx == null) return JSONObject().put("allowed", false).put("error", "Android context unavailable")
+                val apkPath = payload.optString("apkPath", "")
+                val res = DeviceGatewayHelper.shizukuInstallApk(ctx, apkPath)
+                onActionLogged("shizuku_install", apkPath.take(64), res.optBoolean("allowed", false), res.optString("error", "OK"))
+                return res
+            }
+            "shizuku_ui_dump" -> {
+                if (ctx == null) return JSONObject().put("allowed", false).put("error", "Android context unavailable")
+                val res = DeviceGatewayHelper.shizukuUiDump(ctx)
+                onActionLogged("shizuku_ui_dump", "uiautomator", res.optBoolean("allowed", false), res.optString("error", "OK"))
+                return res
+            }
         }
         return executeAccessibilityAction(action, payload)
     }
@@ -576,6 +597,40 @@ class PhoneMcpServer(
                         .put("required", JSONArray().put("command")),
                 )
 
+            val shizukuLogcatTool = JSONObject()
+                .put("name", "phone_shizuku_logcat")
+                .put("description", "Capture recent Android logcat output via Shizuku rish (with optional tag filter).")
+                .put(
+                    "inputSchema",
+                    JSONObject()
+                        .put("type", "object")
+                        .put(
+                            "properties",
+                            JSONObject()
+                                .put("tag", JSONObject().put("type", "string"))
+                                .put("lines", JSONObject().put("type", "integer")),
+                        ),
+                )
+
+            val shizukuInstallTool = JSONObject()
+                .put("name", "phone_shizuku_install")
+                .put("description", "Install an Android APK file silently via Shizuku rish (pm install -r -d).")
+                .put(
+                    "inputSchema",
+                    JSONObject()
+                        .put("type", "object")
+                        .put("properties", JSONObject().put("apkPath", JSONObject().put("type", "string")))
+                        .put("required", JSONArray().put("apkPath")),
+                )
+
+            val shizukuUiDumpTool = JSONObject()
+                .put("name", "phone_shizuku_ui_dump")
+                .put("description", "Dump the current Android UIAutomator XML hierarchy via Shizuku rish.")
+                .put(
+                    "inputSchema",
+                    JSONObject().put("type", "object").put("properties", JSONObject()),
+                )
+
             return JSONArray()
                 .put(screenTool)
                 .put(tapTool)
@@ -588,6 +643,9 @@ class PhoneMcpServer(
                 .put(toastTool)
                 .put(openUrlTool)
                 .put(shizukuTool)
+                .put(shizukuLogcatTool)
+                .put(shizukuInstallTool)
+                .put(shizukuUiDumpTool)
         }
 
         /**
@@ -658,6 +716,9 @@ class PhoneMcpServer(
                         "phone_toast", "toast" -> "toast"
                         "phone_open_url", "open_url" -> "open_url"
                         "phone_shizuku_exec", "shizuku_exec" -> "shizuku_exec"
+                        "phone_shizuku_logcat", "shizuku_logcat" -> "shizuku_logcat"
+                        "phone_shizuku_install", "shizuku_install" -> "shizuku_install"
+                        "phone_shizuku_ui_dump", "shizuku_ui_dump" -> "shizuku_ui_dump"
                         else -> ""
                     }
                     if (action.isEmpty()) {

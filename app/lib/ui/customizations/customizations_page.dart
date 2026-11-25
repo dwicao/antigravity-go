@@ -43,6 +43,8 @@ class _CustomizationsPageState extends ConsumerState<CustomizationsPage> {
             onSelected: (action) {
               if (action == 'skill') {
                 _createSkillDialog(context);
+              } else if (action == 'mcp_http') {
+                _addHttpMcpDialog(context);
               } else if (action == 'agents_project' || action == 'agents_global') {
                 _createOrEditAgentsMd(
                   context,
@@ -58,6 +60,14 @@ class _CustomizationsPageState extends ConsumerState<CustomizationsPage> {
                   dense: true,
                   leading: Icon(Icons.psychology_outlined),
                   title: Text('New Skill (SKILL.md)'),
+                ),
+              ),
+              PopupMenuItem(
+                value: 'mcp_http',
+                child: ListTile(
+                  dense: true,
+                  leading: Icon(Icons.extension_outlined),
+                  title: Text('Add HTTP/SSE MCP Server'),
                 ),
               ),
               PopupMenuItem(
@@ -354,5 +364,128 @@ class _CustomizationsPageState extends ConsumerState<CustomizationsPage> {
     }
     nameCtrl.dispose();
     descCtrl.dispose();
+  }
+
+  Future<void> _addHttpMcpDialog(BuildContext context) async {
+    final nameCtrl = TextEditingController();
+    final urlCtrl = TextEditingController(text: 'http://127.0.0.1:8080/mcp');
+    final authCtrl = TextEditingController();
+    String? probeStatus;
+    var probing = false;
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialog) => AlertDialog(
+          title: const Text('Add HTTP / SSE MCP Server'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                TextField(
+                  controller: nameCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Server Name',
+                    hintText: 'e.g. github-mcp',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: urlCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'MCP Endpoint URL (HTTP / SSE)',
+                    hintText: 'http://127.0.0.1:8080/mcp',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: authCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Authorization Header (optional)',
+                    hintText: 'Bearer <token>',
+                  ),
+                ),
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  onPressed: probing
+                      ? null
+                      : () async {
+                          final uri = Uri.tryParse(urlCtrl.text.trim());
+                          if (uri == null) {
+                            setDialog(() => probeStatus = 'Invalid URL');
+                            return;
+                          }
+                          setDialog(() {
+                            probing = true;
+                            probeStatus = 'Probing MCP server…';
+                          });
+                          final client = McpHttpClient();
+                          try {
+                            final headers = authCtrl.text.trim().isNotEmpty
+                                ? {'Authorization': authCtrl.text.trim()}
+                                : const <String, String>{};
+                            final res = await client.probeServer(
+                              uri,
+                              headers: headers,
+                            );
+                            if (ctx.mounted) {
+                              setDialog(() {
+                                probing = false;
+                                probeStatus = res.ok
+                                    ? 'Connected (${res.serverName ?? "MCP"}) · ${res.tools.length} tool(s)'
+                                    : 'Failed: ${res.error}';
+                              });
+                            }
+                          } finally {
+                            client.close();
+                          }
+                        },
+                  icon: const Icon(Icons.network_check, size: 16),
+                  label: const Text('Test MCP Handshake'),
+                ),
+                if (probeStatus != null) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    probeStatus!,
+                    style: Theme.of(ctx).textTheme.bodySmall,
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (nameCtrl.text.trim().isEmpty ||
+                    urlCtrl.text.trim().isEmpty) {
+                  return;
+                }
+                Navigator.of(ctx).pop(true);
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (saved == true &&
+        nameCtrl.text.trim().isNotEmpty &&
+        urlCtrl.text.trim().isNotEmpty) {
+      await ref.read(customizationsProvider.notifier).addHttpMcpServer(
+            name: nameCtrl.text,
+            url: urlCtrl.text,
+            authHeader:
+                authCtrl.text.trim().isEmpty ? null : authCtrl.text.trim(),
+          );
+    }
+    nameCtrl.dispose();
+    urlCtrl.dispose();
+    authCtrl.dispose();
   }
 }

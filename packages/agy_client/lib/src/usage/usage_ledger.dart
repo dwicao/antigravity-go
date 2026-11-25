@@ -1,6 +1,7 @@
 import '../models/agy_model.dart';
 import '../models/usage_quota.dart';
 import '../protocol/usage_output_parser.dart';
+import 'model_pricing.dart';
 
 /// A single recorded model turn stored in the local token & rate-limit ledger.
 class UsageLedgerRecord {
@@ -88,6 +89,22 @@ class UsageLedger {
       count++;
     }
     return count;
+  }
+
+  /// Estimates total USD cost across recorded turns within [window].
+  double sumEstimatedCostUsd(
+    Duration window, {
+    QuotaGroup? group,
+    DateTime? now,
+  }) {
+    final cutoff = (now ?? DateTime.now().toUtc()).subtract(window);
+    var sum = 0.0;
+    for (final r in _records) {
+      if (r.timestamp.isBefore(cutoff)) continue;
+      if (group != null && r.quotaGroup != group) continue;
+      sum += ModelPricingCatalog.estimateTurnCostUsd(r.modelId, r.usage);
+    }
+    return sum;
   }
 
   /// Builds a unified [UsageQuotaSnapshot] combining live CLI `/usage` data

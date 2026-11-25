@@ -213,7 +213,7 @@ class _PhoneControlPageState extends ConsumerState<PhoneControlPage> {
                         icon: const Icon(Icons.notifications_active_outlined, size: 16),
                         label: const Text('Test Notify'),
                       ),
-                      if (phone.status.shizukuAvailable)
+                      if (phone.status.shizukuAvailable) ...[
                         OutlinedButton.icon(
                           onPressed: () async {
                             final res = await PhoneBridge.instance.shizukuExec('id');
@@ -227,6 +227,36 @@ class _PhoneControlPageState extends ConsumerState<PhoneControlPage> {
                           icon: const Icon(Icons.admin_panel_settings_outlined, size: 16),
                           label: const Text('Shizuku id'),
                         ),
+                        OutlinedButton.icon(
+                          onPressed: () async {
+                            final res = await PhoneBridge.instance.shizukuLogcat(
+                              lines: 80,
+                            );
+                            if (mounted) {
+                              setState(
+                                () => _gatewayOutput =
+                                    res['output']?.toString() ?? res.toString(),
+                              );
+                            }
+                          },
+                          icon: const Icon(Icons.article_outlined, size: 16),
+                          label: const Text('Logcat'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: () async {
+                            final res =
+                                await PhoneBridge.instance.shizukuUiDump();
+                            if (mounted) {
+                              setState(
+                                () => _gatewayOutput =
+                                    res['output']?.toString() ?? res.toString(),
+                              );
+                            }
+                          },
+                          icon: const Icon(Icons.view_quilt_outlined, size: 16),
+                          label: const Text('UI Dump'),
+                        ),
+                      ],
                     ],
                   ),
                   if (_gatewayOutput != null && _gatewayOutput!.isNotEmpty) ...[

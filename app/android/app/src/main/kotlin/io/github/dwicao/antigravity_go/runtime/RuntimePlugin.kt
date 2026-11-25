@@ -97,6 +97,10 @@ class RuntimePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChann
                 ctrl.setGuardrailsEnabled(call.argument<Boolean>("enabled") ?: true)
                 result.success(null)
             }
+            "setLifecycleHooks" -> {
+                ctrl.setLifecycleHooks(call.argument<String>("hooksJson") ?: "[]")
+                result.success(null)
+            }
             "readSettings" -> runAsync(result) { ctrl.readSettings() }
             "writeSettings" -> {
                 val settings = call.argument<Map<String, Any?>>("settings") ?: emptyMap()
@@ -259,6 +263,12 @@ class RuntimePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChann
                 val content = call.argument<String>("content")
                 runAsync(result) { ctrl.createSkill(name, description, scope, cwd, content) }
             }
+            "addHttpMcpServer" -> {
+                val name = call.argument<String>("name") ?: ""
+                val url = call.argument<String>("url") ?: ""
+                val authHeader = call.argument<String>("authHeader")
+                runAsync(result) { ctrl.addHttpMcpServer(name, url, authHeader) }
+            }
             "gitDiff" -> {
                 val cwd = call.argument<String>("cwd")
                 runAsync(result) { ctrl.gitDiff(cwd) }
@@ -295,6 +305,11 @@ class RuntimePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChann
                 val cwd = call.argument<String>("cwd")
                 val ref = call.argument<String>("ref") ?: ""
                 runAsync(result) { ctrl.restoreCheckpoint(cwd, ref) }
+            }
+            "revertPatch" -> {
+                val cwd = call.argument<String>("cwd")
+                val patchText = call.argument<String>("patchText") ?: ""
+                runAsync(result) { ctrl.revertPatch(cwd, patchText) }
             }
             "initHarnessFiles" -> {
                 val cwd = call.argument<String>("cwd")

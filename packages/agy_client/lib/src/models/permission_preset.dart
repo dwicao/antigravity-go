@@ -1,14 +1,17 @@
-/// Antigravity Desktop permission presets matching `antigravity.google/docs/permissions`.
+/// Antigravity Desktop & Mobile permission profiles:
+/// - `requestReview`: Plan / Ask Only (read-only / always asks before edits or commands)
+/// - `standard`: Standard (auto-read; confirms before file writes or shell commands)
+/// - `turbo`: Auto-Dev (proceeds automatically except destructive commands blocked by SafetyGuard)
 enum AntigravityPermissionPreset {
   requestReview(
     'request-review',
-    'Request Review',
-    'Always asks before commands & file writes',
+    'Plan / Ask Only',
+    'Read-only exploration; always asks before commands & writes',
   ),
   standard(
     'default',
-    'Default',
-    'Allowed in sandbox; asks outside sandbox',
+    'Standard',
+    'Auto-read; confirms before file writes & shell commands',
   ),
   auto(
     'auto',
@@ -17,8 +20,8 @@ enum AntigravityPermissionPreset {
   ),
   turbo(
     'always-proceed',
-    'Turbo',
-    'Always proceed without prompting (full access)',
+    'Auto-Dev',
+    'Runs continuously except destructive commands (rm -rf, mkfs, force-push)',
   );
 
   const AntigravityPermissionPreset(this.cliValue, this.label, this.description);
@@ -26,6 +29,13 @@ enum AntigravityPermissionPreset {
   final String cliValue;
   final String label;
   final String description;
+
+  /// Canonical mobile-friendly profiles surfaced in quick switchers.
+  static const List<AntigravityPermissionPreset> mobileProfiles = [
+    AntigravityPermissionPreset.requestReview,
+    AntigravityPermissionPreset.standard,
+    AntigravityPermissionPreset.turbo,
+  ];
 
   /// On unrooted Android there is no OS terminal sandbox (`auto` fails), so
   /// map `auto` to `turbo` when full proceed is desired or `standard` (`default`).
@@ -36,10 +46,12 @@ enum AntigravityPermissionPreset {
 
   static AntigravityPermissionPreset fromString(String? value) {
     return switch (value) {
-      'request-review' || 'requestReview' => AntigravityPermissionPreset.requestReview,
+      'request-review' || 'requestReview' || 'plan' || 'ask-only' =>
+        AntigravityPermissionPreset.requestReview,
       'default' || 'standard' => AntigravityPermissionPreset.standard,
       'auto' => AntigravityPermissionPreset.auto,
-      'always-proceed' || 'turbo' => AntigravityPermissionPreset.turbo,
+      'always-proceed' || 'turbo' || 'auto-dev' =>
+        AntigravityPermissionPreset.turbo,
       _ => AntigravityPermissionPreset.turbo,
     };
   }

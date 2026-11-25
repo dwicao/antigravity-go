@@ -25,6 +25,9 @@ class _DiffReviewViewState extends ConsumerState<DiffReviewView> {
   String _diff = '';
   String _branch = '';
   List<FileChangeEntry> _changedFiles = const [];
+  List<DiffFileHunks> _fileHunks = const [];
+  final Map<String, DiffHunkStatus> _hunkDecisions = {};
+  bool _swipeHunkMode = true;
   ({String commitHash, String branch, List<FileChangeEntry> files, String output})?
       _lastPushResult;
   bool _loading = false;
@@ -77,27 +80,91 @@ class _DiffReviewViewState extends ConsumerState<DiffReviewView> {
           FileChangeEntry.parseGitNumstat(numstat),
           diff,
         );
+        final hunks = DiffHunkParser.parse(diff);
         if (mounted) {
           setState(() {
             _status = status;
             _diff = diff;
             _branch = branch;
             _changedFiles = parsed;
+            _fileHunks = hunks;
+            _hunkDecisions.clear();
           });
         }
         return;
       }
       final res = await RuntimeBridge.instance.gitDiffDetailed(_activeCwd());
+      final hunks = DiffHunkParser.parse(res.diff.trim());
       if (mounted) {
         setState(() {
           _status = res.status.trim();
           _diff = res.diff.trim();
           _branch = res.branch.trim();
           _changedFiles = res.files;
+          _fileHunks = hunks;
+          _hunkDecisions.clear();
         });
       }
     } finally {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _acceptHunk(DiffHunk hunk) async {
+    setState(() {
+      _hunkDecisions[hunk.id] = DiffHunkStatus.accepted;
+    });
+  }
+
+  Future<void> _rejectHunk(DiffHunk hunk) async {
+    final cwd = _activeCwd();
+    var ok = false;
+    final sshHost = ref.read(hostsProvider).activeSshHost;
+    if (sshHost != null) {
+      final (pwd, key) =
+          await ref.read(hostsProvider.notifier).readCredentials(sshHost.id);
+      final patch = hunk.toSingleHunkPatch();
+      final b64 = patch.replaceAll("'", "'\\''");
+      final out = await SshAgyRunner.instance.runRemoteCommand(
+        host: sshHost,
+        cwd: cwd,
+        password: pwd,
+        privateKeyPem: key,
+        command: "printf '%s' '$b64' | git apply -R --unidiff-zero -",
+      );
+      ok = !out.toLowerCase().contains('error:');
+    } else {
+      final res = await RuntimeBridge.instance.revertPatch(
+        cwd: cwd.isEmpty ? null : cwd,
+        patchText: hunk.toSingleHunkPatch(),
+      );
+      ok = res['ok'] == true;
+      if (!ok && cwd.isNotEmpty) {
+        final fullPath = '$cwd/${hunk.filePath}';
+        final raw = await RuntimeBridge.instance.readFile(fullPath);
+        final reverted = DiffHunkParser.revertHunkInContent(raw, hunk);
+        if (reverted != null) {
+          ok = await RuntimeBridge.instance.writeFile(fullPath, reverted);
+        }
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      _hunkDecisions[hunk.id] = ok
+          ? DiffHunkStatus.rejected
+          : DiffHunkStatus.pending;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          ok
+              ? 'Reverted hunk in ${hunk.filePath}'
+              : 'Could not revert hunk cleanly in ${hunk.filePath}',
+        ),
+      ),
+    );
+    if (ok) {
+      await _load();
     }
   }
 
@@ -256,6 +323,24 @@ class _DiffReviewViewState extends ConsumerState<DiffReviewView> {
                   ],
                 ),
               ),
+              if (_fileHunks.isNotEmpty)
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  constraints: const BoxConstraints.tightFor(width: 34, height: 34),
+                  padding: EdgeInsets.zero,
+                  tooltip: _swipeHunkMode
+                      ? 'Switch to Raw Diff View'
+                      : 'Switch to Swipe Hunk Review',
+                  onPressed: () =>
+                      setState(() => _swipeHunkMode = !_swipeHunkMode),
+                  icon: Icon(
+                    _swipeHunkMode
+                        ? Icons.swipe_outlined
+                        : Icons.view_headline_outlined,
+                    size: 18,
+                    color: _swipeHunkMode ? theme.colorScheme.primary : null,
+                  ),
+                ),
               IconButton(
                 visualDensity: VisualDensity.compact,
                 constraints: const BoxConstraints.tightFor(width: 34, height: 34),
@@ -359,7 +444,46 @@ class _DiffReviewViewState extends ConsumerState<DiffReviewView> {
                             ),
                             const SizedBox(height: 12),
                           ],
-                          if (_diff.isNotEmpty) ...[
+                          if (_diff.isNotEmpty && _swipeHunkMode && _fileHunks.isNotEmpty) ...[
+                            Row(
+                              children: [
+                                Text(
+                                  'Swipe Hunks (→ Accept · ← Revert)',
+                                  style: theme.textTheme.labelMedium?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                const Spacer(),
+                                Text(
+                                  '${_fileHunks.fold<int>(0, (s, f) => s + f.hunks.length)} hunks',
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                    color: semantic.textSecondary,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            for (final fileGroup in _fileHunks) ...[
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 4, top: 4),
+                                child: Text(
+                                  fileGroup.filePath,
+                                  style: theme.textTheme.labelMedium?.copyWith(
+                                    fontFamily: 'monospace',
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                              for (final hunk in fileGroup.hunks)
+                                _SwipeHunkCard(
+                                  hunk: hunk,
+                                  status: _hunkDecisions[hunk.id] ??
+                                      DiffHunkStatus.pending,
+                                  onAccept: () => _acceptHunk(hunk),
+                                  onReject: () => _rejectHunk(hunk),
+                                ),
+                            ],
+                          ] else if (_diff.isNotEmpty) ...[
                             Text(
                               'Diff',
                               style: theme.textTheme.labelMedium?.copyWith(
@@ -391,6 +515,175 @@ class _DiffReviewViewState extends ConsumerState<DiffReviewView> {
                     ),
         ),
       ],
+    );
+  }
+}
+
+class _SwipeHunkCard extends StatelessWidget {
+  const _SwipeHunkCard({
+    required this.hunk,
+    required this.status,
+    required this.onAccept,
+    required this.onReject,
+  });
+
+  final DiffHunk hunk;
+  final DiffHunkStatus status;
+  final VoidCallback onAccept;
+  final VoidCallback onReject;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final semantic = AgySemanticColors.of(context);
+
+    final borderColor = switch (status) {
+      DiffHunkStatus.accepted => semantic.success.withOpacity(0.6),
+      DiffHunkStatus.rejected => semantic.danger.withOpacity(0.6),
+      DiffHunkStatus.pending => semantic.codeWellBorder,
+    };
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Dismissible(
+        key: ValueKey('hunk-${hunk.id}'),
+        confirmDismiss: (dir) async {
+          if (dir == DismissDirection.startToEnd) {
+            onAccept();
+            return false;
+          } else {
+            onReject();
+            return false;
+          }
+        },
+        background: Container(
+          alignment: Alignment.centerLeft,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          decoration: BoxDecoration(
+            color: semantic.success.withOpacity(0.2),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.check_circle_outline, color: semantic.success),
+              const SizedBox(width: 6),
+              Text(
+                'Keep hunk',
+                style: TextStyle(
+                  color: semantic.success,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+        secondaryBackground: Container(
+          alignment: Alignment.centerRight,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          decoration: BoxDecoration(
+            color: semantic.danger.withOpacity(0.2),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              Text(
+                'Revert hunk',
+                style: TextStyle(
+                  color: semantic.danger,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Icon(Icons.undo_rounded, color: semantic.danger),
+            ],
+          ),
+        ),
+        child: Container(
+          decoration: BoxDecoration(
+            color: semantic.codeWellBg,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: borderColor),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '${hunk.header} (+${hunk.addedLines} -${hunk.removedLines})',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    if (status == DiffHunkStatus.accepted)
+                      Icon(Icons.check_circle, size: 16, color: semantic.success)
+                    else ...[
+                      IconButton(
+                        tooltip: 'Keep hunk',
+                        visualDensity: VisualDensity.compact,
+                        constraints: const BoxConstraints.tightFor(
+                          width: 28,
+                          height: 28,
+                        ),
+                        padding: EdgeInsets.zero,
+                        onPressed: onAccept,
+                        icon: Icon(
+                          Icons.check_rounded,
+                          size: 16,
+                          color: semantic.success,
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Revert hunk',
+                        visualDensity: VisualDensity.compact,
+                        constraints: const BoxConstraints.tightFor(
+                          width: 28,
+                          height: 28,
+                        ),
+                        padding: EdgeInsets.zero,
+                        onPressed: onReject,
+                        icon: Icon(
+                          Icons.close_rounded,
+                          size: 16,
+                          color: semantic.danger,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const Divider(height: 1),
+              Padding(
+                padding: const EdgeInsets.all(6),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    for (final line in hunk.lines.take(40))
+                      DiffLineView(line: line),
+                    if (hunk.lines.length > 40)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          '… ${hunk.lines.length - 40} more lines',
+                          style: theme.textTheme.labelSmall,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

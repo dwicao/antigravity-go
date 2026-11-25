@@ -54,6 +54,7 @@ class AppSettings {
     this.disableSlashCommands = false,
     this.continueLast = false,
     this.remoteAgent = '',
+    this.batteryNetworkPolicyEnabled = true,
   });
 
   final ThemeMode themeMode;
@@ -79,6 +80,7 @@ class AppSettings {
   final bool disableSlashCommands;
   final bool continueLast;
   final String remoteAgent;
+  final bool batteryNetworkPolicyEnabled;
 
   bool get dangerouslySkipPermissions =>
       permissionPreset == AntigravityPermissionPreset.turbo;
@@ -107,6 +109,7 @@ class AppSettings {
     bool? disableSlashCommands,
     bool? continueLast,
     String? remoteAgent,
+    bool? batteryNetworkPolicyEnabled,
   }) {
     return AppSettings(
       themeMode: themeMode ?? this.themeMode,
@@ -134,6 +137,8 @@ class AppSettings {
           disableSlashCommands ?? this.disableSlashCommands,
       continueLast: continueLast ?? this.continueLast,
       remoteAgent: remoteAgent ?? this.remoteAgent,
+      batteryNetworkPolicyEnabled:
+          batteryNetworkPolicyEnabled ?? this.batteryNetworkPolicyEnabled,
     );
   }
 }
@@ -239,6 +244,8 @@ class SettingsNotifier extends Notifier<AppSettings> {
           prefs.getBool('agy_disable_slash_commands') ?? false,
       continueLast: prefs.getBool('agy_continue_last') ?? false,
       remoteAgent: prefs.getString('agy_remote_agent') ?? '',
+      batteryNetworkPolicyEnabled:
+          prefs.getBool('agy_battery_network_policy') ?? true,
     );
     if (state.followWallpaperColor) {
       unawaited(refreshDynamicWallpaperColor());
@@ -420,5 +427,11 @@ class SettingsNotifier extends Notifier<AppSettings> {
     state = state.copyWith(remoteAgent: remoteAgent);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('agy_remote_agent', remoteAgent);
+  }
+
+  Future<void> setBatteryNetworkPolicyEnabled(bool enabled) async {
+    state = state.copyWith(batteryNetworkPolicyEnabled: enabled);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('agy_battery_network_policy', enabled);
   }
 }

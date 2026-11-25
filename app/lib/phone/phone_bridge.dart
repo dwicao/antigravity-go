@@ -199,11 +199,89 @@ class PhoneBridge {
     }
   }
 
+  Future<bool> postApprovalNotification({
+    required String turnId,
+    required String requestId,
+    required String allowOptionId,
+    required String denyOptionId,
+    required String title,
+    required String message,
+  }) async {
+    try {
+      return await _method.invokeMethod<bool>('postApprovalNotification', {
+            'turnId': turnId,
+            'requestId': requestId,
+            'allowOptionId': allowOptionId,
+            'denyOptionId': denyOptionId,
+            'title': title,
+            'message': message,
+          }) ??
+          false;
+    } on MissingPluginException {
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> cancelApprovalNotification() async {
+    try {
+      await _method.invokeMethod<void>('cancelApprovalNotification');
+    } catch (_) {}
+  }
+
   Future<Map<String, Object?>> shizukuExec(String command) async {
     try {
       final raw = await _method.invokeMethod<Map<Object?, Object?>>(
         'shizukuExec',
         {'command': command},
+      );
+      if (raw == null) return const {};
+      return raw.map((k, v) => MapEntry(k.toString(), v));
+    } on MissingPluginException {
+      return const {};
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  Future<Map<String, Object?>> shizukuLogcat({
+    String tag = '',
+    int lines = 120,
+  }) async {
+    try {
+      final raw = await _method.invokeMethod<Map<Object?, Object?>>(
+        'shizukuLogcat',
+        {'tag': tag, 'lines': lines},
+      );
+      if (raw == null) return const {};
+      return raw.map((k, v) => MapEntry(k.toString(), v));
+    } on MissingPluginException {
+      return const {};
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  Future<Map<String, Object?>> shizukuInstall(String apkPath) async {
+    try {
+      final raw = await _method.invokeMethod<Map<Object?, Object?>>(
+        'shizukuInstall',
+        {'apkPath': apkPath},
+      );
+      if (raw == null) return const {};
+      return raw.map((k, v) => MapEntry(k.toString(), v));
+    } on MissingPluginException {
+      return const {};
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  Future<Map<String, Object?>> shizukuUiDump() async {
+    try {
+      final raw = await _method.invokeMethod<Map<Object?, Object?>>(
+        'shizukuUiDump',
       );
       if (raw == null) return const {};
       return raw.map((k, v) => MapEntry(k.toString(), v));

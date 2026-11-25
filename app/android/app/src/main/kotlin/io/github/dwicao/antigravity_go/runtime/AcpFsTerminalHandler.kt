@@ -35,8 +35,14 @@ internal class AcpFsTerminalHandler(
                         }
                     }
                     val safety = CommandSafetyGuard.evaluateCommand(command, argStrings)
-                    if (!safety.allowed) {
-                        log("Harness Safety Guard blocked command: ${safety.reason}")
+                    val fullCmd = if (argStrings.isEmpty()) command else "$command ${argStrings.joinToString(" ")}"
+                    val hookDecision = if (safety.allowed) {
+                        LifecycleHooksManager.evaluatePreToolUse("shell", fullCmd)
+                    } else {
+                        safety
+                    }
+                    if (!hookDecision.allowed) {
+                        log("Harness Safety Guard blocked command: ${hookDecision.reason}")
                         AcpConfigAndPromptHelper.sendJson(
                             active.writer,
                             JSONObject()
@@ -46,7 +52,7 @@ internal class AcpFsTerminalHandler(
                                     "error",
                                     JSONObject()
                                         .put("code", -32003)
-                                        .put("message", safety.reason)
+                                        .put("message", hookDecision.reason)
                                 )
                         )
                         return
@@ -290,7 +296,18 @@ internal class AcpFsTerminalHandler(
     ) {
         val path = params?.optString("path", "") ?: ""
         val content = params?.optString("content", "") ?: ""
-        val writeDecision = CommandSafetyGuard.evaluateWritePath(path, active.defaultCwd)
+        val rawDecision = CommandSafetyGuard.evaluateWritePath(path, active.defaultCwd)
+        val writeDecision = if (rawDecision.allowed) {
+            val targetForHook = try {
+                val rf = File(path)
+                if (rf.isAbsolute) rf.canonicalPath else File(active.defaultCwd, path).canonicalPath
+            } catch (_: Throwable) {
+                path
+            }
+            LifecycleHooksManager.evaluatePreToolUse("write_file", targetForHook)
+        } else {
+            rawDecision
+        }
         if (!writeDecision.allowed) {
             log("Harness Safety Guard blocked file write: ${writeDecision.reason}")
             AcpConfigAndPromptHelper.sendJson(
@@ -312,6 +329,15 @@ internal class AcpFsTerminalHandler(
             val file = if (rawFile.isAbsolute) rawFile else File(active.defaultCwd, path)
             file.parentFile?.mkdirs()
             file.writeText(content)
+            executor.submit {
+                LifecycleHooksManager.runPostToolUse(
+                    tool = "write_file",
+                    filePath = file.absolutePath,
+                    cwd = active.defaultCwd,
+                    env = active.env,
+                    log = log,
+                )
+            }
             AcpConfigAndPromptHelper.sendJson(
                 writer,
                 JSONObject()

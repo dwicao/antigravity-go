@@ -1,3 +1,4 @@
+import 'package:agy_client/agy_client.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -10,6 +11,7 @@ import '../../state/permissions_state.dart';
 import '../../state/runtime_state.dart';
 import '../../state/sessions_state.dart';
 import '../../state/settings_state.dart';
+import '../../state/share_inbox_state.dart';
 import '../../state/side_panel_state.dart';
 import '../../state/update_state.dart';
 import '../chat/chat_screen.dart';
@@ -47,6 +49,13 @@ class _HomeShellState extends ConsumerState<HomeShell>
     _systemChannel.setMethodCallHandler((call) async {
       if (call.method == 'onShortcutAction' && call.arguments is String) {
         _handleShortcutAction(call.arguments as String);
+      } else if (call.method == 'onSharedContent' && call.arguments is Map) {
+        final payload = SharedInboxPayload.fromMap(
+          call.arguments as Map<Object?, Object?>,
+        );
+        if (payload != null && mounted) {
+          ref.read(sharedInboxProvider.notifier).enqueue(payload);
+        }
       }
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -55,6 +64,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
       // Touch performanceProvider so saved refresh-rate mode syncs cleanly to MainActivity.
       ref.read(performanceProvider);
       _consumeInitialShortcut();
+      _consumeInitialShare();
       ref.read(automationsProvider.notifier).onAutomationDue = (task) async {
         if (!mounted) return;
         if (ref.read(chatProvider).isStreaming) return;
@@ -90,6 +100,18 @@ class _HomeShellState extends ConsumerState<HomeShell>
           await _systemChannel.invokeMethod<String>('consumePendingAction');
       if (pending != null && pending.isNotEmpty && mounted) {
         _handleShortcutAction(pending);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _consumeInitialShare() async {
+    try {
+      final raw = await _systemChannel.invokeMethod<Map<Object?, Object?>>(
+        'consumePendingShare',
+      );
+      final payload = SharedInboxPayload.fromMap(raw);
+      if (payload != null && mounted) {
+        ref.read(sharedInboxProvider.notifier).enqueue(payload);
       }
     } catch (_) {}
   }
@@ -147,16 +169,53 @@ class _HomeShellState extends ConsumerState<HomeShell>
       }
     });
 
-    ref.listen<Object?>(chatProvider.select((c) => c.pendingPermission),
-        (prev, next) {
+    ref.listen<AgyPermissionRequestEvent?>(
+        chatProvider.select((c) => c.pendingPermission), (prev, next) {
+      if (next == null) {
+        if (prev != null) {
+          PhoneBridge.instance.cancelApprovalNotification();
+        }
+        return;
+      }
       if (prev == null &&
-          next != null &&
           settings.notifyOnApproval &&
           _shouldPostAlert(settings)) {
-        PhoneBridge.instance.postNotification(
-          title: 'Approval needed',
-          message: 'An agent action is waiting for your confirmation.',
-          tag: 'agy_approval_needed',
+        final allowOpt = next.options.firstWhere(
+          (o) =>
+              o.kind.toLowerCase().contains('allow') ||
+              o.optionId.toLowerCase().contains('allow'),
+          orElse: () => next.options.isNotEmpty
+              ? next.options.first
+              : const PermissionOption(
+                  optionId: 'allow',
+                  name: 'Allow',
+                  kind: 'allow_once',
+                ),
+        );
+        final denyOpt = next.options.firstWhere(
+          (o) =>
+              o.kind.toLowerCase().contains('reject') ||
+              o.optionId.toLowerCase().contains('reject') ||
+              o.optionId.toLowerCase().contains('deny'),
+          orElse: () => next.options.length > 1
+              ? next.options.last
+              : const PermissionOption(
+                  optionId: 'reject',
+                  name: 'Deny',
+                  kind: 'reject_once',
+                ),
+        );
+        final turnId = ref.read(chatProvider).activeTurnId ?? '';
+        final detail = next.commandOrPath?.trim().isNotEmpty == true
+            ? '${next.toolName}: ${next.commandOrPath}'
+            : next.title;
+        PhoneBridge.instance.postApprovalNotification(
+          turnId: turnId,
+          requestId: next.requestId.toString(),
+          allowOptionId: allowOpt.optionId,
+          denyOptionId: denyOpt.optionId,
+          title: 'Approval needed (${next.toolName})',
+          message: detail,
         );
       }
     });

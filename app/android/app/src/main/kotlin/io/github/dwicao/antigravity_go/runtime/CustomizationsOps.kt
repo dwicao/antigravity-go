@@ -164,6 +164,38 @@ class CustomizationsOps(
         } catch (_: Throwable) {}
     }
 
+    fun addHttpMcpServer(
+        name: String,
+        url: String,
+        authHeader: String? = null,
+    ): Boolean {
+        val cleanName = name.trim()
+        val cleanUrl = url.trim()
+        if (cleanName.isEmpty() || cleanUrl.isEmpty()) return false
+        return try {
+            val root = if (mcpConfigFile.exists()) {
+                runCatching { JSONObject(mcpConfigFile.readText()) }.getOrElse { JSONObject() }
+            } else {
+                JSONObject()
+            }
+            val servers = root.optJSONObject("mcpServers") ?: JSONObject()
+            val entry = JSONObject()
+                .put("disabled", false)
+                .put("type", "http")
+                .put("serverUrl", cleanUrl)
+                .put("url", cleanUrl)
+            if (!authHeader.isNullOrBlank()) {
+                entry.put("headers", JSONObject().put("Authorization", authHeader.trim()))
+            }
+            servers.put(cleanName, entry)
+            root.put("mcpServers", servers)
+            atomicWriteText(mcpConfigFile, root.toString(2))
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
     fun createSkill(
         name: String,
         description: String,

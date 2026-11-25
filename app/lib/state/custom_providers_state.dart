@@ -11,10 +11,14 @@ class CustomProvidersState {
   const CustomProvidersState({
     this.profiles = const [],
     this.activeProviderId,
+    this.fallbackProviderId,
+    this.hybridOfflineFallbackEnabled = true,
   });
 
   final List<OpenAiProviderConfig> profiles;
   final String? activeProviderId;
+  final String? fallbackProviderId;
+  final bool hybridOfflineFallbackEnabled;
 
   OpenAiProviderConfig? get activeProfile {
     if (activeProviderId == null || activeProviderId!.isEmpty) return null;
@@ -24,16 +28,36 @@ class CustomProvidersState {
     return null;
   }
 
+  OpenAiProviderConfig? get fallbackProfile {
+    if (fallbackProviderId != null && fallbackProviderId!.isNotEmpty) {
+      for (final p in profiles) {
+        if (p.id == fallbackProviderId) return p;
+      }
+    }
+    for (final p in profiles) {
+      if (p.isLocalEndpoint) return p;
+    }
+    return null;
+  }
+
   CustomProvidersState copyWith({
     List<OpenAiProviderConfig>? profiles,
     String? activeProviderId,
     bool clearActiveProvider = false,
+    String? fallbackProviderId,
+    bool clearFallbackProvider = false,
+    bool? hybridOfflineFallbackEnabled,
   }) {
     return CustomProvidersState(
       profiles: profiles ?? this.profiles,
       activeProviderId: clearActiveProvider
           ? null
           : (activeProviderId ?? this.activeProviderId),
+      fallbackProviderId: clearFallbackProvider
+          ? null
+          : (fallbackProviderId ?? this.fallbackProviderId),
+      hybridOfflineFallbackEnabled:
+          hybridOfflineFallbackEnabled ?? this.hybridOfflineFallbackEnabled,
     );
   }
 }
@@ -50,6 +74,8 @@ final activeCustomProviderProvider = Provider<OpenAiProviderConfig?>((ref) {
 class CustomProvidersNotifier extends Notifier<CustomProvidersState> {
   static const _profilesKey = 'agy_openai_providers_v1';
   static const _activeKey = 'agy_active_openai_provider_id';
+  static const _fallbackKey = 'agy_hybrid_fallback_provider_id';
+  static const _hybridEnabledKey = 'agy_hybrid_fallback_enabled';
   static const _secure = FlutterSecureStorage();
   final Map<String, String> _memoryKeyFallback = {};
   Future<void>? _loadFuture;
@@ -66,6 +92,8 @@ class CustomProvidersNotifier extends Notifier<CustomProvidersState> {
       if (!ref.mounted) return;
       final raw = prefs.getString(_profilesKey);
       final active = prefs.getString(_activeKey);
+      final fallback = prefs.getString(_fallbackKey);
+      final hybridEnabled = prefs.getBool(_hybridEnabledKey) ?? true;
       final list = <OpenAiProviderConfig>[];
       if (raw != null && raw.isNotEmpty) {
         try {
@@ -79,7 +107,16 @@ class CustomProvidersNotifier extends Notifier<CustomProvidersState> {
       final validActive = (active != null && list.any((p) => p.id == active))
           ? active
           : null;
-      state = CustomProvidersState(profiles: list, activeProviderId: validActive);
+      final validFallback =
+          (fallback != null && list.any((p) => p.id == fallback))
+              ? fallback
+              : null;
+      state = CustomProvidersState(
+        profiles: list,
+        activeProviderId: validActive,
+        fallbackProviderId: validFallback,
+        hybridOfflineFallbackEnabled: hybridEnabled,
+      );
     } catch (_) {}
   }
 
@@ -167,6 +204,32 @@ class CustomProvidersNotifier extends Notifier<CustomProvidersState> {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_activeKey);
     }
+  }
+
+  Future<void> setFallbackProvider(String? providerId) async {
+    await _loadFuture;
+    if (!ref.mounted) return;
+    final valid = providerId != null &&
+            providerId.isNotEmpty &&
+            state.profiles.any((p) => p.id == providerId)
+        ? providerId
+        : null;
+    state = state.copyWith(
+      fallbackProviderId: valid,
+      clearFallbackProvider: valid == null,
+    );
+    final prefs = await SharedPreferences.getInstance();
+    if (valid == null) {
+      await prefs.remove(_fallbackKey);
+    } else {
+      await prefs.setString(_fallbackKey, valid);
+    }
+  }
+
+  Future<void> setHybridOfflineFallbackEnabled(bool enabled) async {
+    state = state.copyWith(hybridOfflineFallbackEnabled: enabled);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_hybridEnabledKey, enabled);
   }
 
   Future<String?> readApiKey(String id) async {

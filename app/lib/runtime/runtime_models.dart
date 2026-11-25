@@ -104,6 +104,9 @@ class RuntimeEvent {
     this.exitCode,
     this.isPty = false,
     this.backgroundTasks = const [],
+    this.requestId,
+    this.optionId,
+    this.approved,
   });
 
   final String kind;
@@ -116,6 +119,9 @@ class RuntimeEvent {
   final int? exitCode;
   final bool isPty;
   final List<NativeBackgroundTask> backgroundTasks;
+  final String? requestId;
+  final String? optionId;
+  final bool? approved;
 
   factory RuntimeEvent.fromMap(Map<Object?, Object?> map) {
     final kind = map['kind']?.toString() ?? 'log';
@@ -140,6 +146,9 @@ class RuntimeEvent {
       exitCode: (map['exitCode'] as num?)?.toInt(),
       isPty: map['isPty'] as bool? ?? false,
       backgroundTasks: tasks,
+      requestId: map['requestId']?.toString(),
+      optionId: map['optionId']?.toString(),
+      approved: map['approved'] as bool?,
     );
   }
 }

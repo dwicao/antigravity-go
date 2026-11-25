@@ -14,6 +14,7 @@ import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import io.github.dwicao.antigravity_go.runtime.ApprovalNotificationHelper
 import io.github.dwicao.antigravity_go.runtime.RuntimeController
 
 class PhonePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChannel.StreamHandler {
@@ -105,9 +106,58 @@ class PhonePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChannel
                 )
                 result.success(res.optBoolean("ok", false))
             }
+            "postApprovalNotification" -> {
+                val ok = ApprovalNotificationHelper.post(
+                    context = appContext,
+                    turnId = call.argument<String>("turnId") ?: "",
+                    requestId = call.argument<String>("requestId") ?: "",
+                    allowOptionId = call.argument<String>("allowOptionId") ?: "allow",
+                    denyOptionId = call.argument<String>("denyOptionId") ?: "reject",
+                    title = call.argument<String>("title") ?: "Approval needed",
+                    message = call.argument<String>("message") ?: "An agent action needs confirmation.",
+                )
+                result.success(ok)
+            }
+            "cancelApprovalNotification" -> {
+                ApprovalNotificationHelper.cancel(appContext)
+                result.success(true)
+            }
             "shizukuExec" -> {
                 val cmd = call.argument<String>("command") ?: ""
                 val res = DeviceGatewayHelper.shizukuExec(appContext, cmd)
+                result.success(
+                    mapOf(
+                        "ok" to res.optBoolean("ok", false),
+                        "allowed" to res.optBoolean("allowed", false),
+                        "output" to res.optString("output", res.optString("error", res.optString("reason", ""))),
+                    )
+                )
+            }
+            "shizukuLogcat" -> {
+                val tag = call.argument<String>("tag") ?: ""
+                val lines = call.argument<Int>("lines") ?: 120
+                val res = DeviceGatewayHelper.shizukuLogcat(appContext, tag, lines)
+                result.success(
+                    mapOf(
+                        "ok" to res.optBoolean("ok", false),
+                        "allowed" to res.optBoolean("allowed", false),
+                        "output" to res.optString("output", res.optString("error", res.optString("reason", ""))),
+                    )
+                )
+            }
+            "shizukuInstall" -> {
+                val apkPath = call.argument<String>("apkPath") ?: ""
+                val res = DeviceGatewayHelper.shizukuInstallApk(appContext, apkPath)
+                result.success(
+                    mapOf(
+                        "ok" to res.optBoolean("ok", false),
+                        "allowed" to res.optBoolean("allowed", false),
+                        "output" to res.optString("output", res.optString("error", res.optString("reason", ""))),
+                    )
+                )
+            }
+            "shizukuUiDump" -> {
+                val res = DeviceGatewayHelper.shizukuUiDump(appContext)
                 result.success(
                     mapOf(
                         "ok" to res.optBoolean("ok", false),

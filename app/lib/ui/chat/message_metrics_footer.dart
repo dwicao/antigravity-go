@@ -90,6 +90,14 @@ class MessageMetricsFooter extends StatelessWidget {
           label: '$hitPct% hit',
         ));
       }
+      final estUsd = ModelPricingCatalog.estimateTurnCostUsd(
+        message.modelId ?? '',
+        usage,
+      );
+      items.add((
+        icon: Icons.attach_money_rounded,
+        label: ModelPricingCatalog.formatUsd(estUsd),
+      ));
     } else {
       final estChars =
           message.text.trim().length + message.thoughts.trim().length;

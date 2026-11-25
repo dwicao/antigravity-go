@@ -136,4 +136,10 @@ class UsageNotifier extends Notifier<UsageQuotaSnapshot> {
       lastProbeError: _lastProbeError,
     );
   }
+
+  double get fiveHourEstimatedCostUsd =>
+      _ledger.sumEstimatedCostUsd(UsageLedger.fiveHourWindow);
+
+  double get weeklyEstimatedCostUsd =>
+      _ledger.sumEstimatedCostUsd(UsageLedger.weeklyWindow);
 }

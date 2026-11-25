@@ -22,6 +22,7 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import android.widget.Toast
 import io.github.dwicao.antigravity_go.runtime.CommandSafetyGuard
+import io.github.dwicao.antigravity_go.runtime.LogRedactor
 import io.github.dwicao.antigravity_go.runtime.UrlSafetyGuard
 import org.json.JSONArray
 import org.json.JSONObject
@@ -326,5 +327,47 @@ object DeviceGatewayHelper {
         }.getOrElse { e ->
             JSONObject().put("allowed", false).put("error", e.message ?: e.toString())
         }
+    }
+
+    fun shizukuLogcat(context: Context, filterTag: String = "", lines: Int = 120): JSONObject {
+        val clampedLines = lines.coerceIn(10, 500)
+        val cleanTag = filterTag.trim().replace(Regex("""[^a-zA-Z0-9._:*@-]"""), "")
+        val filterSpec = if (cleanTag.isNotEmpty()) "-s $cleanTag:V" else ""
+        val cmd = "logcat -d -t $clampedLines $filterSpec".trim()
+        val res = shizukuExec(context, cmd)
+        if (res.has("output")) {
+            res.put("output", LogRedactor.redact(res.optString("output", "")))
+        }
+        return res
+    }
+
+    fun shizukuInstallApk(context: Context, apkPath: String): JSONObject {
+        val clean = apkPath.trim()
+        if (clean.isEmpty() || !clean.endsWith(".apk", ignoreCase = true)) {
+            return JSONObject().put("allowed", false).put("error", "Path must point to an .apk file")
+        }
+        val file = File(clean)
+        if (!file.isFile) {
+            return JSONObject().put("allowed", false).put("error", "APK file not found: $clean")
+        }
+        val quoted = "'${file.absolutePath.replace("'", "'\\''")}'"
+        return shizukuExec(context, "pm install -r -d $quoted")
+    }
+
+    fun shizukuUiDump(context: Context): JSONObject {
+        val tmpDump = "/data/local/tmp/agy_ui_dump.xml"
+        val res = shizukuExec(context, "uiautomator dump $tmpDump >/dev/null 2>&1 && cat $tmpDump")
+        if (res.optBoolean("ok", false)) {
+            return res
+        }
+        val a11yDump = AgyAccessibilityService.instance?.dumpTree()
+        if (!a11yDump.isNullOrBlank()) {
+            return JSONObject()
+                .put("allowed", true)
+                .put("ok", true)
+                .put("source", "accessibility")
+                .put("output", a11yDump.take(16_384))
+        }
+        return res
     }
 }

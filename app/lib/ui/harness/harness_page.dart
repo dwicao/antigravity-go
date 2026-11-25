@@ -293,6 +293,43 @@ class _HarnessPageState extends ConsumerState<HarnessPage> {
                       ref.read(harnessProvider.notifier).setAutoVerify(v),
                 ),
                 const Divider(height: 1),
+                SwitchListTile.adaptive(
+                  dense: true,
+                  secondary: const Icon(Icons.compress_rounded, size: 20),
+                  title: const Text('Auto-Compact History'),
+                  subtitle: const Text(
+                    'Automatically summarizes context when usage exceeds 80%',
+                  ),
+                  value: harness.autoCompactEnabled,
+                  onChanged: (v) =>
+                      ref.read(harnessProvider.notifier).setAutoCompact(v),
+                ),
+                const Divider(height: 1),
+                SwitchListTile.adaptive(
+                  dense: true,
+                  secondary: const Icon(Icons.account_tree_outlined, size: 20),
+                  title: const Text('Smart Repo Map Context'),
+                  subtitle: const Text(
+                    'Injects structural class/function symbols on new sessions to save tokens',
+                  ),
+                  value: harness.repoMapEnabled,
+                  onChanged: (v) =>
+                      ref.read(harnessProvider.notifier).setRepoMapEnabled(v),
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  dense: true,
+                  leading: const Icon(Icons.map_outlined, size: 20),
+                  title: const Text('Preview Repo Map'),
+                  subtitle: Text(
+                    harness.repoMapPreview.isEmpty
+                        ? 'Tap to scan workspace symbols'
+                        : '${harness.repoMapPreview.split('\n').length} lines indexed',
+                  ),
+                  trailing: const Icon(Icons.play_arrow_rounded, size: 20),
+                  onTap: () => _showRepoMapDialog(context),
+                ),
+                const Divider(height: 1),
                 ListTile(
                   dense: true,
                   leading: const Icon(Icons.verified_outlined, size: 20),
@@ -305,6 +342,58 @@ class _HarnessPageState extends ConsumerState<HarnessPage> {
                   trailing: const Icon(Icons.edit_outlined, size: 18),
                   onTap: () => _promptCustomVerify(harness),
                 ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // 2b. Lifecycle Hooks (PreToolUse / PostToolUse)
+          Card(
+            margin: EdgeInsets.zero,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 12, 8, 4),
+                  child: Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          'Lifecycle Hooks (PreToolUse / PostToolUse)',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                      TextButton.icon(
+                        onPressed: () => _promptAddHookDialog(context),
+                        icon: const Icon(Icons.add, size: 16),
+                        label: const Text('Add Hook'),
+                      ),
+                    ],
+                  ),
+                ),
+                for (final rule in harness.hooksConfig.rules) ...[
+                  const Divider(height: 1),
+                  SwitchListTile.adaptive(
+                    dense: true,
+                    secondary: Icon(
+                      rule.phase == LifecycleHookPhase.preToolUse
+                          ? Icons.shield_outlined
+                          : Icons.build_circle_outlined,
+                      size: 19,
+                    ),
+                    title: Text(rule.name),
+                    subtitle: Text(
+                      '${rule.phase.label} · ${rule.toolMatcher} · ${rule.pathPattern}'
+                      '${rule.command.isNotEmpty ? " → ${rule.command}" : ""}',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    value: rule.enabled,
+                    onChanged: (v) => ref
+                        .read(harnessProvider.notifier)
+                        .toggleHookRule(rule.id, v),
+                  ),
+                ],
               ],
             ),
           ),
@@ -503,5 +592,157 @@ class _HarnessPageState extends ConsumerState<HarnessPage> {
         ],
       ),
     );
+  }
+
+  Future<void> _showRepoMapDialog(BuildContext context) async {
+    final mapText =
+        await ref.read(harnessProvider.notifier).refreshRepoMap();
+    if (!context.mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Smart Context Repo Map'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: SelectableText(
+              mapText.isEmpty
+                  ? 'No supported source files found in active workspace.'
+                  : mapText,
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _promptAddHookDialog(BuildContext context) async {
+    final nameCtrl = TextEditingController();
+    final patternCtrl = TextEditingController(text: '*.dart');
+    final cmdCtrl = TextEditingController(text: 'dart format {file}');
+    var phase = LifecycleHookPhase.postToolUse;
+    var action = LifecycleHookAction.command;
+    var toolMatcher = 'write_file';
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialog) => AlertDialog(
+          title: const Text('Add Lifecycle Hook'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nameCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Hook Name',
+                    hintText: 'e.g. Block secrets or Auto-format',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<LifecycleHookPhase>(
+                  value: phase,
+                  decoration: const InputDecoration(labelText: 'Phase'),
+                  items: const [
+                    DropdownMenuItem(
+                      value: LifecycleHookPhase.preToolUse,
+                      child: Text('PreToolUse'),
+                    ),
+                    DropdownMenuItem(
+                      value: LifecycleHookPhase.postToolUse,
+                      child: Text('PostToolUse'),
+                    ),
+                  ],
+                  onChanged: (v) {
+                    if (v != null) {
+                      setDialog(() {
+                        phase = v;
+                        action = v == LifecycleHookPhase.preToolUse
+                            ? LifecycleHookAction.block
+                            : LifecycleHookAction.command;
+                      });
+                    }
+                  },
+                ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String>(
+                  value: toolMatcher,
+                  decoration: const InputDecoration(labelText: 'Tool Matcher'),
+                  items: const [
+                    DropdownMenuItem(value: 'write_file', child: Text('write_file')),
+                    DropdownMenuItem(value: 'shell', child: Text('shell')),
+                    DropdownMenuItem(value: '*', child: Text('All (*)')),
+                  ],
+                  onChanged: (v) {
+                    if (v != null) setDialog(() => toolMatcher = v);
+                  },
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: patternCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Path / Pattern (comma-separated)',
+                    hintText: '*.env,*.jks or *.dart',
+                  ),
+                ),
+                if (action == LifecycleHookAction.command) ...[
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: cmdCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Shell Command ({file} placeholder)',
+                      hintText: 'dart format {file}',
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Add'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (saved == true && nameCtrl.text.trim().isNotEmpty && context.mounted) {
+      final id =
+          'hook-${DateTime.now().millisecondsSinceEpoch}';
+      await ref.read(harnessProvider.notifier).addCustomHookRule(
+            LifecycleHookRule(
+              id: id,
+              name: nameCtrl.text.trim(),
+              phase: phase,
+              toolMatcher: toolMatcher,
+              pathPattern: patternCtrl.text.trim().isEmpty
+                  ? '*'
+                  : patternCtrl.text.trim(),
+              action: action,
+              command: action == LifecycleHookAction.command
+                  ? cmdCtrl.text.trim()
+                  : '',
+              reason: action == LifecycleHookAction.block
+                  ? 'Blocked by PreToolUse hook "${nameCtrl.text.trim()}".'
+                  : '',
+            ),
+          );
+    }
+    nameCtrl.dispose();
+    patternCtrl.dispose();
+    cmdCtrl.dispose();
   }
 }

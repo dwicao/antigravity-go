@@ -3,6 +3,7 @@ package io.github.dwicao.antigravity_go.runtime
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.security.MessageDigest
 
 /**
  * Workspace filesystem browsing, Git diff/commit/checkpoint, and `.agy-harness` helpers
@@ -141,48 +142,146 @@ internal class WorkspaceOps(
         false
     }
 
+    private fun shadowGitDir(workDir: File): File {
+        val canonical = runCatching { workDir.canonicalPath }.getOrElse { workDir.absolutePath }
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(canonical.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+            .take(20)
+        val root = File(tmpDir.parentFile ?: tmpDir, "shadow_git")
+        return File(root, digest)
+    }
+
+    private fun gitCmd(shadowDir: File?, vararg args: String): List<String> {
+        return if (shadowDir != null) {
+            listOf("git", "--git-dir=${shadowDir.absolutePath}") + args.toList()
+        } else {
+            listOf("git") + args.toList()
+        }
+    }
+
+    private fun ensureShadowGitInitialized(workDir: File, shadowDir: File): String? {
+        if (!shadowDir.exists()) {
+            shadowDir.mkdirs()
+            val (initCode, _) = runCapturedArgs(
+                listOf("git", "init", "--bare", shadowDir.absolutePath),
+                workDir,
+                emptyMap(),
+                30,
+            )
+            if (initCode != 0) return null
+            val infoDir = File(shadowDir, "info").apply { mkdirs() }
+            File(infoDir, "exclude").writeText(
+                ".git/\n.gradle/\nbuild/\nnode_modules/\n.dart_tool/\n.agy-harness/\n",
+            )
+            runCapturedArgs(
+                listOf("git", "--git-dir=${shadowDir.absolutePath}", "config", "user.name", "Antigravity"),
+                workDir,
+                emptyMap(),
+                15,
+            )
+            runCapturedArgs(
+                listOf("git", "--git-dir=${shadowDir.absolutePath}", "config", "user.email", "harness@antigravity.local"),
+                workDir,
+                emptyMap(),
+                15,
+            )
+        }
+        val (headCode, headOut) = runCapturedArgs(
+            gitCmd(shadowDir, "rev-parse", "--verify", "HEAD"),
+            workDir,
+            emptyMap(),
+            30,
+        )
+        if (headCode == 0 && headOut.trim().isNotEmpty()) {
+            return headOut.trim()
+        }
+        // Seed initial shadow commit so subsequent turns have a valid parent.
+        val tmpIdx = File(tmpDir, "agy-shadow-init-${System.nanoTime()}.idx")
+        return try {
+            val env = mapOf(
+                "GIT_INDEX_FILE" to tmpIdx.absolutePath,
+                "GIT_WORK_TREE" to workDir.absolutePath,
+            )
+            runCapturedArgs(gitCmd(shadowDir, "add", "-A"), workDir, env, 30)
+            val (treeCode, treeOut) = runCapturedArgs(gitCmd(shadowDir, "write-tree"), workDir, env, 30)
+            val treeSha = treeOut.trim()
+            if (treeCode != 0 || treeSha.isEmpty()) return null
+            val (commitCode, commitOut) = runCapturedArgs(
+                gitCmd(shadowDir, "commit-tree", treeSha, "-m", "agy-shadow-init"),
+                workDir,
+                emptyMap(),
+                30,
+            )
+            val sha = commitOut.trim()
+            if (commitCode == 0 && sha.isNotEmpty()) {
+                runCapturedArgs(gitCmd(shadowDir, "update-ref", "HEAD", sha), workDir, emptyMap(), 15)
+                sha
+            } else {
+                null
+            }
+        } finally {
+            runCatching { if (tmpIdx.exists()) tmpIdx.delete() }
+        }
+    }
+
     fun createCheckpoint(cwd: String?): Map<String, Any?> {
         val dir = if (!cwd.isNullOrBlank()) File(cwd) else workspaceDir
+        if (!dir.exists() || !dir.isDirectory) {
+            return mapOf("ok" to false, "reason" to "Workspace directory does not exist")
+        }
         val (insideCode, insideOut) = runCapturedArgs(
             listOf("git", "rev-parse", "--is-inside-work-tree"),
             dir,
             emptyMap(),
             30,
         )
-        if (insideCode != 0 || insideOut.trim() != "true") {
-            return mapOf("ok" to false, "reason" to "Not a git repository")
+        val useShadow = insideCode != 0 || insideOut.trim() != "true"
+        val shadowDir = if (useShadow) shadowGitDir(dir) else null
+
+        val headSha = if (shadowDir != null) {
+            ensureShadowGitInitialized(dir, shadowDir)
+                ?: return mapOf("ok" to false, "reason" to "Failed to initialize shadow git")
+        } else {
+            val (headCode, headOut) = runCapturedArgs(
+                listOf("git", "rev-parse", "--verify", "HEAD"),
+                dir,
+                emptyMap(),
+                30,
+            )
+            val sha = headOut.trim()
+            if (headCode != 0 || sha.isEmpty()) {
+                return mapOf("ok" to false, "reason" to "Repository has no commits yet")
+            }
+            sha
         }
-        val (headCode, headOut) = runCapturedArgs(
-            listOf("git", "rev-parse", "--verify", "HEAD"),
-            dir,
-            emptyMap(),
-            30,
-        )
-        val headSha = headOut.trim()
-        if (headCode != 0 || headSha.isEmpty()) {
-            return mapOf("ok" to false, "reason" to "Repository has no commits yet")
-        }
+
         val tmpIdx = File(tmpDir, "agy-cp-${System.nanoTime()}.idx")
         return try {
-            val env = mapOf("GIT_INDEX_FILE" to tmpIdx.absolutePath)
-            runCapturedArgs(listOf("git", "read-tree", headSha), dir, env, 30)
-            runCapturedArgs(listOf("git", "add", "-A"), dir, env, 30)
-            val (treeCode, treeOut) = runCapturedArgs(listOf("git", "write-tree"), dir, env, 30)
+            val env = buildMap {
+                put("GIT_INDEX_FILE", tmpIdx.absolutePath)
+                if (shadowDir != null) {
+                    put("GIT_WORK_TREE", dir.absolutePath)
+                }
+            }
+            runCapturedArgs(gitCmd(shadowDir, "read-tree", headSha), dir, env, 30)
+            runCapturedArgs(gitCmd(shadowDir, "add", "-A"), dir, env, 30)
+            val (treeCode, treeOut) = runCapturedArgs(gitCmd(shadowDir, "write-tree"), dir, env, 30)
             val treeSha = treeOut.trim()
             if (treeCode != 0 || treeSha.isEmpty()) {
-                return mapOf("ok" to true, "ref" to headSha, "head" to headSha, "dirty" to false)
+                return mapOf("ok" to true, "ref" to headSha, "head" to headSha, "dirty" to false, "shadow" to useShadow)
             }
             val (headTreeCode, headTreeOut) = runCapturedArgs(
-                listOf("git", "rev-parse", "${headSha}^{tree}"),
+                gitCmd(shadowDir, "rev-parse", "${headSha}^{tree}"),
                 dir,
                 emptyMap(),
                 30,
             )
             if (headTreeCode == 0 && headTreeOut.trim() == treeSha) {
-                return mapOf("ok" to true, "ref" to headSha, "head" to headSha, "dirty" to false)
+                return mapOf("ok" to true, "ref" to headSha, "head" to headSha, "dirty" to false, "shadow" to useShadow)
             }
             val (commitCode, commitOut) = runCapturedArgs(
-                listOf("git", "commit-tree", treeSha, "-p", headSha, "-m", "agy-checkpoint"),
+                gitCmd(shadowDir, "commit-tree", treeSha, "-p", headSha, "-m", "agy-checkpoint"),
                 dir,
                 emptyMap(),
                 30,
@@ -194,6 +293,7 @@ internal class WorkspaceOps(
                 "ref" to ref,
                 "head" to headSha,
                 "dirty" to (ref != headSha),
+                "shadow" to useShadow,
             )
         } finally {
             runCatching { if (tmpIdx.exists()) tmpIdx.delete() }
@@ -206,8 +306,20 @@ internal class WorkspaceOps(
             return mapOf("ok" to false, "message" to "Invalid checkpoint ref")
         }
         val dir = if (!cwd.isNullOrBlank()) File(cwd) else workspaceDir
+        val (insideCode, insideOut) = runCapturedArgs(
+            listOf("git", "rev-parse", "--is-inside-work-tree"),
+            dir,
+            emptyMap(),
+            30,
+        )
+        val useStandard = insideCode == 0 && insideOut.trim() == "true"
+        val shadowDir = if (!useStandard) shadowGitDir(dir).takeIf { it.exists() } else null
+        if (!useStandard && shadowDir == null) {
+            return mapOf("ok" to false, "message" to "No git or shadow git snapshot found")
+        }
+
         val (verifyCode, verifyOut) = runCapturedArgs(
-            listOf("git", "rev-parse", "--verify", "$cleanRef^{commit}"),
+            gitCmd(shadowDir, "rev-parse", "--verify", "$cleanRef^{commit}"),
             dir,
             emptyMap(),
             30,
@@ -217,16 +329,17 @@ internal class WorkspaceOps(
         }
 
         val (_, subjectOut) = runCapturedArgs(
-            listOf("git", "log", "-1", "--format=%s", cleanRef),
+            gitCmd(shadowDir, "log", "-1", "--format=%s", cleanRef),
             dir,
             emptyMap(),
             30,
         )
-        val isSnapshot = subjectOut.trim() == "agy-checkpoint"
+        val isSnapshot = subjectOut.trim() == "agy-checkpoint" || subjectOut.trim() == "agy-shadow-init"
 
         if (isSnapshot) {
+            val env = if (shadowDir != null) mapOf("GIT_WORK_TREE" to dir.absolutePath) else emptyMap()
             val (parentCode, parentOut) = runCapturedArgs(
-                listOf("git", "rev-parse", "--verify", "$cleanRef^1"),
+                gitCmd(shadowDir, "rev-parse", "--verify", "$cleanRef^1"),
                 dir,
                 emptyMap(),
                 30,
@@ -236,35 +349,37 @@ internal class WorkspaceOps(
             } else {
                 cleanRef
             }
-            val (resetCode, resetOut) = runCapturedArgs(
-                listOf("git", "reset", "--hard", baseHead),
-                dir,
-                emptyMap(),
-                30,
-            )
-            if (resetCode != 0) {
-                return mapOf("ok" to false, "ref" to cleanRef, "output" to resetOut.trim())
+            if (shadowDir == null) {
+                val (resetCode, resetOut) = runCapturedArgs(
+                    listOf("git", "reset", "--hard", baseHead),
+                    dir,
+                    emptyMap(),
+                    30,
+                )
+                if (resetCode != 0) {
+                    return mapOf("ok" to false, "ref" to cleanRef, "output" to resetOut.trim())
+                }
             }
             val (readTreeCode, readTreeOut) = runCapturedArgs(
-                listOf("git", "read-tree", "--reset", "-u", cleanRef),
+                gitCmd(shadowDir, "read-tree", "--reset", "-u", cleanRef),
                 dir,
-                emptyMap(),
+                env,
                 30,
             )
             if (readTreeCode != 0) {
                 return mapOf("ok" to false, "ref" to cleanRef, "output" to readTreeOut.trim())
             }
             val (_, snapFilesRaw) = runCapturedArgs(
-                listOf("git", "ls-tree", "-r", "--name-only", cleanRef),
+                gitCmd(shadowDir, "ls-tree", "-r", "--name-only", cleanRef),
                 dir,
-                emptyMap(),
+                env,
                 30,
             )
             val snapFiles = snapFilesRaw.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toSet()
             val (_, untrackedRaw) = runCapturedArgs(
-                listOf("git", "ls-files", "--others", "--exclude-standard"),
+                gitCmd(shadowDir, "ls-files", "--others", "--exclude-standard"),
                 dir,
-                emptyMap(),
+                env,
                 30,
             )
             for (rel in untrackedRaw.lineSequence()) {
@@ -273,8 +388,17 @@ internal class WorkspaceOps(
                     runCatching { File(dir, p).delete() }
                 }
             }
-            runCapturedArgs(listOf("git", "reset", "--mixed", baseHead), dir, emptyMap(), 30)
-            return mapOf("ok" to true, "ref" to cleanRef, "output" to "Restored snapshot $cleanRef")
+            if (shadowDir == null) {
+                runCapturedArgs(listOf("git", "reset", "--mixed", baseHead), dir, emptyMap(), 30)
+            } else {
+                runCapturedArgs(gitCmd(shadowDir, "update-ref", "HEAD", cleanRef), dir, emptyMap(), 15)
+            }
+            return mapOf(
+                "ok" to true,
+                "ref" to cleanRef,
+                "shadow" to (shadowDir != null),
+                "output" to "Restored snapshot $cleanRef",
+            )
         }
 
         val (resetCode, resetOut) = runCapturedArgs(
@@ -289,6 +413,29 @@ internal class WorkspaceOps(
             "ref" to cleanRef,
             "output" to resetOut.trim(),
         )
+    }
+
+    fun revertPatch(cwd: String?, patchText: String): Map<String, Any?> {
+        val dir = if (!cwd.isNullOrBlank()) File(cwd) else workspaceDir
+        if (patchText.isBlank()) {
+            return mapOf("ok" to false, "message" to "Empty patch")
+        }
+        val tmpPatch = File(tmpDir, "agy-revert-${System.nanoTime()}.patch")
+        return try {
+            tmpPatch.writeText(patchText)
+            val (code, out) = runCapturedArgs(
+                listOf("git", "apply", "-R", "--unidiff-zero", tmpPatch.absolutePath),
+                dir,
+                emptyMap(),
+                30,
+            )
+            mapOf(
+                "ok" to (code == 0),
+                "output" to out.trim(),
+            )
+        } finally {
+            runCatching { if (tmpPatch.exists()) tmpPatch.delete() }
+        }
     }
 
     fun initHarnessFiles(

@@ -67,6 +67,17 @@ class RuntimeBridge {
     }
   }
 
+  Future<void> setLifecycleHooks(String hooksJson) async {
+    try {
+      await _method.invokeMethod<void>(
+        'setLifecycleHooks',
+        {'hooksJson': hooksJson},
+      );
+    } on MissingPluginException {
+      // No-op in headless widget tests.
+    }
+  }
+
   Future<List<String>> getLogs() async {
     try {
       final raw = await _method.invokeMethod<List<Object?>>('logs');
@@ -420,6 +431,26 @@ class RuntimeBridge {
     }
   }
 
+  Future<bool> writeFile(String path, String content) =>
+      writeWorkspaceFile(path, content);
+
+  Future<bool> addHttpMcpServer({
+    required String name,
+    required String url,
+    String? authHeader,
+  }) async {
+    try {
+      return await _method.invokeMethod<bool>('addHttpMcpServer', {
+            'name': name,
+            'url': url,
+            'authHeader': ?authHeader,
+          }) ??
+          false;
+    } on MissingPluginException {
+      return false;
+    }
+  }
+
   Future<List<CustomizationItem>> listCustomizations(String cwd) async {
     try {
       final raw = await _method.invokeMethod<List<Object?>>(
@@ -732,6 +763,22 @@ class RuntimeBridge {
       final raw = await _method.invokeMethod<Map<Object?, Object?>>(
         'restoreCheckpoint',
         {'cwd': ?cwd, 'ref': ref},
+      );
+      if (raw == null) return const {'ok': false};
+      return raw.map((k, v) => MapEntry(k.toString(), v));
+    } on MissingPluginException {
+      return const {'ok': false, 'message': 'Native runtime unavailable'};
+    }
+  }
+
+  Future<Map<String, Object?>> revertPatch({
+    String? cwd,
+    required String patchText,
+  }) async {
+    try {
+      final raw = await _method.invokeMethod<Map<Object?, Object?>>(
+        'revertPatch',
+        {'cwd': ?cwd, 'patchText': patchText},
       );
       if (raw == null) return const {'ok': false};
       return raw.map((k, v) => MapEntry(k.toString(), v));

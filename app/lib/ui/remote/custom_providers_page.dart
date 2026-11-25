@@ -73,6 +73,53 @@ class CustomProvidersPage extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: 12),
+          if (providers.profiles.isNotEmpty) ...[
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SwitchListTile.adaptive(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Hybrid Cloud + Local Fallback'),
+                      subtitle: const Text(
+                        'Automatically route to a local Ollama / llama.cpp profile when offline',
+                      ),
+                      value: providers.hybridOfflineFallbackEnabled,
+                      onChanged: (v) => ref
+                          .read(customProvidersProvider.notifier)
+                          .setHybridOfflineFallbackEnabled(v),
+                    ),
+                    if (providers.hybridOfflineFallbackEnabled)
+                      DropdownButtonFormField<String?>(
+                        value: providers.fallbackProviderId,
+                        decoration: const InputDecoration(
+                          labelText: 'Offline Fallback Profile',
+                          isDense: true,
+                        ),
+                        items: [
+                          const DropdownMenuItem<String?>(
+                            value: null,
+                            child: Text('Auto-pick first local endpoint'),
+                          ),
+                          for (final p in providers.profiles)
+                            DropdownMenuItem<String?>(
+                              value: p.id,
+                              child: Text('${p.name} (${p.modelId})'),
+                            ),
+                        ],
+                        onChanged: (v) => ref
+                            .read(customProvidersProvider.notifier)
+                            .setFallbackProvider(v),
+                      ),
+                    const SizedBox(height: 6),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
           if (providers.profiles.isEmpty) ...[
             Card(
               child: Padding(

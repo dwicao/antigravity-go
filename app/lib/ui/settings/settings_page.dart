@@ -576,6 +576,17 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                           .read(settingsProvider.notifier)
                           .setNotifyBackgroundOnly(v),
                     ),
+                    SwitchListTile.adaptive(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Battery & network-aware eco policy'),
+                      subtitle: const Text(
+                        'Warn when battery < 15% or on cellular data before heavy tool runs',
+                      ),
+                      value: settings.batteryNetworkPolicyEnabled,
+                      onChanged: (v) => ref
+                          .read(settingsProvider.notifier)
+                          .setBatteryNetworkPolicyEnabled(v),
+                    ),
                   ],
                 ),
               ),

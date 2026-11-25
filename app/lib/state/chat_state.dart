@@ -17,6 +17,7 @@ import 'chat_turn_helpers.dart';
 import 'ci_watch_state.dart';
 import 'custom_providers_state.dart';
 import 'customizations_state.dart';
+import 'device_policy_state.dart';
 import 'harness_state.dart';
 import 'hosts_state.dart';
 import 'permissions_state.dart';
@@ -70,6 +71,8 @@ class _SessionTurnRuntime {
 
 class ChatNotifier extends Notifier<ChatThreadState> {
   StreamSubscription<RuntimeEvent>? _wakeupSub;
+  StreamSubscription<RuntimeEvent>? _notifPermSub;
+  final Set<String> _autoCompactingSessions = <String>{};
   String? _loadedSessionId;
   final Map<String, _SessionTurnRuntime> _sessionRuntimes = {};
   final Map<String, String> _wakeupAssistantIds = {};
@@ -322,11 +325,16 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       _wakeupFinalizeTimers.clear();
       _wakeupAssistantIds.clear();
       _wakeupSub?.cancel();
+      _notifPermSub?.cancel();
     });
     _wakeupSub?.cancel();
     _wakeupSub = RuntimeBridge.instance.events
         .where((e) => e.kind == 'acp_wakeup' && e.stdoutLine != null)
         .listen(_handleAcpWakeup);
+    _notifPermSub?.cancel();
+    _notifPermSub = RuntimeBridge.instance.events
+        .where((e) => e.kind == 'notification_permission_action')
+        .listen(_handleNotificationPermissionEvent);
     Future.microtask(() {
       if (!ref.mounted) return;
       ref.read(ciWatchProvider.notifier).onCompletedCallback =
@@ -359,6 +367,49 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       Future.microtask(() => _loadMessages(activeId));
     }
     return const ChatThreadState();
+  }
+
+  void _handleNotificationPermissionEvent(RuntimeEvent evt) {
+    if (!ref.mounted) return;
+    final turnId = evt.turnId ?? '';
+    final optionId = evt.optionId ?? '';
+    if (turnId.isEmpty || optionId.isEmpty) return;
+    String? matchingSessionId;
+    for (final entry in _sessionRuntimes.entries) {
+      if (entry.value.turnId == turnId) {
+        matchingSessionId = entry.key;
+        break;
+      }
+    }
+    if (matchingSessionId != null) {
+      final rt = _sessionRuntimes[matchingSessionId];
+      final perm = _pendingPermissionsBySession.remove(matchingSessionId);
+      _resetWatchdog(matchingSessionId);
+      if (perm != null && rt != null) {
+        if (rt.isCustomOpenAi) {
+          unawaited(
+            OpenAiCompatRunner.instance.resolvePermission(
+              turnId: turnId,
+              requestId: perm.requestId,
+              optionId: optionId,
+            ),
+          );
+        } else if (rt.isSsh) {
+          unawaited(
+            SshAgyRunner.instance.respondToPermission(
+              turnId: turnId,
+              requestId: perm.requestId,
+              optionId: optionId,
+            ),
+          );
+        }
+      }
+      if (_loadedSessionId == matchingSessionId) {
+        state = state.copyWith(clearPermission: true);
+      }
+    } else if (state.activeTurnId == turnId) {
+      state = state.copyWith(clearPermission: true);
+    }
   }
 
   void _finalizeWakeupMessage(String sessionId, String assistantId) {
@@ -910,18 +961,47 @@ class ChatNotifier extends Notifier<ChatThreadState> {
             isNewRemoteSession)
         ? AgentCustomizationHelper.buildAgentsContextBlock(customizations)
         : '';
-    final promptWithAgents = agentsContext.isNotEmpty
-        ? '$agentsContext\n\n$promptWithSkill'
+    var repoMapContext = '';
+    if (!runtime.status.safeMode &&
+        activeCustom == null &&
+        sshHost == null &&
+        isNewRemoteSession &&
+        ref.read(harnessProvider).repoMapEnabled &&
+        effectiveWorkspace.isNotEmpty) {
+      try {
+        repoMapContext = await RepoMapBuilder.buildFromDirectory(
+          effectiveWorkspace,
+          maxTokens: 1000,
+        );
+      } catch (_) {}
+      if (!ref.mounted || _sessionTurnTokens[session.id] != streamToken) return;
+    }
+    final contextPrefix = [agentsContext, repoMapContext]
+        .where((s) => s.trim().isNotEmpty)
+        .join('\n\n');
+    final promptWithAgents = contextPrefix.isNotEmpty
+        ? '$contextPrefix\n\n$promptWithSkill'
         : promptWithSkill;
 
     final requestPrompt = carryCompactContext
         ? '[Compacted Session Context]\n${priorMsgs[prevCompactIdx].text.trim()}\n\n[User Request]\n$promptWithAgents'
         : promptWithAgents;
 
+    // Hybrid Cloud + Local LLM Offline Fallback:
+    final customState = ref.read(customProvidersProvider);
+    final policyState = ref.read(devicePolicyProvider);
+    final hybridFallbackProfile = (activeCustom == null &&
+            sshHost == null &&
+            policyState.isOffline &&
+            customState.hybridOfflineFallbackEnabled)
+        ? customState.fallbackProfile
+        : null;
+    final effectiveOpenAiProfile = activeCustom ?? hybridFallbackProfile;
+
     final Stream<AgyChatEvent> stream;
     AgyPromptRequest? localRequest;
     try {
-      if (activeCustom != null) {
+      if (effectiveOpenAiProfile != null) {
         final systemCustomizations = runtime.status.safeMode
             ? ''
             : AgentCustomizationHelper.buildOpenAiSystemCustomizations(
@@ -929,7 +1009,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
               );
         final customKey = await ref
             .read(customProvidersProvider.notifier)
-            .readApiKey(activeCustom.id);
+            .readApiKey(effectiveOpenAiProfile.id);
         if (!ref.mounted || _sessionTurnTokens[session.id] != streamToken) {
           return;
         }
@@ -989,7 +1069,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
                 ))
             .toList();
         stream = OpenAiCompatRunner.instance.runPrompt(
-          profile: activeCustom,
+          profile: effectiveOpenAiProfile,
           apiKey: customKey,
           turnId: turnId,
           prompt: requestPrompt,
@@ -1762,6 +1842,23 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         force: true,
         targetSession: _latestSession(session),
       );
+    } else if (isViewingSession &&
+        pendingCompact == null &&
+        ref.read(harnessProvider).autoCompactEnabled &&
+        !_autoCompactingSessions.contains(session.id) &&
+        ref.read(contextBudgetProvider).shouldCompact) {
+      _autoCompactingSessions.add(session.id);
+      Future.microtask(() async {
+        try {
+          if (!ref.mounted || state.isStreaming) return;
+          await compactThread(
+            instructions:
+                'Auto-compact triggered at high context usage. Summarize decisions, touched files, and pending checks concisely.',
+          );
+        } finally {
+          _autoCompactingSessions.remove(session.id);
+        }
+      });
     }
   }
 

@@ -7,6 +7,7 @@ import '../remote/remote_web_page.dart';
 import '../terminal/terminal_page.dart';
 import '../usage/usage_page.dart';
 import '../workspace/diff_review_view.dart';
+import '../workspace/web_preview_page.dart';
 import '../workspace/workspace_page.dart';
 
 /// 1:1 Antigravity Desktop Tabbed Side Panel (Files, Review, Terminal, Browser, Artifacts, Usage).
@@ -86,6 +87,10 @@ class SidePanelTabs extends ConsumerWidget {
                       child: Text('Terminal'),
                     ),
                     PopupMenuItem(
+                      value: SidePanelTabKind.preview,
+                      child: Text('Web Preview + Console'),
+                    ),
+                    PopupMenuItem(
                       value: SidePanelTabKind.browser,
                       child: Text('Built-in Browser'),
                     ),
@@ -112,6 +117,7 @@ class SidePanelTabs extends ConsumerWidget {
                     SidePanelTabKind.files => const WorkspacePage(),
                     SidePanelTabKind.review => const DiffReviewView(),
                     SidePanelTabKind.terminal => const TerminalPage(),
+                    SidePanelTabKind.preview => const WebPreviewPage(),
                     SidePanelTabKind.browser => const RemoteWebPage(),
                     SidePanelTabKind.usage => const UsagePage(),
                     SidePanelTabKind.artifact => SingleChildScrollView(

@@ -4,6 +4,7 @@ enum SidePanelTabKind {
   files('Files'),
   review('Review'),
   terminal('Terminal'),
+  preview('Preview'),
   browser('Browser'),
   artifact('Artifact'),
   usage('Usage');

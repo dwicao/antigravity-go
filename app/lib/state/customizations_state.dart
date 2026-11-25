@@ -56,4 +56,18 @@ class CustomizationsNotifier extends Notifier<List<CustomizationItem>> {
     if (path != null) await refresh();
     return path;
   }
+
+  Future<bool> addHttpMcpServer({
+    required String name,
+    required String url,
+    String? authHeader,
+  }) async {
+    final ok = await RuntimeBridge.instance.addHttpMcpServer(
+      name: name,
+      url: url,
+      authHeader: authHeader,
+    );
+    if (ok) await refresh();
+    return ok;
+  }
 }

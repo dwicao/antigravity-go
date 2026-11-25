@@ -477,7 +477,14 @@ class MessageBubble extends StatelessWidget {
             ),
           if (!message.isStreaming && message.text.isNotEmpty) ...[
             const SizedBox(height: 8),
-            _BottomCopyButton(text: message.text),
+            Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              children: [
+                _BottomCopyButton(text: message.text),
+                _BottomSpeakButton(text: message.text),
+              ],
+            ),
           ],
           if (!message.isStreaming) ...[
             const SizedBox(height: 8),
@@ -570,6 +577,83 @@ class _BottomCopyButtonState extends State<_BottomCopyButton> {
                 ),
               ],
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _BottomSpeakButton extends StatefulWidget {
+  const _BottomSpeakButton({required this.text});
+
+  final String text;
+
+  @override
+  State<_BottomSpeakButton> createState() => _BottomSpeakButtonState();
+}
+
+class _BottomSpeakButtonState extends State<_BottomSpeakButton> {
+  static const _voiceChannel = MethodChannel('agy/voice');
+  bool _speaking = false;
+
+  Future<void> _toggleSpeak() async {
+    HapticFeedback.lightImpact();
+    if (_speaking) {
+      setState(() => _speaking = false);
+      try {
+        await _voiceChannel.invokeMethod<void>('stopSpeaking');
+      } catch (_) {}
+      return;
+    }
+    final summary = VoicePromptNormalizer.toSpokenSummary(widget.text);
+    if (summary.isEmpty) return;
+    setState(() => _speaking = true);
+    try {
+      await _voiceChannel.invokeMethod<bool>('speak', {'text': summary});
+    } catch (_) {
+      if (mounted) setState(() => _speaking = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final semantic = AgySemanticColors.of(context);
+    final color = _speaking ? theme.colorScheme.primary : semantic.textSecondary;
+
+    return Tooltip(
+      message: _speaking ? 'Stop audio summary' : 'Read audio summary',
+      child: InkWell(
+        key: const ValueKey('bottom-speak-button'),
+        borderRadius: BorderRadius.circular(8),
+        onTap: _toggleSpeak,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: theme.colorScheme.outlineVariant.withOpacity(0.45),
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                _speaking ? Icons.stop_rounded : Icons.volume_up_outlined,
+                size: 13,
+                color: color,
+              ),
+              const SizedBox(width: 5),
+              Text(
+                _speaking ? 'Stop' : 'Listen',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  fontSize: 11.5,
+                  color: color,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
           ),
         ),
       ),

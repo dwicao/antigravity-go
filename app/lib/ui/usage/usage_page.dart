@@ -169,6 +169,20 @@ class _UsagePageState extends ConsumerState<UsagePage> {
                           label: '7d Cached',
                           value: usage.weeklyLedgerTokens.cacheReadTokens,
                         ),
+                        Chip(
+                          visualDensity: VisualDensity.compact,
+                          avatar: const Icon(Icons.attach_money_rounded, size: 15),
+                          label: Text(
+                            '5h Est. ${ModelPricingCatalog.formatUsd(ref.read(usageProvider.notifier).fiveHourEstimatedCostUsd)}',
+                          ),
+                        ),
+                        Chip(
+                          visualDensity: VisualDensity.compact,
+                          avatar: const Icon(Icons.payments_outlined, size: 15),
+                          label: Text(
+                            '7d Est. ${ModelPricingCatalog.formatUsd(ref.read(usageProvider.notifier).weeklyEstimatedCostUsd)}',
+                          ),
+                        ),
                       ],
                     ),
                   ],

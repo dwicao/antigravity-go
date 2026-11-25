@@ -2,6 +2,19 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.34] - 2026-11-25
+
+### Added
+- **Actionable Approval Notifications:** Background tool permission prompts (`session/request_permission`) now post high-priority notifications with **Approve** and **Deny** action buttons handled directly by `ApprovalNotificationReceiver` & `ApprovalNotificationHelper`.
+- **Android Share Sheet (`ACTION_SEND` / `ACTION_SEND_MULTIPLE`):** Share error logs, code snippets, images, or files from any Android app directly into the Antigravity Go chat composer (`MainActivity` + `SharedInboxNotifier`).
+- **Swipe Per-Hunk Diff Review:** Added `DiffHunkParser` / `DiffHunkReverter` and swipe-to-accept / swipe-to-revert (`Dismissible` + tap controls) hunk cards inside `DiffReviewView`.
+- **Extended Shizuku Developer Tools:** Added `phone_shizuku_logcat`, `phone_shizuku_install`, and `phone_shizuku_ui_dump` MCP tools and quick buttons in `PhoneControlPage`.
+- **Workspace-Aware Voice & Audio Summaries:** Added `VoicePromptNormalizer` to map spoken coding phrases & workspace filenames and clean markdown replies for Android `TextToSpeech` playback (**Listen** button in `MessageBubble`).
+- **Shadow Git Checkpoints & 1-Tap Undo Turn:** `WorkspaceOps.createCheckpoint` / `restoreCheckpoint` now fall back to an isolated Shadow Git repository (`shadow_git/`) when a workspace has no `.git` folder, paired with an **Undo Last Turn** button in `ChatScreen`.
+- **Smart Context Repo Map, Lifecycle Hooks & Auto-Compact:** Added `RepoMapBuilder` (`<repo_map>` multi-language symbol indexer), configurable `PreToolUse` / `PostToolUse` `LifecycleHooksManager` (blocking `.env`/keystores/personal media and running post-edit formatters), and automatic post-turn `/compact` at >=80% context usage.
+- **In-App WebView Preview + Mini Console:** Added `WebPreviewPage` side-panel tab with injected `AgyConsole` (`console.log`/`warn`/`error`, `window.onerror`) capture and 1-tap **Fix errors** prompt dispatch.
+- **Hybrid Offline Fallback, Cost Meter, HTTP/SSE MCP & Eco Policy:** Added local LLM offline fallback in `CustomProvidersNotifier`, `ModelPricingCatalog` USD cost estimates in `MessageMetricsFooter` & `UsagePage`, `McpHttpClient` HTTP/SSE handshake & tool discovery in `CustomizationsPage`, `Plan / Ask Only · Standard · Auto-Dev` profile clarity, and `DevicePolicyNotifier` battery (<15%) & cellular eco policy warnings.
+
 ## [1.0.33] - 2026-11-25
 
 ### Fixed

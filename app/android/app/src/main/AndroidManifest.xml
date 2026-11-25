@@ -54,6 +54,26 @@
             <meta-data
                 android:name="android.app.shortcuts"
                 android:resource="@xml/shortcuts" />
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
         </activity>
 
         <service
@@ -90,6 +110,15 @@
             android:exported="false">
             <intent-filter>
                 <action android:name="io.github.dwicao.antigravity_go.ACTION_TORCH" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".runtime.ApprovalNotificationReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="io.github.dwicao.antigravity_go.ACTION_APPROVE_TOOL" />
+                <action android:name="io.github.dwicao.antigravity_go.ACTION_DENY_TOOL" />
             </intent-filter>
         </receiver>
 

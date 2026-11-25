@@ -1,8 +1,10 @@
 package io.github.dwicao.antigravity_go
 
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.OpenableColumns
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -21,11 +23,13 @@ import io.github.dwicao.antigravity_go.runtime.RuntimePlugin
 import io.github.dwicao.antigravity_go.theme.DynamicColorPlugin
 import io.github.dwicao.antigravity_go.update.UpdatePlugin
 import io.github.dwicao.antigravity_go.voice.VoicePlugin
+import java.io.File
 
 class MainActivity : FlutterActivity() {
     private val permissionsPlugin = PermissionsPlugin()
     private var systemChannel: MethodChannel? = null
     private var pendingRouteAction: String? = null
+    private var pendingSharePayload: Map<String, Any?>? = null
     private var inForeground = false
     private var votedView: SurfaceView? = null
 
@@ -33,6 +37,7 @@ class MainActivity : FlutterActivity() {
         super.onCreate(savedInstanceState)
         CrashRecorder.install(applicationContext)
         captureRouteAction(intent)
+        captureShareIntent(intent)
         RefreshRateCoordinator.onModeChanged = {
             runOnUiThread { applyRefreshRate() }
         }
@@ -46,6 +51,11 @@ class MainActivity : FlutterActivity() {
             pendingRouteAction = action
             systemChannel?.invokeMethod("onShortcutAction", action)
         }
+        val shared = extractSharePayload(intent)
+        if (shared != null) {
+            pendingSharePayload = shared
+            systemChannel?.invokeMethod("onSharedContent", shared)
+        }
     }
 
     private fun captureRouteAction(intent: Intent?) {
@@ -53,6 +63,88 @@ class MainActivity : FlutterActivity() {
         if (!action.isNullOrBlank()) {
             pendingRouteAction = action
         }
+    }
+
+    private fun captureShareIntent(intent: Intent?) {
+        val shared = extractSharePayload(intent) ?: return
+        pendingSharePayload = shared
+    }
+
+    @Suppress("DEPRECATION")
+    private fun extractSharePayload(intent: Intent?): Map<String, Any?>? {
+        if (intent == null) return null
+        val act = intent.action ?: return null
+        if (act != Intent.ACTION_SEND && act != Intent.ACTION_SEND_MULTIPLE) {
+            return null
+        }
+        val subject = intent.getStringExtra(Intent.EXTRA_SUBJECT)?.trim().orEmpty()
+        val text = intent.getStringExtra(Intent.EXTRA_TEXT)?.trim().orEmpty()
+        val uris = mutableListOf<Uri>()
+        if (act == Intent.ACTION_SEND) {
+            val single = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+            } else {
+                intent.getParcelableExtra(Intent.EXTRA_STREAM)
+            }
+            if (single != null) uris.add(single)
+        } else {
+            val multi = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
+            } else {
+                intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM)
+            }
+            if (multi != null) uris.addAll(multi)
+        }
+
+        val copiedPaths = mutableListOf<String>()
+        if (uris.isNotEmpty()) {
+            val inboxDir = File(cacheDir, "shared_inbox").apply { mkdirs() }
+            for ((idx, uri) in uris.take(8).withIndex()) {
+                copySharedUriToCache(uri, inboxDir, idx)?.let { copiedPaths.add(it) }
+            }
+        }
+
+        if (subject.isEmpty() && text.isEmpty() && copiedPaths.isEmpty()) {
+            return null
+        }
+        return mapOf(
+            "subject" to subject,
+            "text" to text,
+            "files" to copiedPaths,
+        )
+    }
+
+    private fun copySharedUriToCache(uri: Uri, dir: File, index: Int): String? {
+        return runCatching {
+            val rawName = resolveDisplayName(uri) ?: "shared_${System.currentTimeMillis()}_$index"
+            val safeName = rawName.replace(Regex("""[^a-zA-Z0-9._-]"""), "_")
+            val dest = File(dir, "${System.currentTimeMillis()}_$safeName")
+            contentResolver.openInputStream(uri)?.use { input ->
+                dest.outputStream().use { output ->
+                    val buf = ByteArray(8192)
+                    var total = 0L
+                    var read: Int
+                    while (input.read(buf).also { read = it } >= 0) {
+                        total += read
+                        if (total > 20L * 1024L * 1024L) break
+                        output.write(buf, 0, read)
+                    }
+                }
+            } ?: return null
+            dest.absolutePath
+        }.getOrNull()
+    }
+
+    private fun resolveDisplayName(uri: Uri): String? {
+        runCatching {
+            contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                if (c.moveToFirst()) {
+                    val idx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (idx >= 0) return c.getString(idx)
+                }
+            }
+        }
+        return uri.lastPathSegment
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -72,6 +164,11 @@ class MainActivity : FlutterActivity() {
                     "consumePendingAction" -> {
                         val next = pendingRouteAction
                         pendingRouteAction = null
+                        result.success(next)
+                    }
+                    "consumePendingShare" -> {
+                        val next = pendingSharePayload
+                        pendingSharePayload = null
                         result.success(next)
                     }
                     else -> result.notImplemented()

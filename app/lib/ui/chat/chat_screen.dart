@@ -18,6 +18,7 @@ import '../../state/background_tasks_state.dart';
 import '../../state/chat_state.dart';
 import '../../state/custom_providers_state.dart';
 import '../../state/customizations_state.dart';
+import '../../state/device_policy_state.dart';
 import '../../state/draft_store.dart';
 import '../../state/harness_state.dart';
 import '../../state/hosts_state.dart';
@@ -26,6 +27,7 @@ import '../../state/projects_state.dart';
 import '../../state/runtime_state.dart';
 import '../../state/sessions_state.dart';
 import '../../state/settings_state.dart';
+import '../../state/share_inbox_state.dart';
 import '../../state/side_panel_state.dart';
 import '../../theme/app_theme.dart';
 import '../auth/google_login_sheet.dart';
@@ -706,8 +708,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     try {
       final spoken = await _voiceChannel.invokeMethod<String>('dictate');
       if (spoken != null && spoken.isNotEmpty) {
+        final workspaceFiles = _mentionFiles
+            .map((f) => f['path'] ?? f['name'] ?? '')
+            .where((p) => p.isNotEmpty);
+        final normalized = VoicePromptNormalizer.normalize(
+          spoken,
+          workspaceFiles: workspaceFiles,
+        );
         final cur = _inputController.text;
-        _inputController.text = cur.isEmpty ? spoken : '$cur $spoken';
+        _inputController.text = cur.isEmpty ? normalized : '$cur $normalized';
+        _inputController.selection =
+            TextSelection.collapsed(offset: _inputController.text.length);
       }
     } catch (_) {
       if (mounted) {
@@ -717,6 +728,26 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       }
     } finally {
       if (mounted) setState(() => _listeningVoice = false);
+    }
+  }
+
+  void _consumeSharedInbox(SharedInboxPayload payload) {
+    if (payload.isEmpty || !mounted) return;
+    final text = payload.formattedPromptText();
+    if (text.isNotEmpty) {
+      final cur = _inputController.text;
+      _inputController.text = cur.isEmpty ? text : '$cur\n\n$text';
+      _inputController.selection =
+          TextSelection.collapsed(offset: _inputController.text.length);
+    }
+    if (payload.files.isNotEmpty) {
+      setState(() {
+        for (final path in payload.files) {
+          if (!_attachments.contains(path)) {
+            _attachments.add(path);
+          }
+        }
+      });
     }
   }
 
@@ -761,6 +792,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final activeCustom = ref.watch(activeCustomProviderProvider);
     final perms = ref.watch(permissionsProvider);
     final sidePanel = ref.watch(sidePanelProvider);
+    final devicePolicy = ref.watch(devicePolicyProvider);
+    final pendingShare = ref.watch(sharedInboxProvider);
+    if (pendingShare != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final consumed = ref.read(sharedInboxProvider.notifier).consume();
+        if (consumed != null) _consumeSharedInbox(consumed);
+      });
+    }
 
     ref.listen<Map<String, ChatDraft>>(draftStoreProvider, (prev, next) {
       if (!_draftAppliedForSession && _inputController.text.isEmpty) {
@@ -909,6 +949,24 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             ],
           ),
           actions: [
+            if (!isCurrentSessionBusy &&
+                chat.messages.any(
+                  (m) => m.role == ChatRole.user && m.checkpointRef != null,
+                ))
+              IconButton(
+                tooltip: 'Undo Last Turn (Restore Checkpoint)',
+                onPressed: () async {
+                  final res = await ref
+                      .read(chatProvider.notifier)
+                      .rewindToMessage('__latest__');
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(res.message)),
+                    );
+                  }
+                },
+                icon: const Icon(Icons.undo_rounded),
+              ),
             const BackgroundTasksAppBarPill(),
             if (!isNarrow) ...[
               IconButton(
@@ -1972,6 +2030,49 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             ),
           ),
         wrapCentered(const SubagentsActivityBanner()),
+        if (settings.batteryNetworkPolicyEnabled && devicePolicy.shouldWarn)
+          wrapCentered(
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: semantic.warning.withOpacity(0.14),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: semantic.warning.withOpacity(0.4)),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    devicePolicy.isLowBattery
+                        ? Icons.battery_alert_rounded
+                        : Icons.signal_cellular_alt_rounded,
+                    size: 16,
+                    color: semantic.warning,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      devicePolicy.warningLabel,
+                      style: theme.textTheme.labelSmall,
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () =>
+                        ref.read(devicePolicyProvider.notifier).activateEcoMode(),
+                    child: const Text('Eco Mode'),
+                  ),
+                  IconButton(
+                    iconSize: 16,
+                    visualDensity: VisualDensity.compact,
+                    tooltip: 'Dismiss',
+                    onPressed: () =>
+                        ref.read(devicePolicyProvider.notifier).dismissWarning(),
+                    icon: const Icon(Icons.close),
+                  ),
+                ],
+              ),
+            ),
+          ),
         wrapCentered(
           ChatComposerBar(
             inputController: _inputController,

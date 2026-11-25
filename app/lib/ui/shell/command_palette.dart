@@ -156,6 +156,21 @@ class _CommandPaletteDialogState extends ConsumerState<CommandPaletteDialog> {
         },
       ),
       (
+        'Open Side Panel: Web Preview + Console',
+        'Preview localhost / HTML apps with live console error capture',
+        Icons.web_asset_outlined,
+        () {
+          Navigator.of(context).pop();
+          ref.read(sidePanelProvider.notifier).openTab(
+                const SidePanelTab(
+                  id: 'preview',
+                  kind: SidePanelTabKind.preview,
+                  title: 'Preview',
+                ),
+              );
+        },
+      ),
+      (
         'Automations',
         'Scheduled & one-click agent tasks',
         Icons.schedule_rounded,

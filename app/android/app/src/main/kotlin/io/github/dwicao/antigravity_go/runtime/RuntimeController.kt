@@ -1468,6 +1468,31 @@ am start -a android.intent.action.VIEW -d "${'$'}url" >/dev/null 2>&1 || echo "[
     fun respondPermission(turnId: String, requestId: Any, optionId: String) =
         acpManager.respondToPermission(turnId, requestId, optionId)
 
+    fun handleNotificationPermissionAction(
+        turnId: String,
+        requestId: Any,
+        optionId: String,
+        approved: Boolean,
+    ) {
+        acpManager.respondToPermission(turnId, requestId, optionId)
+        emit(
+            mapOf(
+                "kind" to "notification_permission_action",
+                "turnId" to turnId,
+                "requestId" to requestId.toString(),
+                "optionId" to optionId,
+                "approved" to approved,
+            )
+        )
+    }
+
+    fun setLifecycleHooks(rawJson: String) {
+        LifecycleHooksManager.updateFromJson(rawJson)
+    }
+
+    fun revertPatch(cwd: String?, patchText: String): Map<String, Any?> =
+        workspaceOps.revertPatch(cwd, patchText)
+
     fun cancelTurn(turnId: String) {
         cancelledTurns.add(turnId)
         acpManager.cancel(turnId)
@@ -1487,6 +1512,8 @@ am start -a android.intent.action.VIEW -d "${'$'}url" >/dev/null 2>&1 || echo "[
         cwd: String?,
         content: String? = null,
     ): String = customizationsOps.createSkill(name, description, scope, cwd, content)
+    fun addHttpMcpServer(name: String, url: String, authHeader: String? = null): Boolean =
+        customizationsOps.addHttpMcpServer(name, url, authHeader)
     fun gitDiff(cwd: String?): Map<String, String> = workspaceOps.gitDiff(cwd)
     fun gitCommitAndPush(cwd: String?, message: String, stageAll: Boolean, push: Boolean): Map<String, Any?> =
         workspaceOps.gitCommitAndPush(cwd, message, stageAll, push)
