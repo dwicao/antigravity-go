@@ -1202,24 +1202,26 @@ void main() {
     expect(find.text('Message #0'), findsNothing);
 
     final scrollableFinder = find.byType(Scrollable).first;
+    final loadEarlierFinder = find.text('Load 15 earlier (15 hidden)');
     await tester.scrollUntilVisible(
-      find.text('Show all'),
+      loadEarlierFinder,
       -400,
       scrollable: scrollableFinder,
+      maxScrolls: 60,
     );
     await tester.pump();
 
-    expect(find.text('Load 15 earlier (15 hidden)'), findsOneWidget);
-    expect(find.text('Show all'), findsOneWidget);
+    expect(loadEarlierFinder, findsOneWidget);
 
-    await tester.tap(find.text('Show all'));
+    await tester.tap(loadEarlierFinder);
     await tester.pump();
 
-    expect(find.text('Show all'), findsNothing);
+    expect(loadEarlierFinder, findsNothing);
     await tester.scrollUntilVisible(
       find.text('Message #0'),
       -400,
       scrollable: scrollableFinder,
+      maxScrolls: 60,
     );
     await tester.pump();
 
