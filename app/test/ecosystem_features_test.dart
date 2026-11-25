@@ -241,12 +241,15 @@ void main() {
     expect(find.text('Legacy Build'), findsOneWidget);
   });
 
-  testWidgets('ChatComposerBar renders context ring and speed tier pill', (tester) async {
+  testWidgets('ChatComposerBar renders context ring and single unified agent mode pill', (tester) async {
     final controller = TextEditingController();
     addTearDown(controller.dispose);
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
 
     await tester.pumpWidget(
-      ProviderScope(
+      UncontrolledProviderScope(
+        container: container,
         child: MaterialApp(
           theme: _testTheme(),
           home: Scaffold(
@@ -281,9 +284,28 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('Regular'), findsOneWidget);
+    // Only one unified mode pill (`Auto-Dev`) is shown below the input instead
+    // of redundant `Auto-Dev` + `Fast` + `Regular` pills.
+    expect(find.text('Auto-Dev'), findsOneWidget);
+    expect(find.text('Fast'), findsNothing);
+    expect(find.text('Regular'), findsNothing);
     expect(find.text('45% ctx'), findsOneWidget);
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+    await tester.tap(find.text('Auto-Dev'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Accept Edits'), findsOneWidget);
+    expect(find.text('Standard'), findsOneWidget);
+    expect(find.text('Plan / Ask Only'), findsOneWidget);
+
+    await tester.tap(find.text('Plan / Ask Only'));
+    await tester.pumpAndSettle();
+
+    final updated = container.read(settingsProvider);
+    expect(updated.permissionPreset, AntigravityPermissionPreset.requestReview);
+    expect(updated.executionMode, 'plan');
+    expect(find.text('Plan / Ask Only'), findsOneWidget);
   });
 
   testWidgets('ChatScreen shows stopwatch streaming bar, reconnect banner, and turn nav buttons', (tester) async {

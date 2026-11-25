@@ -1,6 +1,6 @@
 /// Agent execution mode matching `agy --mode` (`default`, `accept-edits`, `auto`, `plan`).
 enum AgyExecutionMode {
-  standard('default', 'Fast', 'Runs with your configured permission preset (no OS sandbox required)'),
+  standard('default', 'Standard', 'Runs with your configured permission preset (no OS sandbox required)'),
   acceptEdits('accept-edits', 'Accept Edits', 'Auto-approves file edits, asks before commands'),
   plan('plan', 'Plan', 'Explores workspace and produces an implementation plan first'),
   auto('auto', 'Auto (Sandbox)', 'Uses desktop OS terminal sandbox (unsupported on unrooted Android)');

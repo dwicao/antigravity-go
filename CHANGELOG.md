@@ -2,6 +2,12 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.36] - 2026-11-26
+
+### Changed
+- **Unified Composer Agent Mode Pill:** Consolidated the redundant `Auto-Dev` (permission preset), `Fast` (execution mode), and `Regular` (unused speed tier) pills below the chat composer into a single `AgentComposerMode` picker (`Auto-Dev`, `Accept Edits`, `Standard`, `Plan / Ask Only`, plus SSH `Auto (Sandbox)`) that atomically updates both permission preset and `--mode`.
+- **Execution Mode Label Clarity:** Renamed `AgyExecutionMode.standard` label from `Fast` to `Standard` so it accurately reflects `default` CLI mode without colliding with inference speed labels.
+
 ## [1.0.35] - 2026-11-26
 
 ### Added

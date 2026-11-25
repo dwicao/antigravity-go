@@ -77,6 +77,6 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.textContaining('Auto (Sandbox)'), findsNothing);
-    expect(find.textContaining('Fast —'), findsWidgets);
+    expect(find.textContaining('Standard —'), findsWidgets);
   });
 }

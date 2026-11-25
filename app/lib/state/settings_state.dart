@@ -29,6 +29,76 @@ enum InferenceSpeedTier {
   final String label;
 }
 
+/// Unified agent mode surfaced below the chat composer, combining permission
+/// preset and `agy --mode` so conflicting/duplicate pills aren't shown.
+enum AgentComposerMode {
+  autoDev(
+    label: 'Auto-Dev',
+    description: 'Runs continuously except destructive commands',
+    permissionPreset: AntigravityPermissionPreset.turbo,
+    executionMode: 'default',
+  ),
+  acceptEdits(
+    label: 'Accept Edits',
+    description: 'Auto-approves file edits, asks before commands',
+    permissionPreset: AntigravityPermissionPreset.standard,
+    executionMode: 'accept-edits',
+  ),
+  standard(
+    label: 'Standard',
+    description: 'Auto-read; asks before file edits & commands',
+    permissionPreset: AntigravityPermissionPreset.standard,
+    executionMode: 'default',
+  ),
+  planOnly(
+    label: 'Plan / Ask Only',
+    description: 'Read-only planning; asks before edits & commands',
+    permissionPreset: AntigravityPermissionPreset.requestReview,
+    executionMode: 'plan',
+  ),
+  autoSandbox(
+    label: 'Auto (Sandbox)',
+    description: 'Uses remote host OS terminal sandbox',
+    permissionPreset: AntigravityPermissionPreset.auto,
+    executionMode: 'auto',
+  );
+
+  const AgentComposerMode({
+    required this.label,
+    required this.description,
+    required this.permissionPreset,
+    required this.executionMode,
+  });
+
+  final String label;
+  final String description;
+  final AntigravityPermissionPreset permissionPreset;
+  final String executionMode;
+
+  static AgentComposerMode resolve({
+    required AntigravityPermissionPreset preset,
+    required String executionMode,
+    bool allowSshSandbox = false,
+  }) {
+    final normalized = executionMode.trim().toLowerCase();
+    if (allowSshSandbox &&
+        (preset == AntigravityPermissionPreset.auto || normalized == 'auto')) {
+      return AgentComposerMode.autoSandbox;
+    }
+    if (normalized == 'plan' ||
+        preset == AntigravityPermissionPreset.requestReview) {
+      return AgentComposerMode.planOnly;
+    }
+    if (normalized == 'accept-edits') {
+      return AgentComposerMode.acceptEdits;
+    }
+    if (preset == AntigravityPermissionPreset.turbo) {
+      return AgentComposerMode.autoDev;
+    }
+    return AgentComposerMode.standard;
+  }
+}
+
 class AppSettings {
   const AppSettings({
     this.themeMode = ThemeMode.dark,
@@ -399,6 +469,27 @@ class SettingsNotifier extends Notifier<AppSettings> {
     state = state.copyWith(executionMode: mode);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('agy_exec_mode', mode);
+  }
+
+  /// Applies a unified [AgentComposerMode] atomically across both
+  /// `permissionPreset` and `executionMode`.
+  Future<void> setAgentComposerMode(AgentComposerMode mode) async {
+    state = state.copyWith(
+      permissionPreset: mode.permissionPreset,
+      executionMode: mode.executionMode,
+    );
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('agy_permission_preset', mode.permissionPreset.name);
+    await prefs.setBool(
+      'agy_skip_permissions',
+      mode.permissionPreset == AntigravityPermissionPreset.turbo,
+    );
+    await prefs.setString('agy_exec_mode', mode.executionMode);
+    try {
+      await RuntimeBridge.instance.writeCliSettings({
+        'toolPermission': mode.permissionPreset.cliValue,
+      });
+    } catch (_) {}
   }
 
   Future<void> setActiveAgent(String agent) async {

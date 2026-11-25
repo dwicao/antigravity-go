@@ -113,6 +113,15 @@ class ChatComposerBar extends ConsumerWidget {
     final customState = ref.watch(customProvidersProvider);
     final activeCustom = customState.activeProfile;
     final activeModel = AgyModelCatalog.resolve(settings.selectedModelId);
+    final allowSshSandbox = hosts.activeSshHost != null;
+    final activeComposerMode = AgentComposerMode.resolve(
+      preset: settings.permissionPreset,
+      executionMode: settings.executionMode,
+      allowSshSandbox: allowSshSandbox,
+    );
+    final visibleComposerModes = AgentComposerMode.values
+        .where((m) => allowSshSandbox || m != AgentComposerMode.autoSandbox)
+        .toList();
 
     return SafeArea(
       top: false,
@@ -399,63 +408,62 @@ class ChatComposerBar extends ConsumerWidget {
                     ),
                   ],
                   const SizedBox(width: 6),
-                  ChatPickerPill<AntigravityPermissionPreset>(
-                    icon: Icons.shield_outlined,
-                    label: settings.permissionPreset.label,
-                    items: AntigravityPermissionPreset.values
-                        .where(
-                          (p) =>
-                              hosts.activeSshHost != null ||
-                              p != AntigravityPermissionPreset.auto,
-                        )
+                  ChatPickerPill<AgentComposerMode>(
+                    icon: _composerModeIcon(activeComposerMode),
+                    label: activeComposerMode.label,
+                    items: visibleComposerModes
                         .map(
-                          (p) => PopupMenuItem(
-                            value: p,
-                            child: Text('${p.label} — ${p.description}'),
+                          (m) => PopupMenuItem<AgentComposerMode>(
+                            value: m,
+                            child: Row(
+                              children: [
+                                Icon(
+                                  _composerModeIcon(m),
+                                  size: 16,
+                                  color: m == activeComposerMode
+                                      ? theme.colorScheme.primary
+                                      : theme.colorScheme.onSurfaceVariant,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        m.label,
+                                        style: theme.textTheme.labelLarge?.copyWith(
+                                          fontWeight: m == activeComposerMode
+                                              ? FontWeight.w700
+                                              : FontWeight.w500,
+                                        ),
+                                      ),
+                                      Text(
+                                        m.description,
+                                        style: theme.textTheme.bodySmall?.copyWith(
+                                          fontSize: 11,
+                                          color: theme.colorScheme.onSurfaceVariant,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                if (m == activeComposerMode) ...[
+                                  const SizedBox(width: 6),
+                                  Icon(
+                                    Icons.check_rounded,
+                                    size: 16,
+                                    color: theme.colorScheme.primary,
+                                  ),
+                                ],
+                              ],
+                            ),
                           ),
                         )
                         .toList(),
-                    onSelected: (p) => ref
+                    onSelected: (m) => ref
                         .read(settingsProvider.notifier)
-                        .setPermissionPreset(p),
-                  ),
-                  const SizedBox(width: 6),
-                  ChatPickerPill<String>(
-                    icon: Icons.tune,
-                    label:
-                        AgyExecutionMode.fromCli(settings.executionMode).label,
-                    items: AgyExecutionMode.values
-                        .where(
-                          (m) =>
-                              hosts.activeSshHost != null ||
-                              m != AgyExecutionMode.auto,
-                        )
-                        .map(
-                          (m) => PopupMenuItem(
-                            value: m.cliValue,
-                            child: Text(m.label),
-                          ),
-                        )
-                        .toList(),
-                    onSelected: (v) => ref
-                        .read(settingsProvider.notifier)
-                        .setExecutionMode(v),
-                  ),
-                  const SizedBox(width: 6),
-                  ChatPickerPill<InferenceSpeedTier>(
-                    icon: Icons.bolt_rounded,
-                    label: settings.speedTier.label,
-                    items: InferenceSpeedTier.values
-                        .map(
-                          (tier) => PopupMenuItem(
-                            value: tier,
-                            child: Text(tier.label),
-                          ),
-                        )
-                        .toList(),
-                    onSelected: (tier) => ref
-                        .read(settingsProvider.notifier)
-                        .setSpeedTier(tier),
+                        .setAgentComposerMode(m),
                   ),
                   const SizedBox(width: 6),
                   Tooltip(
@@ -565,5 +573,15 @@ class ChatComposerBar extends ConsumerWidget {
         ),
       ),
     );
+  }
+
+  static IconData _composerModeIcon(AgentComposerMode mode) {
+    return switch (mode) {
+      AgentComposerMode.autoDev => Icons.bolt_rounded,
+      AgentComposerMode.acceptEdits => Icons.edit_note_rounded,
+      AgentComposerMode.standard => Icons.shield_outlined,
+      AgentComposerMode.planOnly => Icons.architecture_rounded,
+      AgentComposerMode.autoSandbox => Icons.dns_outlined,
+    };
   }
 }
