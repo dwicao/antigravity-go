@@ -5,6 +5,86 @@ enum DiffHunkStatus {
   rejected,
 }
 
+/// Classification for a single rendered row inside a GitHub-style diff viewer.
+enum DiffRowKind {
+  hunkHeader,
+  context,
+  addition,
+  deletion,
+}
+
+/// A line-numbered row in a GitHub-style unified diff view.
+class DiffLineRow {
+  const DiffLineRow({
+    required this.kind,
+    required this.text,
+    required this.rawLine,
+    this.oldLineNumber,
+    this.newLineNumber,
+  });
+
+  final DiffRowKind kind;
+  final String text;
+  final String rawLine;
+  final int? oldLineNumber;
+  final int? newLineNumber;
+}
+
+/// A left/right row pair for GitHub-style Split (side-by-side) diff rendering.
+class DiffSplitPair {
+  const DiffSplitPair({
+    this.left,
+    this.right,
+    this.hunkHeaderText,
+  });
+
+  final DiffLineRow? left;
+  final DiffLineRow? right;
+  final String? hunkHeaderText;
+
+  bool get isHunkHeader => hunkHeaderText != null;
+}
+
+/// 5-block GitHub PR diffstat indicator (`green` additions, `red` deletions, `neutral`).
+class DiffStatBlocks {
+  const DiffStatBlocks({
+    required this.addedBlocks,
+    required this.removedBlocks,
+    required this.neutralBlocks,
+  });
+
+  final int addedBlocks;
+  final int removedBlocks;
+  final int neutralBlocks;
+
+  static DiffStatBlocks compute(int added, int removed, {int totalBlocks = 5}) {
+    final total = added + removed;
+    if (total <= 0) {
+      return DiffStatBlocks(
+        addedBlocks: 0,
+        removedBlocks: 0,
+        neutralBlocks: totalBlocks,
+      );
+    }
+    var g = ((added / total) * totalBlocks).round();
+    var r = ((removed / total) * totalBlocks).round();
+    if (added > 0 && g == 0) g = 1;
+    if (removed > 0 && r == 0) r = 1;
+    while (g + r > totalBlocks) {
+      if (g >= r && g > 0) {
+        g--;
+      } else if (r > 0) {
+        r--;
+      }
+    }
+    return DiffStatBlocks(
+      addedBlocks: g,
+      removedBlocks: r,
+      neutralBlocks: (totalBlocks - g - r).clamp(0, totalBlocks),
+    );
+  }
+}
+
 /// A single unified diff hunk within a modified file.
 class DiffHunk {
   const DiffHunk({
@@ -67,6 +147,93 @@ class DiffHunk {
       buf.writeln(line);
     }
     return buf.toString();
+  }
+
+  /// Produces line-numbered [DiffLineRow] entries for GitHub-style unified rendering.
+  List<DiffLineRow> toNumberedRows() {
+    final rows = <DiffLineRow>[
+      DiffLineRow(
+        kind: DiffRowKind.hunkHeader,
+        text: header,
+        rawLine: header,
+      ),
+    ];
+    var oldLine = oldStart;
+    var newLine = newStart;
+    for (final line in lines) {
+      if (line.startsWith(r'\')) continue;
+      if (line.startsWith('+')) {
+        rows.add(
+          DiffLineRow(
+            kind: DiffRowKind.addition,
+            text: line.substring(1),
+            rawLine: line,
+            newLineNumber: newLine++,
+          ),
+        );
+      } else if (line.startsWith('-')) {
+        rows.add(
+          DiffLineRow(
+            kind: DiffRowKind.deletion,
+            text: line.substring(1),
+            rawLine: line,
+            oldLineNumber: oldLine++,
+          ),
+        );
+      } else {
+        final content = line.startsWith(' ') ? line.substring(1) : line;
+        rows.add(
+          DiffLineRow(
+            kind: DiffRowKind.context,
+            text: content,
+            rawLine: line,
+            oldLineNumber: oldLine++,
+            newLineNumber: newLine++,
+          ),
+        );
+      }
+    }
+    return rows;
+  }
+
+  /// Pairs consecutive deletions and additions into side-by-side [DiffSplitPair] rows.
+  List<DiffSplitPair> toSplitPairs() {
+    final numbered = toNumberedRows();
+    final pairs = <DiffSplitPair>[];
+    var i = 0;
+    while (i < numbered.length) {
+      final row = numbered[i];
+      if (row.kind == DiffRowKind.hunkHeader) {
+        pairs.add(DiffSplitPair(hunkHeaderText: row.text));
+        i++;
+        continue;
+      }
+      if (row.kind == DiffRowKind.context) {
+        pairs.add(DiffSplitPair(left: row, right: row));
+        i++;
+        continue;
+      }
+      final dels = <DiffLineRow>[];
+      while (i < numbered.length && numbered[i].kind == DiffRowKind.deletion) {
+        dels.add(numbered[i]);
+        i++;
+      }
+      final adds = <DiffLineRow>[];
+      while (i < numbered.length && numbered[i].kind == DiffRowKind.addition) {
+        adds.add(numbered[i]);
+        i++;
+      }
+      final maxLen = dels.length > adds.length ? dels.length : adds.length;
+      for (var k = 0; k < maxLen; k++) {
+        pairs.add(
+          DiffSplitPair(
+            left: k < dels.length ? dels[k] : null,
+            right: k < adds.length ? adds[k] : null,
+          ),
+        );
+      }
+    }
+    return pairs;
   }
 }
 

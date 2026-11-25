@@ -9,6 +9,7 @@ import 'package:antigravity_go/state/side_panel_state.dart';
 import 'package:antigravity_go/theme/app_theme.dart';
 import 'package:antigravity_go/ui/chat/message_bubble.dart';
 import 'package:antigravity_go/ui/chat/message_metrics_footer.dart';
+import 'package:antigravity_go/ui/workspace/github_diff_viewer.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -154,5 +155,56 @@ void main() {
 
     expect(find.byKey(const ValueKey('bottom-speak-button')), findsOneWidget);
     expect(find.textContaining(r'$0.'), findsWidgets);
+  });
+
+  testWidgets('GitHubDiffViewer displays changed files, line numbers, Viewed toggle, and Split mode', (tester) async {
+    const unifiedDiff = '''
+diff --git a/lib/foo.dart b/lib/foo.dart
+--- a/lib/foo.dart
++++ b/lib/foo.dart
+@@ -1,3 +1,3 @@
+ void greet() {
+-  print('hi');
++  print('hello');
+ }
+diff --git a/lib/new_file.dart b/lib/new_file.dart
+--- /dev/null
++++ b/lib/new_file.dart
+@@ -0,0 +1,2 @@
++final version = 2;
++final ok = true;
+''';
+    const files = [
+      FileChangeEntry(path: 'lib/foo.dart', added: 1, removed: 1),
+      FileChangeEntry(path: 'lib/new_file.dart', added: 2, removed: 0, created: true),
+    ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: _theme(),
+        home: const Scaffold(
+          body: GitHubDiffViewer(
+            files: files,
+            unifiedDiff: unifiedDiff,
+            branch: 'main',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('lib/foo.dart'), findsWidgets);
+    expect(find.text('lib/new_file.dart'), findsWidgets);
+    expect(find.textContaining("print('hello')"), findsOneWidget);
+    expect(find.text('0/2 viewed'), findsOneWidget);
+
+    await tester.tap(find.text('Split'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining("print('hi')"), findsOneWidget);
+
+    await tester.tap(find.text('Added'));
+    await tester.pumpAndSettle();
+    expect(find.text('lib/new_file.dart'), findsWidgets);
+    expect(find.text('lib/foo.dart'), findsNothing);
   });
 }

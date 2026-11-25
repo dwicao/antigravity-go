@@ -111,8 +111,8 @@ class _CommandPaletteDialogState extends ConsumerState<CommandPaletteDialog> {
         },
       ),
       (
-        'Open Side Panel: Review Changes',
-        'Inspect Git status & uncommitted diffs',
+        'Open Side Panel: GitHub Diff Viewer',
+        'Inspect changed files, line numbers, Split/Unified diffs & commit/push',
         Icons.difference_outlined,
         () {
           Navigator.of(context).pop();

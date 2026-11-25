@@ -12,6 +12,16 @@ import '../../state/runtime_state.dart';
 import '../../state/sessions_state.dart';
 import '../../theme/app_theme.dart';
 import '../chat/change_card.dart';
+import 'github_diff_viewer.dart';
+
+enum DiffReviewDisplayMode {
+  github('GitHub'),
+  swipe('Swipe'),
+  raw('Raw');
+
+  const DiffReviewDisplayMode(this.label);
+  final String label;
+}
 
 class DiffReviewView extends ConsumerStatefulWidget {
   const DiffReviewView({super.key});
@@ -27,7 +37,7 @@ class _DiffReviewViewState extends ConsumerState<DiffReviewView> {
   List<FileChangeEntry> _changedFiles = const [];
   List<DiffFileHunks> _fileHunks = const [];
   final Map<String, DiffHunkStatus> _hunkDecisions = {};
-  bool _swipeHunkMode = true;
+  DiffReviewDisplayMode _displayMode = DiffReviewDisplayMode.github;
   ({String commitHash, String branch, List<FileChangeEntry> files, String output})?
       _lastPushResult;
   bool _loading = false;
@@ -323,23 +333,33 @@ class _DiffReviewViewState extends ConsumerState<DiffReviewView> {
                   ],
                 ),
               ),
-              if (_fileHunks.isNotEmpty)
-                IconButton(
-                  visualDensity: VisualDensity.compact,
-                  constraints: const BoxConstraints.tightFor(width: 34, height: 34),
-                  padding: EdgeInsets.zero,
-                  tooltip: _swipeHunkMode
-                      ? 'Switch to Raw Diff View'
-                      : 'Switch to Swipe Hunk Review',
-                  onPressed: () =>
-                      setState(() => _swipeHunkMode = !_swipeHunkMode),
+              if (_changedFiles.isNotEmpty || _diff.isNotEmpty)
+                PopupMenuButton<DiffReviewDisplayMode>(
+                  tooltip: 'Diff viewer mode (${_displayMode.label})',
                   icon: Icon(
-                    _swipeHunkMode
-                        ? Icons.swipe_outlined
-                        : Icons.view_headline_outlined,
+                    switch (_displayMode) {
+                      DiffReviewDisplayMode.github => Icons.difference_outlined,
+                      DiffReviewDisplayMode.swipe => Icons.swipe_outlined,
+                      DiffReviewDisplayMode.raw => Icons.view_headline_outlined,
+                    },
                     size: 18,
-                    color: _swipeHunkMode ? theme.colorScheme.primary : null,
+                    color: theme.colorScheme.primary,
                   ),
+                  onSelected: (m) => setState(() => _displayMode = m),
+                  itemBuilder: (_) => const [
+                    PopupMenuItem(
+                      value: DiffReviewDisplayMode.github,
+                      child: Text('GitHub Diff Viewer'),
+                    ),
+                    PopupMenuItem(
+                      value: DiffReviewDisplayMode.swipe,
+                      child: Text('Swipe Hunks (Keep / Revert)'),
+                    ),
+                    PopupMenuItem(
+                      value: DiffReviewDisplayMode.raw,
+                      child: Text('Raw Git Diff'),
+                    ),
+                  ],
                 ),
               IconButton(
                 visualDensity: VisualDensity.compact,
@@ -384,7 +404,7 @@ class _DiffReviewViewState extends ConsumerState<DiffReviewView> {
         Expanded(
           child: _loading
               ? const Center(child: CircularProgressIndicator())
-              : (_status.isEmpty && _diff.isEmpty && _lastPushResult == null)
+              : (_status.isEmpty && _diff.isEmpty && _lastPushResult == null && _changedFiles.isEmpty)
                   ? const Center(
                       child: Padding(
                         padding: EdgeInsets.all(20),
@@ -394,7 +414,15 @@ class _DiffReviewViewState extends ConsumerState<DiffReviewView> {
                         ),
                       ),
                     )
-                  : Scrollbar(
+                  : _displayMode == DiffReviewDisplayMode.github &&
+                          (_changedFiles.isNotEmpty || _diff.isNotEmpty)
+                      ? GitHubDiffViewer(
+                          files: _changedFiles,
+                          unifiedDiff: _diff,
+                          branch: _branch,
+                          onRevertHunk: _rejectHunk,
+                        )
+                      : Scrollbar(
                       child: ListView(
                         padding: const EdgeInsets.all(12),
                         children: [
@@ -444,7 +472,9 @@ class _DiffReviewViewState extends ConsumerState<DiffReviewView> {
                             ),
                             const SizedBox(height: 12),
                           ],
-                          if (_diff.isNotEmpty && _swipeHunkMode && _fileHunks.isNotEmpty) ...[
+                          if (_diff.isNotEmpty &&
+                              _displayMode == DiffReviewDisplayMode.swipe &&
+                              _fileHunks.isNotEmpty) ...[
                             Row(
                               children: [
                                 Text(

@@ -32,11 +32,27 @@ index 1111111..2222222 100644
       expect(h0.removedLines, 1);
       expect(h0.toSingleHunkPatch(), contains('--- a/lib/main.dart'));
 
-      const currentFile = "void main() {\n  print('new');\n}\n";
+      final currentFile = "void main() {\n  print('new');\n}\n";
       final reverted = DiffHunkParser.revertHunkInContent(currentFile, h0);
       expect(reverted, isNotNull);
       expect(reverted, contains("print('old');"));
       expect(reverted, isNot(contains("print('new');")));
+
+      final numbered = h0.toNumberedRows();
+      expect(numbered.first.kind, DiffRowKind.hunkHeader);
+      final delRow = numbered.firstWhere((r) => r.kind == DiffRowKind.deletion);
+      final addRow = numbered.firstWhere((r) => r.kind == DiffRowKind.addition);
+      expect(delRow.oldLineNumber, 2);
+      expect(delRow.newLineNumber, isNull);
+      expect(addRow.newLineNumber, 2);
+      expect(addRow.oldLineNumber, isNull);
+
+      final split = h0.toSplitPairs();
+      expect(split.any((p) => p.left?.text.contains("print('old')") == true && p.right?.text.contains("print('new')") == true), isTrue);
+
+      final stat = DiffStatBlocks.compute(4, 1);
+      expect(stat.addedBlocks + stat.removedBlocks + stat.neutralBlocks, 5);
+      expect(stat.addedBlocks, greaterThan(stat.removedBlocks));
     });
   });
 

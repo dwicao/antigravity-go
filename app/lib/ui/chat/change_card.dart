@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../theme/app_theme.dart';
+import '../workspace/github_diff_viewer.dart';
 
 /// Compact card modeled on `dsh-Go`'s `ChangeCard` showing files changed during
 /// a turn or after a Git commit/push, with `+N -M` counts and a tap-to-inspect sheet.
@@ -136,16 +137,23 @@ class ChangeCard extends StatelessWidget {
             if (hiddenCount > 0 || onOpenDiff != null) ...[
               const Divider(height: 8),
               InkWell(
-                onTap: onOpenDiff ?? () => _openAllFilesSheet(context),
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => GitHubDiffPage(
+                        files: files,
+                        title: title ?? '${files.length} Files Changed',
+                      ),
+                    ),
+                  );
+                },
                 child: Padding(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   child: Row(
                     children: [
                       Text(
-                        onOpenDiff != null
-                            ? 'Inspect full diff'
-                            : 'View all ${files.length} changed files',
+                        'GitHub Diff Viewer (${files.length} file${files.length == 1 ? '' : 's'})',
                         style: theme.textTheme.labelMedium?.copyWith(
                           color: theme.colorScheme.primary,
                           fontWeight: FontWeight.w600,
@@ -160,6 +168,41 @@ class ChangeCard extends StatelessWidget {
                           ),
                         ),
                       const SizedBox(width: 4),
+                      Icon(
+                        Icons.chevron_right,
+                        size: 16,
+                        color: semantic.textTertiary,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ] else ...[
+              const Divider(height: 8),
+              InkWell(
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => GitHubDiffPage(
+                        files: files,
+                        title: title ?? '${files.length} Files Changed',
+                      ),
+                    ),
+                  );
+                },
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  child: Row(
+                    children: [
+                      Text(
+                        'Open GitHub Diff Viewer',
+                        style: theme.textTheme.labelMedium?.copyWith(
+                          color: theme.colorScheme.primary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const Spacer(),
                       Icon(
                         Icons.chevron_right,
                         size: 16,
@@ -243,46 +286,6 @@ class ChangeCard extends StatelessWidget {
                   label: const Text('Open Git Review'),
                 ),
               ],
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _openAllFilesSheet(BuildContext context) {
-    showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (ctx) => SafeArea(
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxHeight: MediaQuery.sizeOf(ctx).height * 0.72,
-          ),
-          child: ListView(
-            shrinkWrap: true,
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
-            children: [
-              Text(
-                'Changed Files (${files.length})',
-                style: Theme.of(ctx).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
-              ),
-              const SizedBox(height: 8),
-              for (final f in files)
-                ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  title: Text(f.fileName),
-                  subtitle: f.directory.isEmpty ? null : Text(f.directory),
-                  trailing: DiffCountsBadge(added: f.added, removed: f.removed),
-                  onTap: () {
-                    Navigator.of(ctx).pop();
-                    _openFileSheet(context, f);
-                  },
-                ),
             ],
           ),
         ),

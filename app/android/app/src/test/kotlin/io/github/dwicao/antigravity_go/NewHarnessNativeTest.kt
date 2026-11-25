@@ -112,5 +112,14 @@ class NewHarnessNativeTest {
         assertEquals(true, restored["ok"])
         assertEquals("v1\n", mainFile.readText())
         assertFalse(extraFile.exists())
+
+        // Verify gitDiff works on shadow-git workspace with modified + untracked files
+        mainFile.writeText("v1\nadded_line\n")
+        File(work, "brand_new.kt").writeText("fun hello() {}\n")
+        val diffRes = ops.gitDiff(work.absolutePath)
+        assertEquals("shadow-checkpoint", diffRes["branch"])
+        assertTrue((diffRes["diff"] ?: "").contains("added_line"))
+        assertTrue((diffRes["diff"] ?: "").contains("brand_new.kt"))
+        assertTrue((diffRes["numstat"] ?: "").contains("brand_new.kt"))
     }
 }

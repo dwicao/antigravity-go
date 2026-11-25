@@ -2,6 +2,12 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.35] - 2026-11-26
+
+### Added
+- **GitHub-Style Diff Viewer:** Added `GitHubDiffViewer` & `GitHubDiffPage` (`DiffReviewView` default mode + `ChangeCard` launcher + Command Palette) with changed-files tree/jump sheet, search & `All / Modified / Added / Deleted` filters, 5-block GitHub diffstat bars, collapsible file cards with **Viewed** checkboxes, dual-gutter line numbers, and **Unified / Split** (side-by-side) diff modes.
+- **Full Working-Tree & Shadow Git Diffs:** Upgraded `WorkspaceOps.gitDiff` to combine staged/unstaged diffs, synthesize unified diffs for untracked text files, and diff non-git workspaces against their Shadow Git checkpoints.
+
 ## [1.0.34] - 2026-11-25
 
 ### Added

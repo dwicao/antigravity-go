@@ -29,17 +29,125 @@ internal class WorkspaceOps(
 
     fun gitDiff(cwd: String?): Map<String, String> {
         val dir = if (!cwd.isNullOrBlank()) File(cwd) else workspaceDir
-        val status = runShell("git status --short 2>&1 || true", dir.absolutePath)
-        val diff = runShell("git diff 2>&1 || true", dir.absolutePath)
-        val numstat = runShell("git diff --numstat 2>&1 || true", dir.absolutePath)
-        val stagedNumstat = runShell("git diff --cached --numstat 2>&1 || true", dir.absolutePath)
-        val branch = runShell("git rev-parse --abbrev-ref HEAD 2>/dev/null || true", dir.absolutePath).trim()
-        val combinedNumstat = listOf(numstat.trim(), stagedNumstat.trim())
+        val (insideCode, insideOut) = runCapturedArgs(
+            listOf("git", "rev-parse", "--is-inside-work-tree"),
+            dir,
+            emptyMap(),
+            15,
+        )
+        val useStandard = insideCode == 0 && insideOut.trim() == "true"
+        val shadowDir = if (!useStandard) shadowGitDir(dir).takeIf { it.exists() } else null
+
+        if (!useStandard && shadowDir == null) {
+            return mapOf(
+                "status" to "",
+                "diff" to "",
+                "numstat" to "",
+                "branch" to "",
+            )
+        }
+
+        val workEnv = if (shadowDir != null) mapOf("GIT_WORK_TREE" to dir.absolutePath) else emptyMap()
+        val (_, statusRaw) = runCapturedArgs(
+            gitCmd(shadowDir, "status", "--short"),
+            dir,
+            workEnv,
+            20,
+        )
+        val (hasHeadCode, _) = runCapturedArgs(
+            gitCmd(shadowDir, "rev-parse", "--verify", "HEAD"),
+            dir,
+            workEnv,
+            15,
+        )
+        val hasHead = hasHeadCode == 0
+
+        val diffText: String
+        val numstatText: String
+        if (shadowDir != null) {
+            val (_, d) = runCapturedArgs(
+                if (hasHead) gitCmd(shadowDir, "diff", "HEAD") else gitCmd(shadowDir, "diff"),
+                dir,
+                workEnv,
+                25,
+            )
+            val (_, n) = runCapturedArgs(
+                if (hasHead) gitCmd(shadowDir, "diff", "--numstat", "HEAD") else gitCmd(shadowDir, "diff", "--numstat"),
+                dir,
+                workEnv,
+                25,
+            )
+            diffText = d
+            numstatText = n
+        } else if (hasHead) {
+            val (_, d) = runCapturedArgs(listOf("git", "diff", "HEAD"), dir, emptyMap(), 25)
+            val (_, n) = runCapturedArgs(listOf("git", "diff", "--numstat", "HEAD"), dir, emptyMap(), 25)
+            diffText = d
+            numstatText = n
+        } else {
+            val (_, d1) = runCapturedArgs(listOf("git", "diff"), dir, emptyMap(), 25)
+            val (_, d2) = runCapturedArgs(listOf("git", "diff", "--cached"), dir, emptyMap(), 25)
+            val (_, n1) = runCapturedArgs(listOf("git", "diff", "--numstat"), dir, emptyMap(), 25)
+            val (_, n2) = runCapturedArgs(listOf("git", "diff", "--cached", "--numstat"), dir, emptyMap(), 25)
+            diffText = listOf(d1.trim(), d2.trim()).filter { it.isNotEmpty() }.joinToString("\n")
+            numstatText = listOf(n1.trim(), n2.trim()).filter { it.isNotEmpty() }.joinToString("\n")
+        }
+
+        val branch = if (shadowDir != null) {
+            "shadow-checkpoint"
+        } else {
+            val (_, b) = runCapturedArgs(listOf("git", "rev-parse", "--abbrev-ref", "HEAD"), dir, emptyMap(), 15)
+            b.trim()
+        }
+
+        // Synthesize GitHub-style unified diffs & numstat for untracked (`??`) text files.
+        val extraDiffs = StringBuilder()
+        val extraNumstat = StringBuilder()
+        for (line in statusRaw.lineSequence()) {
+            if (!line.startsWith("?? ")) continue
+            var rel = line.substring(3).trim()
+            if (rel.startsWith("\"") && rel.endsWith("\"") && rel.length >= 2) {
+                rel = rel.substring(1, rel.length - 1)
+            }
+            if (rel.isEmpty() || rel.endsWith("/")) continue
+            val f = File(dir, rel)
+            if (!f.isFile || f.length() > 64 * 1024) continue
+            val sample = ByteArray(512)
+            val n = runCatching { f.inputStream().use { it.read(sample) } }.getOrDefault(0)
+            var isBinary = false
+            for (i in 0 until n) {
+                if (sample[i] == 0.toByte()) {
+                    isBinary = true
+                    break
+                }
+            }
+            if (isBinary) continue
+            val contentLines = runCatching { f.readLines() }.getOrDefault(emptyList())
+            val shownLines = contentLines.take(400)
+            extraNumstat.append(contentLines.size).append("\t0\t").append(rel).append("\n")
+            extraDiffs.append("diff --git a/").append(rel).append(" b/").append(rel).append("\n")
+            extraDiffs.append("new file mode 100644\n")
+            extraDiffs.append("--- /dev/null\n")
+            extraDiffs.append("+++ b/").append(rel).append("\n")
+            extraDiffs.append("@@ -0,0 +1,").append(shownLines.size).append(" @@\n")
+            for (cl in shownLines) {
+                extraDiffs.append("+").append(cl).append("\n")
+            }
+            if (contentLines.size > 400) {
+                extraDiffs.append("... (truncated ${contentLines.size - 400} lines)\n")
+            }
+        }
+
+        val combinedDiff = listOf(diffText.trim(), extraDiffs.toString().trim())
             .filter { it.isNotEmpty() }
             .joinToString("\n")
+        val combinedNumstat = listOf(numstatText.trim(), extraNumstat.toString().trim())
+            .filter { it.isNotEmpty() }
+            .joinToString("\n")
+
         return mapOf(
-            "status" to status,
-            "diff" to diff,
+            "status" to statusRaw,
+            "diff" to combinedDiff,
             "numstat" to combinedNumstat,
             "branch" to branch,
         )
