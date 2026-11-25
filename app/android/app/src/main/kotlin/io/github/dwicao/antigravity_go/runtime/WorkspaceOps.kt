@@ -49,7 +49,7 @@ internal class WorkspaceOps(
 
         val workEnv = if (shadowDir != null) mapOf("GIT_WORK_TREE" to dir.absolutePath) else emptyMap()
         val (_, statusRaw) = runCapturedArgs(
-            gitCmd(shadowDir, "status", "--short"),
+            gitCmd(shadowDir, "status", "--short", "-uall"),
             dir,
             workEnv,
             20,

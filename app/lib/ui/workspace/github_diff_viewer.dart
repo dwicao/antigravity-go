@@ -54,6 +54,7 @@ class GitHubDiffViewer extends StatefulWidget {
     this.branch,
     this.onRevertHunk,
     this.showSidebarOnWide = true,
+    this.initialFocusPath,
   });
 
   final List<FileChangeEntry> files;
@@ -61,6 +62,7 @@ class GitHubDiffViewer extends StatefulWidget {
   final String? branch;
   final Future<void> Function(DiffHunk hunk)? onRevertHunk;
   final bool showSidebarOnWide;
+  final String? initialFocusPath;
 
   @override
   State<GitHubDiffViewer> createState() => _GitHubDiffViewerState();
@@ -81,6 +83,17 @@ class _GitHubDiffViewerState extends State<GitHubDiffViewer> {
   void initState() {
     super.initState();
     _items = _buildItems();
+    if (widget.initialFocusPath != null && widget.initialFocusPath!.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        for (final item in _items) {
+          if (item.path == widget.initialFocusPath) {
+            _scrollToFile(item);
+            break;
+          }
+        }
+      });
+    }
   }
 
   @override
@@ -117,7 +130,10 @@ class _GitHubDiffViewerState extends State<GitHubDiffViewer> {
       seen.add(entry.path);
       var hunks = parsedByPath[entry.path] ?? const <DiffHunk>[];
       if (hunks.isEmpty && entry.diff != null && entry.diff!.trim().isNotEmpty) {
-        final parsed = DiffHunkParser.parse(entry.diff!);
+        final parsed = DiffHunkParser.parse(
+          entry.diff!,
+          fallbackFilePath: entry.path,
+        );
         if (parsed.isNotEmpty) {
           hunks = parsed.first.hunks;
         }
@@ -539,35 +555,73 @@ class _GitHubDiffViewerState extends State<GitHubDiffViewer> {
                     )
                   : Scrollbar(
                       controller: _scrollCtrl,
-                      child: ListView.builder(
-                        controller: _scrollCtrl,
-                        padding: const EdgeInsets.all(10),
-                        itemCount: filtered.length,
-                        itemBuilder: (ctx, idx) {
-                          final item = filtered[idx];
-                          final collapsed =
-                              _collapsedFiles.contains(item.path);
-                          final viewed = _viewedFiles.contains(item.path);
-                          return _GitHubDiffFileCard(
-                            key: item.cardKey,
-                            item: item,
-                            collapsed: collapsed,
-                            viewed: viewed,
-                            splitMode: _splitMode,
-                            onToggleCollapsed: () {
-                              setState(() {
-                                if (collapsed) {
-                                  _collapsedFiles.remove(item.path);
-                                } else {
-                                  _collapsedFiles.add(item.path);
-                                }
-                              });
-                            },
-                            onToggleViewed: (v) => _toggleViewed(item.path, v),
-                            onRevertHunk: widget.onRevertHunk,
-                          );
-                        },
-                      ),
+                      child: filtered.length <= 40
+                          ? SingleChildScrollView(
+                              controller: _scrollCtrl,
+                              padding: const EdgeInsets.all(10),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  for (final item in filtered)
+                                    _GitHubDiffFileCard(
+                                      key: item.cardKey,
+                                      item: item,
+                                      collapsed:
+                                          _collapsedFiles.contains(item.path),
+                                      viewed:
+                                          _viewedFiles.contains(item.path),
+                                      focused: widget.initialFocusPath ==
+                                          item.path,
+                                      splitMode: _splitMode,
+                                      onToggleCollapsed: () {
+                                        setState(() {
+                                          if (_collapsedFiles
+                                              .contains(item.path)) {
+                                            _collapsedFiles.remove(item.path);
+                                          } else {
+                                            _collapsedFiles.add(item.path);
+                                          }
+                                        });
+                                      },
+                                      onToggleViewed: (v) =>
+                                          _toggleViewed(item.path, v),
+                                      onRevertHunk: widget.onRevertHunk,
+                                    ),
+                                ],
+                              ),
+                            )
+                          : ListView.builder(
+                              controller: _scrollCtrl,
+                              padding: const EdgeInsets.all(10),
+                              itemCount: filtered.length,
+                              itemBuilder: (ctx, idx) {
+                                final item = filtered[idx];
+                                final collapsed =
+                                    _collapsedFiles.contains(item.path);
+                                final viewed = _viewedFiles.contains(item.path);
+                                return _GitHubDiffFileCard(
+                                  key: item.cardKey,
+                                  item: item,
+                                  collapsed: collapsed,
+                                  viewed: viewed,
+                                  focused:
+                                      widget.initialFocusPath == item.path,
+                                  splitMode: _splitMode,
+                                  onToggleCollapsed: () {
+                                    setState(() {
+                                      if (collapsed) {
+                                        _collapsedFiles.remove(item.path);
+                                      } else {
+                                        _collapsedFiles.add(item.path);
+                                      }
+                                    });
+                                  },
+                                  onToggleViewed: (v) =>
+                                      _toggleViewed(item.path, v),
+                                  onRevertHunk: widget.onRevertHunk,
+                                );
+                              },
+                            ),
                     ),
             ),
           ],
@@ -680,12 +734,14 @@ class GitHubDiffPage extends StatelessWidget {
     this.unifiedDiff = '',
     this.title = 'Files Changed',
     this.branch,
+    this.initialFocusPath,
   });
 
   final List<FileChangeEntry> files;
   final String unifiedDiff;
   final String title;
   final String? branch;
+  final String? initialFocusPath;
 
   @override
   Widget build(BuildContext context) {
@@ -707,6 +763,7 @@ class GitHubDiffPage extends StatelessWidget {
         files: files,
         unifiedDiff: unifiedDiff,
         branch: branch,
+        initialFocusPath: initialFocusPath,
       ),
     );
   }
@@ -793,6 +850,7 @@ class _GitHubDiffFileCard extends StatelessWidget {
     required this.item,
     required this.collapsed,
     required this.viewed,
+    this.focused = false,
     required this.splitMode,
     required this.onToggleCollapsed,
     required this.onToggleViewed,
@@ -802,6 +860,7 @@ class _GitHubDiffFileCard extends StatelessWidget {
   final _GitHubDiffFileItem item;
   final bool collapsed;
   final bool viewed;
+  final bool focused;
   final bool splitMode;
   final VoidCallback onToggleCollapsed;
   final ValueChanged<bool> onToggleViewed;
@@ -818,9 +877,12 @@ class _GitHubDiffFileCard extends StatelessWidget {
         color: semantic.codeWellBg,
         borderRadius: BorderRadius.circular(10),
         border: Border.all(
-          color: viewed
-              ? semantic.success.withOpacity(0.45)
-              : semantic.codeWellBorder,
+          width: focused ? 1.6 : 1,
+          color: focused
+              ? theme.colorScheme.primary
+              : viewed
+                  ? semantic.success.withOpacity(0.45)
+                  : semantic.codeWellBorder,
         ),
       ),
       child: Column(
@@ -948,14 +1010,18 @@ class _GitHubDiffFileCard extends StatelessWidget {
                 ),
               )
             else if (splitMode)
-              _SplitHunksView(
-                hunks: item.hunks,
-                onRevertHunk: onRevertHunk,
+              SelectionArea(
+                child: _SplitHunksView(
+                  hunks: item.hunks,
+                  onRevertHunk: onRevertHunk,
+                ),
               )
             else
-              _UnifiedHunksView(
-                hunks: item.hunks,
-                onRevertHunk: onRevertHunk,
+              SelectionArea(
+                child: _UnifiedHunksView(
+                  hunks: item.hunks,
+                  onRevertHunk: onRevertHunk,
+                ),
               ),
           ],
         ],
@@ -1063,6 +1129,11 @@ class _UnifiedDiffCodeRow extends StatelessWidget {
         : isDel
             ? semantic.diffDelFg
             : semantic.textPrimary;
+    final gutterAccent = isAdd
+        ? semantic.success
+        : isDel
+            ? semantic.danger
+            : Colors.transparent;
     final marker = isAdd
         ? '+'
         : isDel
@@ -1070,33 +1141,40 @@ class _UnifiedDiffCodeRow extends StatelessWidget {
             : ' ';
 
     return Container(
-      color: bg,
-      padding: const EdgeInsets.symmetric(vertical: 1),
+      constraints: const BoxConstraints(minHeight: 22),
+      decoration: BoxDecoration(
+        color: bg,
+        border: Border(
+          left: BorderSide(color: gutterAccent, width: 3),
+        ),
+      ),
+      padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
+          const SizedBox(width: 4),
           SizedBox(
-            width: 38,
+            width: 34,
             child: Text(
               row.oldLineNumber?.toString() ?? '',
               textAlign: TextAlign.right,
               style: TextStyle(
                 fontFamily: 'monospace',
                 fontSize: 10.5,
-                color: semantic.textTertiary,
+                color: isDel ? semantic.diffDelFg : semantic.textTertiary,
               ),
             ),
           ),
           const SizedBox(width: 6),
           SizedBox(
-            width: 38,
+            width: 34,
             child: Text(
               row.newLineNumber?.toString() ?? '',
               textAlign: TextAlign.right,
               style: TextStyle(
                 fontFamily: 'monospace',
                 fontSize: 10.5,
-                color: semantic.textTertiary,
+                color: isAdd ? semantic.diffAddFg : semantic.textTertiary,
               ),
             ),
           ),
@@ -1105,21 +1183,22 @@ class _UnifiedDiffCodeRow extends StatelessWidget {
             marker,
             style: TextStyle(
               fontFamily: 'monospace',
-              fontSize: 11.5,
-              fontWeight: FontWeight.w700,
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
               color: fg,
             ),
           ),
           const SizedBox(width: 4),
-          SelectableText(
-            row.text,
+          Text(
+            row.text.isEmpty ? ' ' : row.text,
+            softWrap: false,
             style: TextStyle(
               fontFamily: 'monospace',
               fontSize: 11.5,
               color: fg,
             ),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 14),
         ],
       ),
     );
@@ -1257,28 +1336,58 @@ class _SplitHalfCell extends StatelessWidget {
         : isAdd
             ? semantic.diffAddFg
             : semantic.textPrimary;
+    final gutterAccent = isDel
+        ? semantic.danger
+        : isAdd
+            ? semantic.success
+            : Colors.transparent;
+    final marker = isDel
+        ? '-'
+        : isAdd
+            ? '+'
+            : ' ';
 
     return Container(
-      color: bg,
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      constraints: const BoxConstraints(minHeight: 22),
+      decoration: BoxDecoration(
+        color: bg,
+        border: Border(
+          left: BorderSide(color: gutterAccent, width: 3),
+        ),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       child: Row(
         children: [
           SizedBox(
-            width: 34,
+            width: 30,
             child: Text(
               lineNum?.toString() ?? '',
               textAlign: TextAlign.right,
               style: TextStyle(
                 fontFamily: 'monospace',
                 fontSize: 10.5,
-                color: semantic.textTertiary,
+                color: isDel
+                    ? semantic.diffDelFg
+                    : isAdd
+                        ? semantic.diffAddFg
+                        : semantic.textTertiary,
               ),
             ),
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: 4),
+          Text(
+            marker,
+            style: TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 11.5,
+              fontWeight: FontWeight.w800,
+              color: fg,
+            ),
+          ),
+          const SizedBox(width: 4),
           Expanded(
             child: Text(
-              r.text,
+              r.text.isEmpty ? ' ' : r.text,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(

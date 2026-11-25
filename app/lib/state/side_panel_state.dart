@@ -2,7 +2,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 enum SidePanelTabKind {
   files('Files'),
-  review('Review'),
   terminal('Terminal'),
   preview('Preview'),
   browser('Browser'),
@@ -35,7 +34,6 @@ class SidePanelState {
     this.showSidePanel = false,
     this.tabs = const [
       SidePanelTab(id: 'files', kind: SidePanelTabKind.files, title: 'Files'),
-      SidePanelTab(id: 'review', kind: SidePanelTabKind.review, title: 'Review'),
       SidePanelTab(
         id: 'terminal',
         kind: SidePanelTabKind.terminal,

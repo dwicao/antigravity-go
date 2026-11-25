@@ -16,6 +16,7 @@ import '../settings/diagnostics_page.dart';
 import '../settings/settings_page.dart';
 import '../update/update_sheet.dart';
 import '../usage/usage_page.dart';
+import '../workspace/diff_review_view.dart';
 import 'session_search_page.dart';
 
 /// Antigravity Desktop `Ctrl+K` Search & Command Palette.
@@ -111,18 +112,17 @@ class _CommandPaletteDialogState extends ConsumerState<CommandPaletteDialog> {
         },
       ),
       (
-        'Open Side Panel: GitHub Diff Viewer',
-        'Inspect changed files, line numbers, Split/Unified diffs & commit/push',
+        'Open Files Changed (GitHub Diff Viewer)',
+        'Inspect changed files, red/green diffs, Split/Unified & commit/push',
         Icons.difference_outlined,
         () {
-          Navigator.of(context).pop();
-          ref.read(sidePanelProvider.notifier).openTab(
-                const SidePanelTab(
-                  id: 'review',
-                  kind: SidePanelTabKind.review,
-                  title: 'Review',
-                ),
-              );
+          final nav = Navigator.of(context);
+          nav.pop();
+          nav.push(
+            MaterialPageRoute<void>(
+              builder: (_) => const DiffReviewPage(),
+            ),
+          );
         },
       ),
       (

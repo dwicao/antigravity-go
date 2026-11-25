@@ -200,5 +200,27 @@ def compute_score(x, y):
       expect(cloud.isLocalEndpoint, isFalse);
       expect(AntigravityPermissionPreset.mobileProfiles, hasLength(3));
     });
+
+    test('DiffHunkParser parses hunk-only patches via fallbackFilePath and quoted paths', () {
+      final rawOnlyHunk = DiffHunkParser.parse(
+        '@@ -10,2 +10,2 @@\n-oldCall()\n+newCall()',
+        fallbackFilePath: 'lib/app.dart',
+      );
+      expect(rawOnlyHunk, hasLength(1));
+      expect(rawOnlyHunk.first.filePath, 'lib/app.dart');
+      expect(rawOnlyHunk.first.hunks.first.addedLines, 1);
+      expect(rawOnlyHunk.first.hunks.first.removedLines, 1);
+
+      final quoted = DiffHunkParser.parse(
+        'diff --git "a/my dir/my file.dart" "b/my dir/my file.dart"\n'
+        '--- "a/my dir/my file.dart"\n'
+        '+++ "b/my dir/my file.dart"\n'
+        '@@ -1,1 +1,1 @@\n'
+        '-before\n'
+        '+after\n',
+      );
+      expect(quoted, hasLength(1));
+      expect(quoted.first.filePath, 'my dir/my file.dart');
+    });
   });
 }

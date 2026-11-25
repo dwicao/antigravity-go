@@ -257,15 +257,26 @@ class DiffHunkParser {
     r'^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$',
   );
 
-  static List<DiffFileHunks> parse(String unifiedDiff) {
+  static List<DiffFileHunks> parse(
+    String unifiedDiff, {
+    String? fallbackFilePath,
+  }) {
     if (unifiedDiff.trim().isEmpty) return const [];
     final rawLines = unifiedDiff.replaceAll('\r\n', '\n').split('\n');
 
     final files = <DiffFileHunks>[];
-    String? currentPath;
+    String? currentPath = fallbackFilePath;
     String? currentOldHeader;
     String? currentNewHeader;
     var hunks = <DiffHunk>[];
+
+    String cleanDiffPath(String raw) {
+      var s = raw.trim();
+      if (s.startsWith('"') && s.endsWith('"') && s.length >= 2) {
+        s = s.substring(1, s.length - 1);
+      }
+      return s.replaceFirst(RegExp(r'^[ab]/'), '').trim();
+    }
 
     String? hunkHeader;
     int oldStart = 0;
@@ -313,13 +324,15 @@ class DiffHunkParser {
     for (final line in rawLines) {
       if (line.startsWith('diff --git ')) {
         flushFile();
-        final match = RegExp(r'^diff --git a/(.+?) b/(.+)$').firstMatch(line);
+        final match = RegExp(
+          r'^diff --git (?:"a/(.+?)"|a/(.+?)) (?:"b/(.+?)"|b/(.+))$',
+        ).firstMatch(line);
         if (match != null) {
-          currentPath = match.group(2)?.trim();
+          currentPath = (match.group(3) ?? match.group(4))?.trim();
         } else {
           final parts = line.split(' ');
           if (parts.length >= 4) {
-            currentPath = parts.last.replaceFirst(RegExp(r'^[ab]/'), '').trim();
+            currentPath = cleanDiffPath(parts.last);
           }
         }
         continue;
@@ -329,14 +342,14 @@ class DiffHunkParser {
         if (currentPath == null &&
             currentOldHeader != null &&
             currentOldHeader != '/dev/null') {
-          currentPath = currentOldHeader!.replaceFirst(RegExp(r'^a/'), '');
+          currentPath = cleanDiffPath(currentOldHeader!);
         }
         continue;
       }
       if (line.startsWith('+++ ')) {
         currentNewHeader = line.substring(4).trim();
         if (currentNewHeader != null && currentNewHeader != '/dev/null') {
-          currentPath = currentNewHeader!.replaceFirst(RegExp(r'^b/'), '');
+          currentPath = cleanDiffPath(currentNewHeader!);
         }
         continue;
       }

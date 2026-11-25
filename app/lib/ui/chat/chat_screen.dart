@@ -37,12 +37,14 @@ import '../settings/settings_page.dart';
 import '../shell/background_tasks_sheet.dart';
 import '../shell/command_palette.dart';
 import '../usage/usage_page.dart';
+import '../workspace/diff_review_view.dart';
 import 'chat_banners_and_sheets.dart';
 import 'attachment_preview.dart';
 import 'chat_composer_bar.dart';
 import 'message_bubble.dart';
 import 'subagents_activity_banner.dart';
 import 'tool_approval_card.dart';
+import 'workspace_changes_banner.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
   const ChatScreen({
@@ -488,13 +490,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     if (firstWord == '/diff') {
       _clearInputMenus();
-      ref.read(sidePanelProvider.notifier).openTab(
-            const SidePanelTab(
-              id: 'review',
-              kind: SidePanelTabKind.review,
-              title: 'Review',
-            ),
-          );
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => const DiffReviewPage(),
+        ),
+      );
       return;
     }
 
@@ -1406,16 +1406,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                                           _quotedText = excerpt,
                                                     )
                                                 : null,
-                                            onOpenDiff: () => ref
-                                                .read(sidePanelProvider.notifier)
-                                                .openTab(
-                                                  const SidePanelTab(
-                                                    id: 'review',
-                                                    kind: SidePanelTabKind
-                                                        .review,
-                                                    title: 'Review',
-                                                  ),
+                                            onOpenDiff: () => Navigator.of(context).push(
+                                              MaterialPageRoute<void>(
+                                                builder: (_) => DiffReviewPage(
+                                                  initialFiles: m.changedFiles,
                                                 ),
+                                              ),
+                                            ),
                                           ),
                                         );
                                         final wrapped = RepaintBoundary(
@@ -2030,6 +2027,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             ),
           ),
         wrapCentered(const SubagentsActivityBanner()),
+        wrapCentered(const WorkspaceChangesBanner()),
         if (settings.batteryNetworkPolicyEnabled && devicePolicy.shouldWarn)
           wrapCentered(
             Container(

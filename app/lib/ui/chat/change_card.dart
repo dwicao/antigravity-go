@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../theme/app_theme.dart';
-import '../workspace/github_diff_viewer.dart';
+import '../workspace/diff_review_view.dart';
 
 /// Compact card modeled on `dsh-Go`'s `ChangeCard` showing files changed during
 /// a turn or after a Git commit/push, with `+N -M` counts and a tap-to-inspect sheet.
@@ -138,14 +138,18 @@ class ChangeCard extends StatelessWidget {
               const Divider(height: 8),
               InkWell(
                 onTap: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => GitHubDiffPage(
-                        files: files,
-                        title: title ?? '${files.length} Files Changed',
+                  if (onOpenDiff != null) {
+                    onOpenDiff!();
+                  } else {
+                    Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => DiffReviewPage(
+                          initialFiles: files,
+                          title: title ?? '${files.length} Files Changed',
+                        ),
                       ),
-                    ),
-                  );
+                    );
+                  }
                 },
                 child: Padding(
                   padding:
@@ -153,7 +157,7 @@ class ChangeCard extends StatelessWidget {
                   child: Row(
                     children: [
                       Text(
-                        'GitHub Diff Viewer (${files.length} file${files.length == 1 ? '' : 's'})',
+                        'View Diff (${files.length} file${files.length == 1 ? '' : 's'})',
                         style: theme.textTheme.labelMedium?.copyWith(
                           color: theme.colorScheme.primary,
                           fontWeight: FontWeight.w600,
@@ -183,8 +187,8 @@ class ChangeCard extends StatelessWidget {
                 onTap: () {
                   Navigator.of(context).push(
                     MaterialPageRoute<void>(
-                      builder: (_) => GitHubDiffPage(
-                        files: files,
+                      builder: (_) => DiffReviewPage(
+                        initialFiles: files,
                         title: title ?? '${files.length} Files Changed',
                       ),
                     ),
@@ -196,7 +200,7 @@ class ChangeCard extends StatelessWidget {
                   child: Row(
                     children: [
                       Text(
-                        'Open GitHub Diff Viewer',
+                        'View Diff',
                         style: theme.textTheme.labelMedium?.copyWith(
                           color: theme.colorScheme.primary,
                           fontWeight: FontWeight.w600,

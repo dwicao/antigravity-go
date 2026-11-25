@@ -15,6 +15,7 @@ import '../harness/harness_page.dart';
 import '../phone/phone_control_page.dart';
 import '../shell/background_tasks_sheet.dart';
 import '../usage/usage_page.dart';
+import '../workspace/diff_review_view.dart';
 
 /// 1:1 Antigravity App Overview Panel:
 /// - Top launcher rows: Review, Files, Terminal, Browser, Phone Control
@@ -99,16 +100,17 @@ class OverviewPanel extends ConsumerWidget {
                         ListTile(
                           dense: true,
                           leading: const Icon(Icons.difference_outlined, size: 18),
-                          title: const Text('Review'),
+                          title: const Text('Files Changed (Diff)'),
                           subtitle: const Text('Git uncommitted changes & diffs'),
                           trailing: const Icon(Icons.chevron_right, size: 18),
-                          onTap: () => openSideTab(
-                            const SidePanelTab(
-                              id: 'review',
-                              kind: SidePanelTabKind.review,
-                              title: 'Review',
-                            ),
-                          ),
+                          onTap: () {
+                            onClose?.call();
+                            Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => const DiffReviewPage(),
+                              ),
+                            );
+                          },
                         ),
                         const Divider(height: 1),
                         ListTile(
@@ -431,13 +433,16 @@ class OverviewPanel extends ConsumerWidget {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
-                          onTap: () => openSideTab(
-                            const SidePanelTab(
-                              id: 'review',
-                              kind: SidePanelTabKind.review,
-                              title: 'Review',
-                            ),
-                          ),
+                          onTap: () {
+                            onClose?.call();
+                            Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => DiffReviewPage(
+                                  initialFocusPath: path,
+                                ),
+                              ),
+                            );
+                          },
                         ),
                       ),
                     const SizedBox(height: 8),

@@ -2,6 +2,13 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.37] - 2026-11-26
+
+### Changed
+- **Standalone Diff Viewer Page:** Moved Git Diff review out of the Side Panel into a dedicated full-screen `DiffReviewPage` (`Scaffold` + `AppBar` with branch badge, `GitHub / Swipe / Raw` display modes, hunk revert, Commit & Push, and Ask AI Review).
+- **Bottom-of-Chat Changes Mini-View:** Added `WorkspaceChangesBanner` + `workspaceDiffProvider` right below the chat thread (collapsible milestone-style card showing live changed files and `+N -M` line counts such as `+324 -126`); tapping the header or any file jumps directly into `DiffReviewPage`.
+- **Diff Rendering & Parser Fixes:** Fixed `DiffHunkParser.parse` for hunk-only snippets (`fallbackFilePath`) and quoted filenames, expanded untracked directories via `git status --short -uall`, and upgraded unified/split diff rows with `SelectionArea` and distinct red/green left gutter bars for removals and additions.
+
 ## [1.0.36] - 2026-11-26
 
 ### Changed

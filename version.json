@@ -1,7 +1,7 @@
 {
-  "version": "1.0.36",
+  "version": "1.0.37",
   "buildNumber": 1,
-  "tag": "v1.0.36",
+  "tag": "v1.0.37",
   "changelogUrl": "https://github.com/dwicao/antigravity-go/blob/main/CHANGELOG.md",
-  "releaseNotes": "### Changed\n- **Unified Composer Agent Mode Pill:** Consolidated the redundant `Auto-Dev` (permission preset), `Fast` (execution mode), and `Regular` (unused speed tier) pills below the chat composer into a single `AgentComposerMode` picker (`Auto-Dev`, `Accept Edits`, `Standard`, `Plan / Ask Only`, plus SSH `Auto (Sandbox)`) that atomically updates both permission preset and `--mode`.\n- **Execution Mode Label Clarity:** Renamed `AgyExecutionMode.standard` label from `Fast` to `Standard` so it accurately reflects `default` CLI mode without colliding with inference speed labels."
+  "releaseNotes": "### Changed\n- **Standalone Diff Viewer Page:** Moved Git Diff review out of the Side Panel into a dedicated full-screen `DiffReviewPage` (`Scaffold` + `AppBar` with branch badge, `GitHub / Swipe / Raw` display modes, hunk revert, Commit & Push, and Ask AI Review).\n- **Bottom-of-Chat Changes Mini-View:** Added `WorkspaceChangesBanner` + `workspaceDiffProvider` right below the chat thread (collapsible milestone-style card showing live changed files and `+N -M` line counts such as `+324 -126`); tapping the header or any file jumps directly into `DiffReviewPage`.\n- **Diff Rendering & Parser Fixes:** Fixed `DiffHunkParser.parse` for hunk-only snippets (`fallbackFilePath`) and quoted filenames, expanded untracked directories via `git status --short -uall`, and upgraded unified/split diff rows with `SelectionArea` and distinct red/green left gutter bars for removals and additions."
 }

@@ -6,9 +6,12 @@ import 'package:antigravity_go/state/harness_state.dart';
 import 'package:antigravity_go/state/settings_state.dart';
 import 'package:antigravity_go/state/share_inbox_state.dart';
 import 'package:antigravity_go/state/side_panel_state.dart';
+import 'package:antigravity_go/state/workspace_diff_state.dart';
 import 'package:antigravity_go/theme/app_theme.dart';
 import 'package:antigravity_go/ui/chat/message_bubble.dart';
 import 'package:antigravity_go/ui/chat/message_metrics_footer.dart';
+import 'package:antigravity_go/ui/chat/workspace_changes_banner.dart';
+import 'package:antigravity_go/ui/workspace/diff_review_view.dart';
 import 'package:antigravity_go/ui/workspace/github_diff_viewer.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -207,4 +210,93 @@ diff --git a/lib/new_file.dart b/lib/new_file.dart
     expect(find.text('lib/new_file.dart'), findsWidgets);
     expect(find.text('lib/foo.dart'), findsNothing);
   });
+
+  testWidgets('WorkspaceChangesBanner renders mini-view and opens standalone DiffReviewPage', (tester) async {
+    const sampleDiff = '''
+diff --git a/app/lib/main.dart b/app/lib/main.dart
+--- a/app/lib/main.dart
++++ b/app/lib/main.dart
+@@ -1,2 +1,2 @@
+-oldInit();
++newInit();
+''';
+    final container = ProviderContainer(
+      overrides: [
+        workspaceDiffProvider.overrideWith(
+          () => _FakeWorkspaceDiffNotifier(
+            const WorkspaceDiffState(
+              branch: 'main',
+              status: ' M app/lib/main.dart\n M app/lib/app.dart',
+              unifiedDiff: sampleDiff,
+              files: [
+                FileChangeEntry(
+                  path: 'app/lib/main.dart',
+                  added: 300,
+                  removed: 100,
+                  diff: sampleDiff,
+                ),
+                FileChangeEntry(
+                  path: 'app/lib/app.dart',
+                  added: 24,
+                  removed: 26,
+                  diff: '@@ -1,1 +1,1 @@\n-a\n+b',
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    expect(
+      container.read(sidePanelProvider).tabs.map((t) => t.kind),
+      orderedEquals([SidePanelTabKind.files, SidePanelTabKind.terminal]),
+    );
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          theme: _theme(),
+          home: const Scaffold(
+            body: Column(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                WorkspaceChangesBanner(),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('workspace-changes-banner')), findsOneWidget);
+    expect(find.text('2 files changed'), findsOneWidget);
+    expect(find.text('+324'), findsOneWidget);
+    expect(find.text('−126'), findsOneWidget);
+    expect(find.text('main.dart'), findsOneWidget);
+    expect(find.text('app.dart'), findsOneWidget);
+
+    await tester.tap(find.text('main.dart'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(DiffReviewPage), findsOneWidget);
+    expect(find.text('Files Changed'), findsOneWidget);
+    expect(find.text('newInit();'), findsOneWidget);
+    expect(find.text('oldInit();'), findsOneWidget);
+  });
+}
+
+class _FakeWorkspaceDiffNotifier extends WorkspaceDiffNotifier {
+  _FakeWorkspaceDiffNotifier(this._initial);
+
+  final WorkspaceDiffState _initial;
+
+  @override
+  WorkspaceDiffState build() => _initial;
+
+  @override
+  Future<void> refresh({bool showLoading = false}) async {}
 }

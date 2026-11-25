@@ -10,6 +10,7 @@ import '../../state/hosts_state.dart';
 import '../../state/projects_state.dart';
 import '../../state/runtime_state.dart';
 import '../../state/sessions_state.dart';
+import '../../state/workspace_diff_state.dart';
 import '../../theme/app_theme.dart';
 import '../chat/change_card.dart';
 import 'github_diff_viewer.dart';
@@ -23,8 +24,55 @@ enum DiffReviewDisplayMode {
   final String label;
 }
 
+/// Dedicated full-screen page for inspecting Git / Shadow Git workspace diffs
+/// (line-by-line green additions & red removals, Split/Unified toggle, revert
+/// hunk, and Commit & Push).
+class DiffReviewPage extends StatelessWidget {
+  const DiffReviewPage({
+    super.key,
+    this.initialFocusPath,
+    this.initialFiles = const [],
+    this.initialDiff = '',
+    this.initialBranch = '',
+    this.title = 'Files Changed',
+  });
+
+  final String? initialFocusPath;
+  final List<FileChangeEntry> initialFiles;
+  final String initialDiff;
+  final String initialBranch;
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    return DiffReviewView(
+      standalone: true,
+      initialFocusPath: initialFocusPath,
+      initialFiles: initialFiles,
+      initialDiff: initialDiff,
+      initialBranch: initialBranch,
+      title: title,
+    );
+  }
+}
+
 class DiffReviewView extends ConsumerStatefulWidget {
-  const DiffReviewView({super.key});
+  const DiffReviewView({
+    super.key,
+    this.standalone = false,
+    this.initialFocusPath,
+    this.initialFiles = const [],
+    this.initialDiff = '',
+    this.initialBranch = '',
+    this.title = 'Review Changes',
+  });
+
+  final bool standalone;
+  final String? initialFocusPath;
+  final List<FileChangeEntry> initialFiles;
+  final String initialDiff;
+  final String initialBranch;
+  final String title;
 
   @override
   ConsumerState<DiffReviewView> createState() => _DiffReviewViewState();
@@ -46,6 +94,21 @@ class _DiffReviewViewState extends ConsumerState<DiffReviewView> {
   @override
   void initState() {
     super.initState();
+    if (widget.initialFiles.isNotEmpty || widget.initialDiff.trim().isNotEmpty) {
+      _changedFiles = widget.initialFiles;
+      _diff = widget.initialDiff.trim();
+      _branch = widget.initialBranch.trim();
+      _fileHunks = DiffHunkParser.parse(_diff);
+    } else {
+      final live = ref.read(workspaceDiffProvider);
+      if (live.hasChanges) {
+        _status = live.status;
+        _diff = live.unifiedDiff;
+        _branch = live.branch;
+        _changedFiles = live.files;
+        _fileHunks = DiffHunkParser.parse(_diff);
+      }
+    }
     Future.microtask(_load);
   }
 
@@ -64,57 +127,27 @@ class _DiffReviewViewState extends ConsumerState<DiffReviewView> {
     if (!mounted) return;
     setState(() => _loading = true);
     try {
-      final sshHost = ref.read(hostsProvider).activeSshHost;
-      if (sshHost != null) {
-        final (pwd, key) =
-            await ref.read(hostsProvider.notifier).readCredentials(sshHost.id);
-        final raw = await SshAgyRunner.instance.runRemoteCommand(
-          host: sshHost,
-          cwd: _activeCwd(),
-          password: pwd,
-          privateKeyPem: key,
-          onTrustFirstKey: (fp) => ref
-              .read(hostsProvider.notifier)
-              .saveHostFingerprint(sshHost.id, fp),
-          command:
-              "git branch --show-current 2>/dev/null || true; printf '\\n===STATUS===\\n'; git status --short 2>/dev/null || true; printf '\\n===NUMSTAT===\\n'; git diff --numstat 2>/dev/null || true; git diff --cached --numstat 2>/dev/null || true; printf '\\n===DIFF===\\n'; git diff 2>/dev/null || true; git diff --cached 2>/dev/null || true",
-        );
-        final parts = raw.split('\n===STATUS===\n');
-        final branch = parts.first.trim();
-        final rest1 = (parts.length > 1 ? parts[1] : '').split('\n===NUMSTAT===\n');
-        final status = rest1.first.trim();
-        final rest2 = (rest1.length > 1 ? rest1[1] : '').split('\n===DIFF===\n');
-        final numstat = rest2.first.trim();
-        final diff = (rest2.length > 1 ? rest2[1] : '').trim();
-        final parsed = FileChangeEntry.attachUnifiedDiffs(
-          FileChangeEntry.parseGitNumstat(numstat),
-          diff,
-        );
-        final hunks = DiffHunkParser.parse(diff);
-        if (mounted) {
-          setState(() {
-            _status = status;
-            _diff = diff;
-            _branch = branch;
-            _changedFiles = parsed;
-            _fileHunks = hunks;
-            _hunkDecisions.clear();
-          });
-        }
-        return;
-      }
-      final res = await RuntimeBridge.instance.gitDiffDetailed(_activeCwd());
-      final hunks = DiffHunkParser.parse(res.diff.trim());
-      if (mounted) {
-        setState(() {
-          _status = res.status.trim();
-          _diff = res.diff.trim();
-          _branch = res.branch.trim();
-          _changedFiles = res.files;
-          _fileHunks = hunks;
-          _hunkDecisions.clear();
-        });
-      }
+      await ref.read(workspaceDiffProvider.notifier).refresh();
+      if (!mounted) return;
+      final live = ref.read(workspaceDiffProvider);
+      final useInitial =
+          !live.hasChanges &&
+          (widget.initialFiles.isNotEmpty ||
+              widget.initialDiff.trim().isNotEmpty);
+      final nextDiff = useInitial ? widget.initialDiff.trim() : live.unifiedDiff;
+      final nextFiles = useInitial ? widget.initialFiles : live.files;
+      final nextBranch =
+          useInitial ? widget.initialBranch.trim() : live.branch;
+      final nextStatus = useInitial ? '' : live.status;
+      final hunks = DiffHunkParser.parse(nextDiff);
+      setState(() {
+        _status = nextStatus;
+        _diff = nextDiff;
+        _branch = nextBranch;
+        _changedFiles = nextFiles;
+        _fileHunks = hunks;
+        _hunkDecisions.clear();
+      });
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -309,175 +342,154 @@ class _DiffReviewViewState extends ConsumerState<DiffReviewView> {
         if (prev != next) Future.microtask(_load);
       },
     );
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-          child: Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Review Changes',
-                      style: theme.textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    if (_branch.isNotEmpty)
-                      Text(
-                        'Branch: $_branch',
-                        style: theme.textTheme.labelSmall,
-                      ),
-                  ],
-                ),
+    List<Widget> buildActions() {
+      return [
+        if (_changedFiles.isNotEmpty || _diff.isNotEmpty)
+          PopupMenuButton<DiffReviewDisplayMode>(
+            tooltip: 'Diff viewer mode (${_displayMode.label})',
+            icon: Icon(
+              switch (_displayMode) {
+                DiffReviewDisplayMode.github => Icons.difference_outlined,
+                DiffReviewDisplayMode.swipe => Icons.swipe_outlined,
+                DiffReviewDisplayMode.raw => Icons.view_headline_outlined,
+              },
+              size: 19,
+              color: theme.colorScheme.primary,
+            ),
+            onSelected: (m) => setState(() => _displayMode = m),
+            itemBuilder: (_) => const [
+              PopupMenuItem(
+                value: DiffReviewDisplayMode.github,
+                child: Text('GitHub Diff Viewer'),
               ),
-              if (_changedFiles.isNotEmpty || _diff.isNotEmpty)
-                PopupMenuButton<DiffReviewDisplayMode>(
-                  tooltip: 'Diff viewer mode (${_displayMode.label})',
-                  icon: Icon(
-                    switch (_displayMode) {
-                      DiffReviewDisplayMode.github => Icons.difference_outlined,
-                      DiffReviewDisplayMode.swipe => Icons.swipe_outlined,
-                      DiffReviewDisplayMode.raw => Icons.view_headline_outlined,
-                    },
-                    size: 18,
-                    color: theme.colorScheme.primary,
-                  ),
-                  onSelected: (m) => setState(() => _displayMode = m),
-                  itemBuilder: (_) => const [
-                    PopupMenuItem(
-                      value: DiffReviewDisplayMode.github,
-                      child: Text('GitHub Diff Viewer'),
-                    ),
-                    PopupMenuItem(
-                      value: DiffReviewDisplayMode.swipe,
-                      child: Text('Swipe Hunks (Keep / Revert)'),
-                    ),
-                    PopupMenuItem(
-                      value: DiffReviewDisplayMode.raw,
-                      child: Text('Raw Git Diff'),
-                    ),
-                  ],
-                ),
-              IconButton(
-                visualDensity: VisualDensity.compact,
-                constraints: const BoxConstraints.tightFor(width: 34, height: 34),
-                padding: EdgeInsets.zero,
-                tooltip: 'Commit & Push changed files',
-                onPressed: (_status.isEmpty && _diff.isEmpty) || _pushing
-                    ? null
-                    : () => _commitAndPush(push: true),
-                icon: _pushing
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.cloud_upload_outlined, size: 18),
+              PopupMenuItem(
+                value: DiffReviewDisplayMode.swipe,
+                child: Text('Swipe Hunks (Keep / Revert)'),
               ),
-              IconButton(
-                visualDensity: VisualDensity.compact,
-                constraints: const BoxConstraints.tightFor(width: 34, height: 34),
-                padding: EdgeInsets.zero,
-                tooltip: 'Ask agent to review diff',
-                onPressed: _diff.isEmpty
-                    ? null
-                    : () => ref.read(chatProvider.notifier).sendPrompt(
-                          'Review the current git uncommitted changes and suggest any fixes.',
-                        ),
-                icon: const Icon(Icons.rate_review_outlined, size: 18),
-              ),
-              IconButton(
-                visualDensity: VisualDensity.compact,
-                constraints: const BoxConstraints.tightFor(width: 34, height: 34),
-                padding: EdgeInsets.zero,
-                tooltip: 'Refresh git diff',
-                onPressed: _loading ? null : _load,
-                icon: const Icon(Icons.refresh, size: 18),
+              PopupMenuItem(
+                value: DiffReviewDisplayMode.raw,
+                child: Text('Raw Git Diff'),
               ),
             ],
           ),
+        IconButton(
+          visualDensity: VisualDensity.compact,
+          tooltip: 'Commit & Push changed files',
+          onPressed: (_status.isEmpty && _diff.isEmpty) || _pushing
+              ? null
+              : () => _commitAndPush(push: true),
+          icon: _pushing
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.cloud_upload_outlined, size: 19),
         ),
-        const Divider(height: 1),
-        Expanded(
-          child: _loading
-              ? const Center(child: CircularProgressIndicator())
-              : (_status.isEmpty && _diff.isEmpty && _lastPushResult == null && _changedFiles.isEmpty)
-                  ? const Center(
-                      child: Padding(
-                        padding: EdgeInsets.all(20),
-                        child: Text(
-                          'No uncommitted Git changes in the active project.',
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                    )
-                  : _displayMode == DiffReviewDisplayMode.github &&
-                          (_changedFiles.isNotEmpty || _diff.isNotEmpty)
-                      ? GitHubDiffViewer(
-                          files: _changedFiles,
-                          unifiedDiff: _diff,
-                          branch: _branch,
-                          onRevertHunk: _rejectHunk,
-                        )
-                      : Scrollbar(
-                      child: ListView(
-                        padding: const EdgeInsets.all(12),
-                        children: [
-                          if (_lastPushResult != null) ...[
-                            ChangeCard(
-                              files: _lastPushResult!.files,
-                              title:
-                                  'Pushed ${_lastPushResult!.commitHash} (${_lastPushResult!.branch})',
-                            ),
-                            if (_lastPushResult!.output.isNotEmpty) ...[
-                              const SizedBox(height: 6),
-                              Text(
-                                _lastPushResult!.output,
-                                style: const TextStyle(
-                                  fontFamily: 'monospace',
-                                  fontSize: 11.5,
-                                ),
-                              ),
-                            ],
-                            const SizedBox(height: 12),
-                          ],
-                          if (_changedFiles.isNotEmpty) ...[
-                            ChangeCard(files: _changedFiles),
-                            const SizedBox(height: 12),
-                          ],
-                          if (_status.isNotEmpty) ...[
-                            Text(
-                              'Git Status',
-                              style: theme.textTheme.labelMedium?.copyWith(
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
+        IconButton(
+          visualDensity: VisualDensity.compact,
+          tooltip: 'Ask agent to review diff',
+          onPressed: _diff.isEmpty
+              ? null
+              : () {
+                  ref.read(chatProvider.notifier).sendPrompt(
+                        'Review the current git uncommitted changes and suggest any fixes.',
+                      );
+                  if (widget.standalone && Navigator.of(context).canPop()) {
+                    Navigator.of(context).pop();
+                  }
+                },
+          icon: const Icon(Icons.rate_review_outlined, size: 19),
+        ),
+        IconButton(
+          visualDensity: VisualDensity.compact,
+          tooltip: 'Refresh git diff',
+          onPressed: _loading ? null : _load,
+          icon: const Icon(Icons.refresh, size: 19),
+        ),
+      ];
+    }
+
+    final diffBody = _loading
+        ? const Center(child: CircularProgressIndicator())
+        : (_status.isEmpty &&
+                _diff.isEmpty &&
+                _lastPushResult == null &&
+                _changedFiles.isEmpty)
+            ? const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(20),
+                  child: Text(
+                    'No uncommitted Git changes in the active project.',
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              )
+            : _displayMode == DiffReviewDisplayMode.github &&
+                    (_changedFiles.isNotEmpty || _diff.isNotEmpty)
+                ? GitHubDiffViewer(
+                    files: _changedFiles,
+                    unifiedDiff: _diff,
+                    branch: _branch,
+                    initialFocusPath: widget.initialFocusPath,
+                    onRevertHunk: _rejectHunk,
+                  )
+                : Scrollbar(
+                    child: ListView(
+                      padding: const EdgeInsets.all(12),
+                      children: [
+                        if (_lastPushResult != null) ...[
+                          ChangeCard(
+                            files: _lastPushResult!.files,
+                            title:
+                                'Pushed ${_lastPushResult!.commitHash} (${_lastPushResult!.branch})',
+                          ),
+                          if (_lastPushResult!.output.isNotEmpty) ...[
                             const SizedBox(height: 6),
-                            Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: theme.colorScheme.surfaceContainerHighest,
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              child: SelectableText(
-                                _status,
-                                style: const TextStyle(
-                                  fontFamily: 'monospace',
-                                  fontSize: 12,
-                                ),
+                            Text(
+                              _lastPushResult!.output,
+                              style: const TextStyle(
+                                fontFamily: 'monospace',
+                                fontSize: 11.5,
                               ),
                             ),
-                            const SizedBox(height: 12),
                           ],
-                          if (_diff.isNotEmpty &&
-                              _displayMode == DiffReviewDisplayMode.swipe &&
-                              _fileHunks.isNotEmpty) ...[
-                            Row(
-                              children: [
-                                Text(
+                          const SizedBox(height: 12),
+                        ],
+                        if (_changedFiles.isNotEmpty) ...[
+                          ChangeCard(files: _changedFiles),
+                          const SizedBox(height: 12),
+                        ],
+                        if (_status.isNotEmpty) ...[
+                          Text(
+                            'Git Status',
+                            style: theme.textTheme.labelMedium?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.surfaceContainerHighest,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: SelectableText(
+                              _status,
+                              style: const TextStyle(
+                                fontFamily: 'monospace',
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                        ],
+                        if (_diff.isNotEmpty &&
+                            _displayMode == DiffReviewDisplayMode.swipe &&
+                            _fileHunks.isNotEmpty) ...[
+                          Row(
+                            children: [
+                              Text(
                                   'Swipe Hunks (→ Accept · ← Revert)',
                                   style: theme.textTheme.labelMedium?.copyWith(
                                     fontWeight: FontWeight.w700,
@@ -542,8 +554,60 @@ class _DiffReviewViewState extends ConsumerState<DiffReviewView> {
                           ],
                         ],
                       ),
-                    ),
+                    );
+
+    if (widget.standalone) {
+      return Scaffold(
+        appBar: AppBar(
+          title: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(widget.title),
+              if (_branch.isNotEmpty)
+                Text(
+                  'Branch: $_branch',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+            ],
+          ),
+          actions: buildActions(),
         ),
+        body: diffBody,
+      );
+    }
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      widget.title,
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    if (_branch.isNotEmpty)
+                      Text(
+                        'Branch: $_branch',
+                        style: theme.textTheme.labelSmall,
+                      ),
+                  ],
+                ),
+              ),
+              ...buildActions(),
+            ],
+          ),
+        ),
+        const Divider(height: 1),
+        Expanded(child: diffBody),
       ],
     );
   }
