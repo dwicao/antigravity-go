@@ -1056,4 +1056,185 @@ void main() {
     );
     idleContainer.dispose();
   });
+
+  testWidgets(
+      'Typing / shows floating slash menu without shifting ChatComposerBar on mobile',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    tester.view.physicalSize = const Size(360, 640);
+    tester.view.devicePixelRatio = 1.0;
+    tester.view.viewInsets = const FakeViewPadding(bottom: 220);
+    addTearDown(tester.view.resetViewInsets);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final container = ProviderContainer(
+      overrides: [
+        sessionsProvider.overrideWith(
+          () => _FakeSessionsNotifier(const SessionsState(activeSessionId: 's-slash')),
+        ),
+        runtimeProvider.overrideWith(
+          () => _FakeRuntimeNotifier(const RuntimeUiState()),
+        ),
+        chatProvider.overrideWith(
+          () => _FakeChatNotifier(const ChatThreadState()),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(
+          home: Scaffold(body: ChatScreen()),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final fieldFinder = find.byType(TextField);
+    final beforeRect = tester.getRect(fieldFinder);
+
+    await tester.enterText(fieldFinder, '/');
+    await tester.pump();
+
+    final slashItemFinder = find.text('/plan');
+    expect(slashItemFinder, findsOneWidget);
+
+    final afterRect = tester.getRect(fieldFinder);
+    expect((afterRect.top - beforeRect.top).abs(), lessThanOrEqualTo(1.0));
+    expect(
+      (afterRect.bottom - beforeRect.bottom).abs(),
+      lessThanOrEqualTo(1.0),
+    );
+    final slashRect = tester.getRect(slashItemFinder);
+    expect(slashRect.bottom, lessThanOrEqualTo(afterRect.top));
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(milliseconds: 500));
+  });
+
+  testWidgets(
+      'ChatScreen windows long history, collapses older milestones, and reveals all when requested',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final messages = List<ChatMessage>.generate(55, (i) {
+      final isUser = i.isEven;
+      final isOldStepMsg = i == 3;
+      final isRecentStepMsg = i == 53;
+      return ChatMessage(
+        id: 'm-$i',
+        role: isUser ? ChatRole.user : ChatRole.assistant,
+        text: 'Message #$i',
+        createdAt: DateTime(2026, 11, 25, 10, 0).add(Duration(seconds: i)),
+        completedAt: isUser
+            ? null
+            : DateTime(2026, 11, 25, 10, 0).add(Duration(seconds: i + 1)),
+        tools: isOldStepMsg
+            ? const [
+                ChatToolStep(
+                  id: 't-old',
+                  toolName: 'read_file',
+                  parameters: {'AbsolutePath': '/repo/old.dart'},
+                  state: ToolCallState.completed,
+                ),
+              ]
+            : isRecentStepMsg
+                ? const [
+                    ChatToolStep(
+                      id: 't-recent',
+                      toolName: 'read_file',
+                      parameters: {'AbsolutePath': '/repo/recent.dart'},
+                      state: ToolCallState.completed,
+                    ),
+                  ]
+                : const [],
+        steps: isOldStepMsg
+            ? const [
+                ChatMilestoneStep(
+                  id: 'ms-old',
+                  kind: ChatMilestoneKind.tool,
+                  toolId: 't-old',
+                ),
+              ]
+            : isRecentStepMsg
+                ? const [
+                    ChatMilestoneStep(
+                      id: 'ms-recent',
+                      kind: ChatMilestoneKind.tool,
+                      toolId: 't-recent',
+                    ),
+                  ]
+                : const [],
+      );
+    });
+
+    final container = ProviderContainer(
+      overrides: [
+        sessionsProvider.overrideWith(
+          () => _FakeSessionsNotifier(const SessionsState(activeSessionId: 's-long')),
+        ),
+        runtimeProvider.overrideWith(
+          () => _FakeRuntimeNotifier(const RuntimeUiState()),
+        ),
+        chatProvider.overrideWith(
+          () => _FakeChatNotifier(ChatThreadState(messages: messages)),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(
+          home: Scaffold(body: ChatScreen()),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    // Latest messages and recent expanded milestone are visible; oldest 15 are windowed out.
+    expect(find.text('Message #54'), findsOneWidget);
+    expect(find.text('Read — /repo/recent.dart'), findsOneWidget);
+    expect(find.text('Message #0'), findsNothing);
+
+    final scrollableFinder = find.byType(Scrollable).first;
+    await tester.scrollUntilVisible(
+      find.text('Show all'),
+      -400,
+      scrollable: scrollableFinder,
+    );
+    await tester.pump();
+
+    expect(find.text('Load 15 earlier (15 hidden)'), findsOneWidget);
+    expect(find.text('Show all'), findsOneWidget);
+
+    await tester.tap(find.text('Show all'));
+    await tester.pump();
+
+    expect(find.text('Show all'), findsNothing);
+    await tester.scrollUntilVisible(
+      find.text('Message #0'),
+      -400,
+      scrollable: scrollableFinder,
+    );
+    await tester.pump();
+
+    expect(find.text('Message #0'), findsOneWidget);
+    // Older message milestone is collapsed by default: summary shown, detail row hidden.
+    await tester.scrollUntilVisible(
+      find.text('Message #3'),
+      200,
+      scrollable: scrollableFinder,
+    );
+    await tester.pump();
+    expect(find.text('Completed 1 step · 1 read'), findsAtLeastNWidgets(1));
+    expect(find.text('Read — /repo/old.dart'), findsNothing);
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(milliseconds: 500));
+  });
 }

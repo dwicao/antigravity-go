@@ -51,8 +51,13 @@ class _SessionTurnRuntime {
   bool isCustomOpenAi;
   DateTime? streamBurstStart;
   final List<({DateTime at, double tokens})> rateSamples = [];
+  Timer? uiEmitTimer;
+  bool pendingUiEmit = false;
+  double latestTokensPerSec = 0;
 
   void dispose() {
+    uiEmitTimer?.cancel();
+    uiEmitTimer = null;
     stallWatchdog?.cancel();
     stallWatchdog = null;
     final s = sub;
@@ -603,16 +608,59 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       ChatMessageStore.instance.save(sessionId, msgs);
 
   List<ChatMessage> _messagesForSession(String sessionId) {
-    if (_loadedSessionId == sessionId) {
-      return state.messages;
-    }
-    return _inFlightMessages[sessionId] ?? const [];
+    return _inFlightMessages[sessionId] ??
+        (_loadedSessionId == sessionId ? state.messages : const []);
   }
 
-  void _updateSessionMessages(String sessionId, List<ChatMessage> next) {
+  void _updateSessionMessages(
+    String sessionId,
+    List<ChatMessage> next, {
+    double? tokensPerSecond,
+    bool coalesceUi = false,
+  }) {
     _inFlightMessages[sessionId] = next;
-    if (_loadedSessionId == sessionId) {
-      state = state.copyWith(messages: next);
+    if (_loadedSessionId != sessionId) return;
+
+    final rt = _sessionRuntimes[sessionId];
+    if (tokensPerSecond != null && rt != null) {
+      rt.latestTokensPerSec = tokensPerSecond;
+    }
+
+    if (!coalesceUi || rt == null) {
+      rt?.uiEmitTimer?.cancel();
+      rt?.uiEmitTimer = null;
+      rt?.pendingUiEmit = false;
+      state = state.copyWith(
+        messages: next,
+        tokensPerSecond: tokensPerSecond ?? state.tokensPerSecond,
+      );
+      return;
+    }
+
+    // Leading-edge immediate emit + 33ms trailing coalesce (~30fps) so rapid
+    // streaming token bursts never choke Markdown layout on long histories.
+    if (rt.uiEmitTimer == null) {
+      state = state.copyWith(
+        messages: next,
+        tokensPerSecond: tokensPerSecond ?? rt.latestTokensPerSec,
+      );
+      rt.pendingUiEmit = false;
+      rt.uiEmitTimer = Timer(const Duration(milliseconds: 33), () {
+        rt.uiEmitTimer = null;
+        if (!ref.mounted || _loadedSessionId != sessionId) return;
+        if (rt.pendingUiEmit) {
+          rt.pendingUiEmit = false;
+          final latest = _inFlightMessages[sessionId];
+          if (latest != null) {
+            state = state.copyWith(
+              messages: latest,
+              tokensPerSecond: rt.latestTokensPerSec,
+            );
+          }
+        }
+      });
+    } else {
+      rt.pendingUiEmit = true;
     }
   }
 
@@ -1162,10 +1210,9 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       case AgyThoughtDeltaEvent():
         rt?.receivedTurnContent = true;
         _firstOutputAt.putIfAbsent(assistantId, DateTime.now);
-        if (_loadedSessionId == session.id) {
-          final rate = _recordRateSample(session.id, evt.delta);
-          state = state.copyWith(tokensPerSecond: rate);
-        }
+        final rate = _loadedSessionId == session.id
+            ? _recordRateSample(session.id, evt.delta)
+            : null;
         final nextSteps = [...current.steps];
         if (evt.delta.isNotEmpty) {
           if (nextSteps.isNotEmpty &&
@@ -1196,14 +1243,15 @@ class ChatNotifier extends Notifier<ChatThreadState> {
                 ? evt.stepUsage!.contextTokens
                 : current.contextTokens,
           ),
+          tokensPerSecond: rate,
+          coalesceUi: true,
         );
       case AgyTextDeltaEvent():
         rt?.receivedTurnContent = true;
         _firstOutputAt.putIfAbsent(assistantId, DateTime.now);
-        if (_loadedSessionId == session.id) {
-          final rate = _recordRateSample(session.id, evt.delta);
-          state = state.copyWith(tokensPerSecond: rate);
-        }
+        final rate = _loadedSessionId == session.id
+            ? _recordRateSample(session.id, evt.delta)
+            : null;
         final nextSteps = _appendTextStep(current.steps, evt.delta);
         final nextUsage =
             ChatTurnHelpers.mergeStepUsage(current.usage, evt.stepUsage);
@@ -1218,6 +1266,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
                 ? evt.stepUsage!.contextTokens
                 : current.contextTokens,
           ),
+          tokensPerSecond: rate,
+          coalesceUi: true,
         );
       case AgyToolCallEvent():
         rt?.receivedTurnContent = true;
@@ -1512,12 +1562,19 @@ class ChatNotifier extends Notifier<ChatThreadState> {
   void _replaceMessageInSession(
     String sessionId,
     int idx,
-    ChatMessage updated,
-  ) {
+    ChatMessage updated, {
+    double? tokensPerSecond,
+    bool coalesceUi = false,
+  }) {
     final list = [..._messagesForSession(sessionId)];
     if (idx < 0 || idx >= list.length) return;
     list[idx] = updated;
-    _updateSessionMessages(sessionId, list);
+    _updateSessionMessages(
+      sessionId,
+      list,
+      tokensPerSecond: tokensPerSecond,
+      coalesceUi: coalesceUi,
+    );
   }
 
   void _finishAssistantMessage({

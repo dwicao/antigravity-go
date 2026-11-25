@@ -114,26 +114,42 @@ class ChatEmptyHero extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              Icons.auto_awesome,
-              size: 48,
-              color: theme.colorScheme.primary,
+            Container(
+              width: 56,
+              height: 56,
+              decoration: BoxDecoration(
+                color: theme.colorScheme.primary.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: theme.colorScheme.primary.withOpacity(0.24),
+                ),
+              ),
+              child: Icon(
+                Icons.auto_awesome,
+                size: 28,
+                color: theme.colorScheme.primary,
+              ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 14),
             Text(
               'Antigravity in your pocket',
               style: theme.textTheme.headlineSmall?.copyWith(
                 fontWeight: FontWeight.w700,
+                letterSpacing: -0.2,
               ),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 6),
-            Text(
-              'Run AI agents on your phone or control your computer over SSH — with your Google Account & live 5h/weekly quota tracking.',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: Text(
+                'Run AI agents on your phone or control your computer over SSH — with your Google Account & live 5h/weekly quota tracking.',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                  height: 1.4,
+                ),
+                textAlign: TextAlign.center,
               ),
-              textAlign: TextAlign.center,
             ),
             const SizedBox(height: 20),
             Wrap(
@@ -143,7 +159,18 @@ class ChatEmptyHero extends StatelessWidget {
               children: suggestions
                   .map(
                     (s) => ActionChip(
-                      label: Text(s),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      side: BorderSide(
+                        color: theme.colorScheme.outlineVariant.withOpacity(0.5),
+                      ),
+                      backgroundColor:
+                          theme.colorScheme.surfaceContainerHigh.withOpacity(0.6),
+                      label: Text(
+                        s,
+                        style: theme.textTheme.labelMedium,
+                      ),
                       onPressed: () => onPickSuggestion(s),
                     ),
                   )

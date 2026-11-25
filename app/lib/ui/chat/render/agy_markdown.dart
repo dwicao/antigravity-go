@@ -192,7 +192,7 @@ class AgyMarkdown extends StatelessWidget {
       ),
     );
 
-    if (selectable) {
+    if (selectable && !streaming) {
       content = SelectionArea(child: content);
     }
     return content;

@@ -213,18 +213,20 @@ class MilestoneStackCard extends StatefulWidget {
     required this.steps,
     required this.tools,
     required this.isStreaming,
+    this.initiallyExpanded = true,
   });
 
   final List<ChatMilestoneStep> steps;
   final List<ChatToolStep> tools;
   final bool isStreaming;
+  final bool initiallyExpanded;
 
   @override
   State<MilestoneStackCard> createState() => _MilestoneStackCardState();
 }
 
 class _MilestoneStackCardState extends State<MilestoneStackCard> {
-  bool _stackOpen = true;
+  late bool _stackOpen = widget.initiallyExpanded;
   final Set<String> _expandedSteps = <String>{};
 
   static String _firstLine(String raw) =>

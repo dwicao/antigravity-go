@@ -30,6 +30,7 @@ class MessageBubble extends StatelessWidget {
     this.onOpenDiff,
     this.tokensPerSecond,
     this.activeSubagents = const [],
+    this.collapseMilestonesByDefault = false,
   });
 
   final ChatMessage message;
@@ -40,6 +41,7 @@ class MessageBubble extends StatelessWidget {
   final VoidCallback? onOpenDiff;
   final double? tokensPerSecond;
   final List<ActiveSubagent> activeSubagents;
+  final bool collapseMilestonesByDefault;
 
   List<Widget> _buildBodySegments(ThemeData theme, AgySemanticColors semantic) {
     final hasTextSteps =
@@ -53,6 +55,7 @@ class MessageBubble extends StatelessWidget {
             steps: message.steps,
             tools: message.tools,
             isStreaming: message.isStreaming,
+            initiallyExpanded: !collapseMilestonesByDefault,
           ),
         ] else ...[
           if (message.thoughts.isNotEmpty) ...[
@@ -148,6 +151,7 @@ class MessageBubble extends StatelessWidget {
             steps: seg.steps,
             tools: segTools,
             isStreaming: message.isStreaming && isLast,
+            initiallyExpanded: !collapseMilestonesByDefault,
           ),
         );
       }
@@ -177,10 +181,12 @@ class MessageBubble extends StatelessWidget {
       final fileAttachments = message.attachments
           .where((a) => !ChatTurnHelpers.isImagePath(a))
           .toList();
+      final screenW = MediaQuery.sizeOf(context).width;
+      final bubbleMaxW = (screenW * 0.84).clamp(240.0, 620.0);
       return Align(
         alignment: Alignment.centerRight,
         child: Container(
-          constraints: const BoxConstraints(maxWidth: 620),
+          constraints: BoxConstraints(maxWidth: bubbleMaxW),
           margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(
@@ -190,6 +196,9 @@ class MessageBubble extends StatelessWidget {
               topRight: Radius.circular(18),
               bottomLeft: Radius.circular(18),
               bottomRight: Radius.circular(4),
+            ),
+            border: Border.all(
+              color: theme.colorScheme.primary.withOpacity(0.14),
             ),
           ),
           child: Column(

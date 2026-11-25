@@ -34,15 +34,18 @@ class ChatPickerPill<T> extends StatelessWidget {
       onSelected: onSelected,
       itemBuilder: (_) => items,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
         decoration: BoxDecoration(
-          color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.6),
-          borderRadius: BorderRadius.circular(12),
+          color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.55),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: theme.colorScheme.outlineVariant.withOpacity(0.35),
+          ),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 14, color: theme.colorScheme.primary),
+            Icon(icon, size: 13, color: theme.colorScheme.primary),
             const SizedBox(width: 5),
             Text(
               label,
@@ -51,7 +54,11 @@ class ChatPickerPill<T> extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 2),
-            const Icon(Icons.arrow_drop_down, size: 16),
+            Icon(
+              Icons.keyboard_arrow_down_rounded,
+              size: 15,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
           ],
         ),
       ),
@@ -115,12 +122,12 @@ class ChatComposerBar extends ConsumerWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              padding: const EdgeInsets.all(6),
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 6),
               decoration: BoxDecoration(
-                color: theme.colorScheme.surfaceContainerHigh.withOpacity(0.85),
-                borderRadius: BorderRadius.circular(24),
+                color: theme.colorScheme.surfaceContainerHigh.withOpacity(0.92),
+                borderRadius: BorderRadius.circular(22),
                 border: Border.all(
-                  color: theme.colorScheme.outlineVariant.withOpacity(0.45),
+                  color: theme.colorScheme.outlineVariant.withOpacity(0.55),
                 ),
               ),
               child: Row(

@@ -61,6 +61,8 @@ class ChatScreen extends ConsumerStatefulWidget {
 class _ChatScreenState extends ConsumerState<ChatScreen> {
   static const _voiceChannel = MethodChannel('agy/voice');
   static const double _atBottomThreshold = 48.0;
+  static const int _initialMessageWindow = 40;
+  static const int _messageWindowStep = 40;
 
   final _inputController = TextEditingController();
   final _scrollController = ScrollController();
@@ -75,6 +77,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   bool _isProgrammaticScroll = false;
   bool _userActivelyScrollingUp = false;
   int _remainingOpenSnapFrames = 0;
+  int _visibleLimit = _initialMessageWindow;
   String? _observedActiveSessionId;
   String? _lastAutoScrolledSessionKey;
   String? _draftSessionId;
@@ -184,6 +187,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     });
     final msgIndex = userIndices[nextIdx];
     final targetId = messages[msgIndex].id;
+    final hiddenCount = messages.length > _visibleLimit
+        ? messages.length - _visibleLimit
+        : 0;
+    if (msgIndex < hiddenCount) {
+      setState(() {
+        _visibleLimit = messages.length - msgIndex + 4;
+      });
+    }
     final keyCtx = _turnKeys[targetId]?.currentContext;
     if (keyCtx != null) {
       await Scrollable.ensureVisible(
@@ -771,6 +782,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       _lastAutoScrolledSessionKey = null;
       _compactBannerDismissed = false;
       _followLatest = true;
+      _visibleLimit = _initialMessageWindow;
+      _turnCursor = null;
+      _turnKeys.clear();
     }
     if (chat.messages.isNotEmpty) {
       final readyForActive = chat.loadedSessionId == null ||
@@ -863,13 +877,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(project.name, overflow: TextOverflow.ellipsis),
+                    Text(
+                      project.name,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 16,
+                      ),
+                    ),
                     Text(
                       activeCustom != null
                           ? 'Custom /v1 · ${activeCustom.name}'
                           : '$hostLabel · ${activeModel.displayName}',
                       overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.labelSmall?.copyWith(
+                        fontSize: 11.5,
                         color: theme.colorScheme.onSurfaceVariant,
                       ),
                     ),
@@ -1065,6 +1087,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             ],
           ],
         ),
+        Divider(
+          height: 1,
+          thickness: 0.5,
+          color: theme.colorScheme.outlineVariant.withOpacity(0.45),
+        ),
         if (activeCustom == null &&
             ((auth.initialized && !auth.isAuthenticated) ||
                 (runtime.initialized &&
@@ -1082,213 +1109,567 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             ),
           ),
         Expanded(
-          child: chat.messages.isEmpty
-              ? ChatEmptyHero(
-                  onPickSuggestion: (s) => _inputController.text = s,
-                )
-              : Stack(
-                  children: [
-                    NotificationListener<UserScrollNotification>(
-                      onNotification: (notification) {
-                        // Ignore nested horizontal scrolls (code blocks / tables).
-                        if (notification.depth != 0 ||
-                            notification.metrics.axis != Axis.vertical) {
-                          return false;
-                        }
-                        if (notification.direction == ScrollDirection.forward) {
-                          _remainingOpenSnapFrames = 0;
-                          _userActivelyScrollingUp = true;
-                        } else {
-                          _userActivelyScrollingUp = false;
-                        }
-                        return false;
-                      },
-                      child: NotificationListener<ScrollUpdateNotification>(
-                        onNotification: (notification) {
-                          if (notification.depth != 0 ||
-                              notification.metrics.axis != Axis.vertical ||
-                              _isProgrammaticScroll) {
-                            return false;
-                          }
-                          final delta = notification.scrollDelta ?? 0.0;
-                          final distFromBottom =
-                              notification.metrics.maxScrollExtent -
-                                  notification.metrics.pixels;
-                          if (delta < -1.5 &&
-                              distFromBottom > _atBottomThreshold) {
-                            _remainingOpenSnapFrames = 0;
-                            if (mounted && (_followLatest || _isAtBottom)) {
-                              setState(() {
-                                _followLatest = false;
-                                _isAtBottom = false;
-                              });
-                            } else {
-                              _followLatest = false;
-                              _isAtBottom = false;
-                            }
-                          }
-                          return false;
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: chat.messages.isEmpty
+                    ? ChatEmptyHero(
+                        onPickSuggestion: (s) {
+                          _inputController.text = s;
+                          _inputController.selection =
+                              TextSelection.collapsed(offset: s.length);
+                          _onChanged(s);
                         },
-                        child: NotificationListener<ScrollMetricsNotification>(
-                          onNotification: (notification) {
-                            if (notification.depth != 0 ||
-                                notification.metrics.axis != Axis.vertical) {
-                              return false;
-                            }
-                            final dist = notification.metrics.maxScrollExtent -
-                                notification.metrics.pixels;
-                            if ((_remainingOpenSnapFrames > 0 ||
-                                    (_followLatest &&
-                                        !_userActivelyScrollingUp)) &&
-                                dist > 1.0) {
-                              WidgetsBinding.instance.addPostFrameCallback((_) {
-                                if (!mounted) return;
-                                if (_remainingOpenSnapFrames > 0) {
-                                  _performOpenSnap();
-                                } else if (_followLatest &&
-                                    !_userActivelyScrollingUp) {
-                                  _jumpToBottomImmediate();
+                      )
+                    : (() {
+                        final totalCount = chat.messages.length;
+                        final hiddenCount = totalCount > _visibleLimit
+                            ? totalCount - _visibleLimit
+                            : 0;
+                        final visibleCount = totalCount - hiddenCount;
+                        final hasLoadMoreHeader = hiddenCount > 0;
+                        final nextStep = hiddenCount < _messageWindowStep
+                            ? hiddenCount
+                            : _messageWindowStep;
+                        return Stack(
+                          children: [
+                            NotificationListener<UserScrollNotification>(
+                              onNotification: (notification) {
+                                // Ignore nested horizontal scrolls (code blocks / tables).
+                                if (notification.depth != 0 ||
+                                    notification.metrics.axis != Axis.vertical) {
+                                  return false;
                                 }
-                              });
-                            } else {
-                              final atBottom = dist <= _atBottomThreshold;
-                              if (atBottom != _isAtBottom && mounted) {
-                                WidgetsBinding.instance
-                                    .addPostFrameCallback((_) => _onScroll());
-                              }
-                            }
-                            return false;
-                          },
-                          child: Scrollbar(
-                            controller: _scrollController,
-                            child: ListView.builder(
-                            controller: _scrollController,
-                            padding: const EdgeInsets.only(top: 8, bottom: 72),
-                            itemCount: chat.messages.length,
-                            itemBuilder: (context, index) {
-                              final m = chat.messages[index];
-                              final isLastAssistant = !chat.isStreaming &&
-                                  m.role == ChatRole.assistant &&
-                                  index == chat.messages.length - 1;
-                              final turnKey = m.role == ChatRole.user
-                                  ? _turnKeys.putIfAbsent(
-                                      m.id,
-                                      GlobalKey.new,
-                                    )
-                                  : null;
-                              final bubble = wrapCentered(
-                                MessageBubble(
-                                  message: m,
-                                  tokensPerSecond:
-                                      m.isStreaming ? chat.tokensPerSecond : null,
-                                  activeSubagents: chat.activeSubagents,
-                                  onRegenerate: isLastAssistant
-                                      ? () => ref
-                                          .read(chatProvider.notifier)
-                                          .regenerateLastTurn()
-                                      : null,
-                                  onEditResend: !chat.isStreaming &&
-                                          m.role == ChatRole.user
-                                      ? (newText) => ref
-                                          .read(chatProvider.notifier)
-                                          .editAndResend(m.id, newText)
-                                      : null,
-                                  onRewind: !chat.isStreaming &&
-                                          m.role == ChatRole.user
-                                      ? () => _handleRewind(m.id)
-                                      : null,
-                                  onQuote: m.text.trim().isNotEmpty
-                                      ? (excerpt) => setState(() => _quotedText = excerpt)
-                                      : null,
-                                  onOpenDiff: () => ref
-                                      .read(sidePanelProvider.notifier)
-                                      .openTab(
-                                        const SidePanelTab(
-                                          id: 'review',
-                                          kind: SidePanelTabKind.review,
-                                          title: 'Review',
+                                if (notification.direction ==
+                                    ScrollDirection.forward) {
+                                  _remainingOpenSnapFrames = 0;
+                                  _userActivelyScrollingUp = true;
+                                } else {
+                                  _userActivelyScrollingUp = false;
+                                }
+                                return false;
+                              },
+                              child:
+                                  NotificationListener<ScrollUpdateNotification>(
+                                onNotification: (notification) {
+                                  if (notification.depth != 0 ||
+                                      notification.metrics.axis !=
+                                          Axis.vertical ||
+                                      _isProgrammaticScroll) {
+                                    return false;
+                                  }
+                                  final delta = notification.scrollDelta ?? 0.0;
+                                  final distFromBottom =
+                                      notification.metrics.maxScrollExtent -
+                                          notification.metrics.pixels;
+                                  if (delta < -1.5 &&
+                                      distFromBottom > _atBottomThreshold) {
+                                    _remainingOpenSnapFrames = 0;
+                                    if (mounted &&
+                                        (_followLatest || _isAtBottom)) {
+                                      setState(() {
+                                        _followLatest = false;
+                                        _isAtBottom = false;
+                                      });
+                                    } else {
+                                      _followLatest = false;
+                                      _isAtBottom = false;
+                                    }
+                                  }
+                                  return false;
+                                },
+                                child: NotificationListener<
+                                    ScrollMetricsNotification>(
+                                  onNotification: (notification) {
+                                    if (notification.depth != 0 ||
+                                        notification.metrics.axis !=
+                                            Axis.vertical) {
+                                      return false;
+                                    }
+                                    final dist = notification
+                                            .metrics.maxScrollExtent -
+                                        notification.metrics.pixels;
+                                    if ((_remainingOpenSnapFrames > 0 ||
+                                            (_followLatest &&
+                                                !_userActivelyScrollingUp)) &&
+                                        dist > 1.0) {
+                                      WidgetsBinding.instance
+                                          .addPostFrameCallback((_) {
+                                        if (!mounted) return;
+                                        if (_remainingOpenSnapFrames > 0) {
+                                          _performOpenSnap();
+                                        } else if (_followLatest &&
+                                            !_userActivelyScrollingUp) {
+                                          _jumpToBottomImmediate();
+                                        }
+                                      });
+                                    } else {
+                                      final atBottom =
+                                          dist <= _atBottomThreshold;
+                                      if (atBottom != _isAtBottom && mounted) {
+                                        WidgetsBinding.instance
+                                            .addPostFrameCallback(
+                                                (_) => _onScroll());
+                                      }
+                                    }
+                                    return false;
+                                  },
+                                  child: Scrollbar(
+                                    controller: _scrollController,
+                                    child: ListView.builder(
+                                      controller: _scrollController,
+                                      padding: const EdgeInsets.only(
+                                        top: 8,
+                                        bottom: 72,
+                                      ),
+                                      itemCount: visibleCount +
+                                          (hasLoadMoreHeader ? 1 : 0),
+                                      itemBuilder: (context, index) {
+                                        if (hasLoadMoreHeader && index == 0) {
+                                          return wrapCentered(
+                                            Padding(
+                                              padding:
+                                                  const EdgeInsets.fromLTRB(
+                                                16,
+                                                4,
+                                                16,
+                                                10,
+                                              ),
+                                              child: Row(
+                                                mainAxisAlignment:
+                                                    MainAxisAlignment.center,
+                                                children: [
+                                                  OutlinedButton.icon(
+                                                    style: OutlinedButton
+                                                        .styleFrom(
+                                                      visualDensity:
+                                                          VisualDensity.compact,
+                                                      textStyle: theme
+                                                          .textTheme.labelSmall,
+                                                    ),
+                                                    onPressed: () {
+                                                      setState(() {
+                                                        _followLatest = false;
+                                                        _visibleLimit =
+                                                            (_visibleLimit +
+                                                                    _messageWindowStep)
+                                                                .clamp(
+                                                          _initialMessageWindow,
+                                                          totalCount,
+                                                        );
+                                                      });
+                                                    },
+                                                    icon: const Icon(
+                                                      Icons.history_rounded,
+                                                      size: 15,
+                                                    ),
+                                                    label: Text(
+                                                      'Load $nextStep earlier ($hiddenCount hidden)',
+                                                    ),
+                                                  ),
+                                                  if (hiddenCount >
+                                                      _messageWindowStep) ...[
+                                                    const SizedBox(width: 8),
+                                                    TextButton(
+                                                      style:
+                                                          TextButton.styleFrom(
+                                                        visualDensity:
+                                                            VisualDensity
+                                                                .compact,
+                                                        textStyle: theme
+                                                            .textTheme
+                                                            .labelSmall,
+                                                      ),
+                                                      onPressed: () {
+                                                        setState(() {
+                                                          _followLatest = false;
+                                                          _visibleLimit =
+                                                              totalCount;
+                                                        });
+                                                      },
+                                                      child: const Text(
+                                                        'Show all',
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ],
+                                              ),
+                                            ),
+                                          );
+                                        }
+                                        final globalIdx = hiddenCount +
+                                            (index -
+                                                (hasLoadMoreHeader ? 1 : 0));
+                                        final m = chat.messages[globalIdx];
+                                        final isLastAssistant = !chat
+                                                .isStreaming &&
+                                            m.role == ChatRole.assistant &&
+                                            globalIdx == totalCount - 1;
+                                        final collapseMilestones =
+                                            !m.isStreaming &&
+                                                globalIdx < totalCount - 4;
+                                        final turnKey = m.role == ChatRole.user
+                                            ? _turnKeys.putIfAbsent(
+                                                m.id,
+                                                GlobalKey.new,
+                                              )
+                                            : null;
+                                        final bubble = wrapCentered(
+                                          MessageBubble(
+                                            message: m,
+                                            tokensPerSecond: m.isStreaming
+                                                ? chat.tokensPerSecond
+                                                : null,
+                                            collapseMilestonesByDefault:
+                                                collapseMilestones,
+                                            activeSubagents:
+                                                chat.activeSubagents,
+                                            onRegenerate: isLastAssistant
+                                                ? () => ref
+                                                    .read(chatProvider.notifier)
+                                                    .regenerateLastTurn()
+                                                : null,
+                                            onEditResend: !chat.isStreaming &&
+                                                    m.role == ChatRole.user
+                                                ? (newText) => ref
+                                                    .read(chatProvider.notifier)
+                                                    .editAndResend(
+                                                      m.id,
+                                                      newText,
+                                                    )
+                                                : null,
+                                            onRewind: !chat.isStreaming &&
+                                                    m.role == ChatRole.user
+                                                ? () => _handleRewind(m.id)
+                                                : null,
+                                            onQuote: m.text.trim().isNotEmpty
+                                                ? (excerpt) => setState(
+                                                      () =>
+                                                          _quotedText = excerpt,
+                                                    )
+                                                : null,
+                                            onOpenDiff: () => ref
+                                                .read(sidePanelProvider.notifier)
+                                                .openTab(
+                                                  const SidePanelTab(
+                                                    id: 'review',
+                                                    kind: SidePanelTabKind
+                                                        .review,
+                                                    title: 'Review',
+                                                  ),
+                                                ),
+                                          ),
+                                        );
+                                        final wrapped = RepaintBoundary(
+                                          child: bubble,
+                                        );
+                                        return turnKey == null
+                                            ? wrapped
+                                            : KeyedSubtree(
+                                                key: turnKey,
+                                                child: wrapped,
+                                              );
+                                      },
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            if (!(_showSlashMenu && slashMatches.isNotEmpty) &&
+                                !(_showMentionMenu &&
+                                    _mentionFiles.isNotEmpty))
+                              Positioned(
+                                right: 16,
+                                bottom: 12,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    if (chat.messages
+                                            .where(
+                                              (m) => m.role == ChatRole.user,
+                                            )
+                                            .length >=
+                                        2) ...[
+                                      Material(
+                                        elevation: 2,
+                                        color: theme
+                                            .colorScheme.surfaceContainerHigh,
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius:
+                                              BorderRadius.circular(20),
+                                          side: BorderSide(
+                                            color: theme
+                                                .colorScheme.outlineVariant
+                                                .withOpacity(0.45),
+                                          ),
+                                        ),
+                                        clipBehavior: Clip.antiAlias,
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            IconButton(
+                                              visualDensity:
+                                                  VisualDensity.compact,
+                                              constraints: const BoxConstraints(
+                                                minWidth: 34,
+                                                minHeight: 34,
+                                              ),
+                                              padding: EdgeInsets.zero,
+                                              tooltip: 'Previous user turn',
+                                              iconSize: 18,
+                                              onPressed: () => _jumpUserTurn(
+                                                chat.messages,
+                                                delta: -1,
+                                              ),
+                                              icon: const Icon(
+                                                Icons.keyboard_arrow_up_rounded,
+                                              ),
+                                            ),
+                                            IconButton(
+                                              visualDensity:
+                                                  VisualDensity.compact,
+                                              constraints: const BoxConstraints(
+                                                minWidth: 34,
+                                                minHeight: 34,
+                                              ),
+                                              padding: EdgeInsets.zero,
+                                              tooltip: 'Next user turn',
+                                              iconSize: 18,
+                                              onPressed: () => _jumpUserTurn(
+                                                chat.messages,
+                                                delta: 1,
+                                              ),
+                                              icon: const Icon(
+                                                Icons
+                                                    .keyboard_arrow_down_rounded,
+                                              ),
+                                            ),
+                                          ],
                                         ),
                                       ),
+                                      const SizedBox(width: 6),
+                                    ],
+                                    if (!_isAtBottom || !_followLatest)
+                                      FloatingActionButton.small(
+                                        heroTag: 'jump-to-latest-chat',
+                                        tooltip: 'Jump to latest',
+                                        onPressed: () =>
+                                            _jumpToBottom(animate: true),
+                                        child: const Icon(
+                                          Icons.arrow_downward_rounded,
+                                        ),
+                                      ),
+                                  ],
                                 ),
-                              );
-                              return turnKey == null
-                                  ? bubble
-                                  : KeyedSubtree(key: turnKey, child: bubble);
-                            },
+                              ),
+                          ],
+                        );
+                      })(),
+              ),
+              if (_showSlashMenu && slashMatches.isNotEmpty)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 6,
+                  child: wrapCentered(
+                    Container(
+                      constraints: BoxConstraints(
+                        maxHeight: (MediaQuery.sizeOf(context).height * 0.34)
+                            .clamp(120.0, 240.0),
+                      ),
+                      margin: const EdgeInsets.symmetric(horizontal: 12),
+                      child: Material(
+                        elevation: 6,
+                        color: theme.colorScheme.surfaceContainerHigh,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                          side: BorderSide(
+                            color: theme.colorScheme.outlineVariant
+                                .withOpacity(0.5),
                           ),
+                        ),
+                        clipBehavior: Clip.antiAlias,
+                        child: ListView.separated(
+                          shrinkWrap: true,
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          itemCount: slashMatches.length,
+                          separatorBuilder: (_, __) => Divider(
+                            height: 1,
+                            thickness: 0.5,
+                            color: theme.colorScheme.outlineVariant
+                                .withOpacity(0.25),
+                          ),
+                          itemBuilder: (_, index) {
+                            final c = slashMatches[index];
+                            return ListTile(
+                              dense: true,
+                              visualDensity: const VisualDensity(vertical: -2),
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                                vertical: 2,
+                              ),
+                              title: Row(
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 7,
+                                      vertical: 2,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: theme.colorScheme.primary
+                                          .withOpacity(0.14),
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: Text(
+                                      c.command,
+                                      style: theme.textTheme.labelMedium
+                                          ?.copyWith(
+                                        fontWeight: FontWeight.w700,
+                                        color: theme.colorScheme.primary,
+                                      ),
+                                    ),
+                                  ),
+                                  if (c.argHint != null) ...[
+                                    const SizedBox(width: 8),
+                                    Flexible(
+                                      child: Text(
+                                        c.argHint!,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: theme.textTheme.labelSmall
+                                            ?.copyWith(
+                                          color: theme
+                                              .colorScheme.onSurfaceVariant,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                              subtitle: Padding(
+                                padding: const EdgeInsets.only(top: 2),
+                                child: Text(
+                                  c.description,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              ),
+                              onTap: () {
+                                final next = c.argHint != null
+                                    ? '${c.command} '
+                                    : c.command;
+                                _inputController.text = next;
+                                _inputController.selection =
+                                    TextSelection.collapsed(
+                                  offset: next.length,
+                                );
+                                setState(() => _showSlashMenu = false);
+                                if (c.handledLocally && c.argHint == null) {
+                                  _submit();
+                                }
+                              },
+                            );
+                          },
                         ),
                       ),
                     ),
                   ),
-                  Positioned(
-                      right: 16,
-                      bottom: 12,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (chat.messages
-                                  .where((m) => m.role == ChatRole.user)
-                                  .length >=
-                              2) ...[
-                            Material(
-                              elevation: 3,
-                              color: theme.colorScheme.surfaceContainerHigh,
-                              borderRadius: BorderRadius.circular(20),
-                              clipBehavior: Clip.antiAlias,
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  IconButton(
-                                    visualDensity: VisualDensity.compact,
-                                    constraints: const BoxConstraints(
-                                      minWidth: 32,
-                                      minHeight: 32,
-                                    ),
-                                    padding: EdgeInsets.zero,
-                                    tooltip: 'Previous user turn',
-                                    iconSize: 18,
-                                    onPressed: () => _jumpUserTurn(
-                                      chat.messages,
-                                      delta: -1,
-                                    ),
-                                    icon: const Icon(
-                                      Icons.keyboard_arrow_up_rounded,
-                                    ),
-                                  ),
-                                  IconButton(
-                                    visualDensity: VisualDensity.compact,
-                                    constraints: const BoxConstraints(
-                                      minWidth: 32,
-                                      minHeight: 32,
-                                    ),
-                                    padding: EdgeInsets.zero,
-                                    tooltip: 'Next user turn',
-                                    iconSize: 18,
-                                    onPressed: () => _jumpUserTurn(
-                                      chat.messages,
-                                      delta: 1,
-                                    ),
-                                    icon: const Icon(
-                                      Icons.keyboard_arrow_down_rounded,
-                                    ),
-                                  ),
-                                ],
-                              ),
+                ),
+              if (_showMentionMenu && _mentionFiles.isNotEmpty)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 6,
+                  child: wrapCentered(
+                    Container(
+                      constraints: BoxConstraints(
+                        maxHeight: (MediaQuery.sizeOf(context).height * 0.30)
+                            .clamp(110.0, 210.0),
+                      ),
+                      margin: const EdgeInsets.symmetric(horizontal: 12),
+                      child: Material(
+                        elevation: 6,
+                        color: theme.colorScheme.surfaceContainerHigh,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                          side: BorderSide(
+                            color: theme.colorScheme.outlineVariant
+                                .withOpacity(0.5),
+                          ),
+                        ),
+                        clipBehavior: Clip.antiAlias,
+                        child: (() {
+                          final txt = _inputController.text;
+                          final atIdx = txt.lastIndexOf('@');
+                          final query = atIdx >= 0
+                              ? txt.substring(atIdx + 1).trim().toLowerCase()
+                              : '';
+                          final filtered = (query.isEmpty
+                                  ? _mentionFiles
+                                  : _mentionFiles.where((f) {
+                                      final name =
+                                          (f['name'] ?? '').toLowerCase();
+                                      final path =
+                                          (f['path'] ?? '').toLowerCase();
+                                      return name.contains(query) ||
+                                          path.contains(query);
+                                    }))
+                              .take(12)
+                              .toList();
+                          return ListView.separated(
+                            shrinkWrap: true,
+                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            itemCount: filtered.length,
+                            separatorBuilder: (_, __) => Divider(
+                              height: 1,
+                              thickness: 0.5,
+                              color: theme.colorScheme.outlineVariant
+                                  .withOpacity(0.25),
                             ),
-                            const SizedBox(width: 6),
-                          ],
-                          if (!_isAtBottom || !_followLatest)
-                            FloatingActionButton.small(
-                              heroTag: 'jump-to-latest-chat',
-                              tooltip: 'Jump to latest',
-                              onPressed: () => _jumpToBottom(animate: true),
-                              child: const Icon(Icons.arrow_downward_rounded),
-                            ),
-                        ],
+                            itemBuilder: (_, index) {
+                              final f = filtered[index];
+                              final name = f['name'] ?? '';
+                              final path = f['path'] ?? '';
+                              return ListTile(
+                                dense: true,
+                                visualDensity:
+                                    const VisualDensity(vertical: -2),
+                                leading: Icon(
+                                  f['type'] == 'dir'
+                                      ? Icons.folder
+                                      : Icons.insert_drive_file_outlined,
+                                  size: 16,
+                                  color: theme.colorScheme.primary,
+                                ),
+                                title: Text('@$name'),
+                                subtitle: Text(
+                                  path,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                onTap: () {
+                                  final text = _inputController.text;
+                                  final idx = text.lastIndexOf('@');
+                                  final next =
+                                      '${text.substring(0, idx)}@$path ';
+                                  _inputController.text = next;
+                                  _inputController.selection =
+                                      TextSelection.collapsed(
+                                    offset: next.length,
+                                  );
+                                  setState(() => _showMentionMenu = false);
+                                },
+                              );
+                            },
+                          );
+                        })(),
                       ),
                     ),
-                  ],
+                  ),
                 ),
+            ],
+          ),
         ),
         if (hosts.activeSshHost == null &&
             !_reconnectDismissed &&
@@ -1547,125 +1928,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               ),
             ),
           ),
-        if (_showSlashMenu && slashMatches.isNotEmpty)
-          Flexible(
-            fit: FlexFit.loose,
-            child: wrapCentered(
-              Container(
-                constraints: BoxConstraints(
-                  maxHeight:
-                      (MediaQuery.sizeOf(context).height * 0.28).clamp(100.0, 220.0),
-                ),
-                margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                child: Card(
-                  child: ListView(
-                    shrinkWrap: true,
-                    children: slashMatches
-                        .map(
-                          (c) => ListTile(
-                            dense: true,
-                            title: Row(
-                              children: [
-                                Text(
-                                  c.command,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                                if (c.argHint != null) ...[
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    c.argHint!,
-                                    style: theme.textTheme.labelSmall?.copyWith(
-                                      color: theme.colorScheme.onSurfaceVariant,
-                                    ),
-                                  ),
-                                ],
-                              ],
-                            ),
-                            subtitle: Text(
-                              c.description,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            onTap: () {
-                              final next = c.argHint != null
-                                  ? '${c.command} '
-                                  : c.command;
-                              _inputController.text = next;
-                              _inputController.selection = TextSelection.collapsed(
-                                offset: next.length,
-                              );
-                              setState(() => _showSlashMenu = false);
-                              if (c.handledLocally && c.argHint == null) {
-                                _submit();
-                              }
-                            },
-                          ),
-                        )
-                        .toList(),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        if (_showMentionMenu && _mentionFiles.isNotEmpty)
-          Flexible(
-            fit: FlexFit.loose,
-            child: wrapCentered(
-              Container(
-                constraints: BoxConstraints(
-                  maxHeight:
-                      (MediaQuery.sizeOf(context).height * 0.25).clamp(90.0, 190.0),
-                ),
-                margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                child: Card(
-                  child: ListView(
-                    shrinkWrap: true,
-                    children: (() {
-                      final txt = _inputController.text;
-                      final atIdx = txt.lastIndexOf('@');
-                      final query = atIdx >= 0
-                          ? txt.substring(atIdx + 1).trim().toLowerCase()
-                          : '';
-                      final filtered = query.isEmpty
-                          ? _mentionFiles
-                          : _mentionFiles.where((f) {
-                              final name = (f['name'] ?? '').toLowerCase();
-                              final path = (f['path'] ?? '').toLowerCase();
-                              return name.contains(query) || path.contains(query);
-                            }).toList();
-                      return filtered.take(12).map((f) {
-                        final name = f['name'] ?? '';
-                        final path = f['path'] ?? '';
-                        return ListTile(
-                          dense: true,
-                          leading: Icon(
-                            f['type'] == 'dir'
-                                ? Icons.folder
-                                : Icons.insert_drive_file_outlined,
-                            size: 16,
-                          ),
-                          title: Text('@$name'),
-                          subtitle: Text(path, overflow: TextOverflow.ellipsis),
-                          onTap: () {
-                            final text = _inputController.text;
-                            final idx = text.lastIndexOf('@');
-                            final next =
-                                '${text.substring(0, idx)}@$path ';
-                            _inputController.text = next;
-                            _inputController.selection =
-                                TextSelection.collapsed(offset: next.length);
-                            setState(() => _showMentionMenu = false);
-                          },
-                        );
-                      }).toList();
-                    })(),
-                  ),
-                ),
-              ),
-            ),
-          ),
         if (_attachments.isNotEmpty)
           wrapCentered(
             AttachmentPreviewStrip(
@@ -1758,13 +2020,60 @@ class _StreamingAgentStatusBar extends StatefulWidget {
 class _StreamingAgentStatusBarState extends State<_StreamingAgentStatusBar> {
   final Stopwatch _stopwatch = Stopwatch()..start();
   Timer? _ticker;
+  int _rounds = 0;
+  int _toolCalls = 0;
+  int _totalTokens = 0;
+  int _cacheRead = 0;
+  int _inputTokens = 0;
 
   @override
   void initState() {
     super.initState();
+    _recomputeStats();
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() {});
     });
+  }
+
+  @override
+  void didUpdateWidget(covariant _StreamingAgentStatusBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.messages, widget.messages)) {
+      _recomputeStats();
+    }
+  }
+
+  void _recomputeStats() {
+    var rounds = 0;
+    var toolCalls = 0;
+    var totalTokens = 0;
+    var cacheRead = 0;
+    var inputTokens = 0;
+    for (final m in widget.messages) {
+      if (m.role == ChatRole.user) rounds++;
+      toolCalls += m.tools.length;
+      final u = m.usage;
+      if (u != null) {
+        totalTokens += u.totalTokens;
+        cacheRead += u.cacheReadTokens;
+        inputTokens += u.inputTokens;
+      }
+    }
+    _rounds = rounds;
+    _toolCalls = toolCalls;
+    _totalTokens = totalTokens;
+    _cacheRead = cacheRead;
+    _inputTokens = inputTokens;
+  }
+
+  String _formatTokens(int tokens) {
+    if (tokens >= 1000000) {
+      return '${(tokens / 1000000).toStringAsFixed(1)}M tok';
+    }
+    if (tokens >= 1000) {
+      return '${(tokens / 1000).toStringAsFixed(1)}k tok';
+    }
+    return '$tokens tok';
   }
 
   @override
@@ -1785,31 +2094,14 @@ class _StreamingAgentStatusBarState extends State<_StreamingAgentStatusBar> {
     final theme = Theme.of(context);
     final semantic = AgySemanticColors.of(context);
     final hasSpeed = widget.tokensPerSecond > 0.5;
-    final rounds = widget.messages.where((m) => m.role == ChatRole.user).length;
-    var toolCalls = 0;
-    var totalTokens = 0;
-    var cacheRead = 0;
-    var inputTokens = 0;
-    for (final m in widget.messages) {
-      toolCalls += m.tools.length;
-      final u = m.usage;
-      if (u != null) {
-        totalTokens += u.totalTokens;
-        cacheRead += u.cacheReadTokens;
-        inputTokens += u.inputTokens;
-      }
-    }
-    final cacheDenom = inputTokens + cacheRead;
+    final cacheDenom = _inputTokens + _cacheRead;
     final metaParts = <String>[
       _formatElapsed(_stopwatch.elapsed),
-      if (rounds > 0) '$rounds rd',
-      if (toolCalls > 0) '$toolCalls tools',
-      if (totalTokens > 0)
-        totalTokens >= 1000
-            ? '${(totalTokens / 1000).toStringAsFixed(1)}k tok'
-            : '$totalTokens tok',
-      if (cacheRead > 0 && cacheDenom > 0)
-        '${((cacheRead / cacheDenom) * 100).round()}% hit',
+      if (_rounds > 0) '$_rounds rd',
+      if (_toolCalls > 0) '$_toolCalls tools',
+      if (_totalTokens > 0) _formatTokens(_totalTokens),
+      if (_cacheRead > 0 && cacheDenom > 0)
+        '${((_cacheRead / cacheDenom) * 100).round()}% hit',
     ];
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
