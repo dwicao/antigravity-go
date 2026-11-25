@@ -1198,7 +1198,7 @@ void main() {
 
     // Latest messages and recent expanded milestone are visible; oldest 15 are windowed out.
     expect(find.text('Message #54'), findsOneWidget);
-    expect(find.text('Read — /repo/recent.dart'), findsOneWidget);
+    expect(find.text('Read — repo/recent.dart'), findsOneWidget);
     expect(find.text('Message #0'), findsNothing);
 
     final scrollableFinder = find.byType(Scrollable).first;
@@ -1231,8 +1231,8 @@ void main() {
       scrollable: scrollableFinder,
     );
     await tester.pump();
-    expect(find.text('Completed 1 step · 1 read'), findsAtLeastNWidgets(1));
-    expect(find.text('Read — /repo/old.dart'), findsNothing);
+    expect(find.text('Read 1 file'), findsAtLeastNWidgets(1));
+    expect(find.text('Read — repo/old.dart'), findsNothing);
 
     await tester.pumpWidget(const SizedBox());
     await tester.pump(const Duration(milliseconds: 500));
