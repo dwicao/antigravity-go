@@ -197,28 +197,32 @@ class _WorkspaceChangesBannerState
                           ),
                           const SizedBox(width: 8),
                           Expanded(
-                            child: Text.rich(
-                              TextSpan(
-                                children: [
-                                  TextSpan(
-                                    text: f.fileName,
-                                    style: theme.textTheme.labelSmall?.copyWith(
-                                      fontWeight: FontWeight.w600,
-                                      color: semantic.textPrimary,
-                                    ),
+                            child: Row(
+                              children: [
+                                Text(
+                                  f.fileName,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                    fontWeight: FontWeight.w600,
+                                    color: semantic.textPrimary,
                                   ),
-                                  if (f.directory.isNotEmpty)
-                                    TextSpan(
-                                      text: '  ${f.directory}',
+                                ),
+                                if (f.directory.isNotEmpty) ...[
+                                  const SizedBox(width: 6),
+                                  Flexible(
+                                    child: Text(
+                                      f.directory,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
                                       style: theme.textTheme.labelSmall?.copyWith(
                                         fontSize: 10.5,
                                         color: semantic.textTertiary,
                                       ),
                                     ),
+                                  ),
                                 ],
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
+                              ],
                             ),
                           ),
                           const SizedBox(width: 8),
