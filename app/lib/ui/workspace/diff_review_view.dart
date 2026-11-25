@@ -141,7 +141,7 @@ class _DiffReviewViewState extends ConsumerState<DiffReviewView> {
       ok = res['ok'] == true;
       if (!ok && cwd.isNotEmpty) {
         final fullPath = '$cwd/${hunk.filePath}';
-        final raw = await RuntimeBridge.instance.readFile(fullPath);
+        final raw = await RuntimeBridge.instance.readWorkspaceFile(fullPath);
         final reverted = DiffHunkParser.revertHunkInContent(raw, hunk);
         if (reverted != null) {
           ok = await RuntimeBridge.instance.writeFile(fullPath, reverted);

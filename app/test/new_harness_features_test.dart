@@ -1,4 +1,5 @@
 import 'package:agy_client/agy_client.dart';
+import 'package:antigravity_go/state/chat_models.dart';
 import 'package:antigravity_go/state/custom_providers_state.dart';
 import 'package:antigravity_go/state/device_policy_state.dart';
 import 'package:antigravity_go/state/harness_state.dart';

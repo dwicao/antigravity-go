@@ -133,7 +133,7 @@ class DiffHunkParser {
       if (currentPath != null && hunks.isNotEmpty) {
         files.add(
           DiffFileHunks(
-            filePath: currentPath!,
+            filePath: currentPath,
             hunks: List.unmodifiable(hunks),
           ),
         );
