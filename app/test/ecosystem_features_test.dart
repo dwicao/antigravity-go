@@ -794,7 +794,7 @@ Weekly limit: 70% remaining (resets in 5d)
     await tester.pumpAndSettle();
 
     expect(find.text('Edit deploy-check'), findsOneWidget);
-    expect(find.textContaining('/deploy-check'), findsOneWidget);
+    expect(find.text('Invoke in chat with `/deploy-check <task>`'), findsOneWidget);
     expect(find.text('Copy /cmd'), findsOneWidget);
   });
 }
