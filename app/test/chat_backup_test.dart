@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:agy_client/agy_client.dart';
 import 'package:antigravity_go/state/chat_backup_service.dart';
@@ -250,11 +251,7 @@ void main() {
   });
 
   testWidgets('ChatBackupPage fits 360px phone screen and creates & restores snapshot', (tester) async {
-    final tempDir = await Directory.systemTemp.createTemp('agy_backup_ui_test_');
-    addTearDown(() async {
-      if (await tempDir.exists()) await tempDir.delete(recursive: true);
-    });
-    final service = ChatBackupService(backupDirectoryOverride: tempDir);
+    final service = _InMemoryBackupService();
 
     await tester.binding.setSurfaceSize(const Size(360, 720));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -315,4 +312,53 @@ void main() {
     expect(restoredMsgs.length, 2);
     expect(container.read(draftStoreProvider.notifier).draftFor('ui-s1'), 'Unsent draft');
   });
+}
+
+class _InMemoryBackupService extends ChatBackupService {
+  final Map<String, ({ChatBackupSnapshotInfo info, Uint8List bytes})> _store =
+      {};
+
+  @override
+  Future<ChatBackupSnapshotInfo?> saveLocalSnapshot(
+    ChatBackupBundle bundle,
+  ) async {
+    final name = ChatBackupService.suggestedFileName(
+      at: bundle.exportedAt,
+      compressed: true,
+    );
+    final path = 'mem://$name';
+    final bytes = bundle.encodeBytes(compressed: true);
+    final info = ChatBackupSnapshotInfo(
+      id: name,
+      filePath: path,
+      fileName: name,
+      createdAt: bundle.exportedAt,
+      sessionCount: bundle.sessionCount,
+      messageCount: bundle.totalMessages,
+      byteLength: bytes.length,
+      appVersion: bundle.appVersion,
+    );
+    _store[path] = (info: info, bytes: bytes);
+    await recordLastBackupAt(bundle.exportedAt);
+    return info;
+  }
+
+  @override
+  Future<List<ChatBackupSnapshotInfo>> listLocalSnapshots() async {
+    final list = _store.values.map((e) => e.info).toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return list;
+  }
+
+  @override
+  Future<ChatBackupBundle> readSnapshotFile(String filePath) async {
+    final hit = _store[filePath];
+    if (hit == null) throw FileSystemException('Missing', filePath);
+    return ChatBackupBundle.decodeBytes(hit.bytes);
+  }
+
+  @override
+  Future<void> deleteLocalSnapshot(ChatBackupSnapshotInfo info) async {
+    _store.remove(info.filePath);
+  }
 }
