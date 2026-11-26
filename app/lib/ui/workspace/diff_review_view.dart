@@ -275,6 +275,7 @@ class _DiffReviewViewState extends ConsumerState<DiffReviewView> {
               '**${push ? 'Committed & pushed' : 'Committed'}** `$commitLabel` on `$branchLabel` (SSH).',
               changedFiles: _changedFiles,
             );
+        ref.read(workspaceDiffProvider.notifier).markCommitted(_changedFiles);
         await _load();
         return;
       }
@@ -308,6 +309,9 @@ class _DiffReviewViewState extends ConsumerState<DiffReviewView> {
             feedbackText,
             changedFiles: res.files,
           );
+      if (res.ok) {
+        ref.read(workspaceDiffProvider.notifier).markCommitted(res.files);
+      }
       if (res.pushed) {
         final sid = ref.read(sessionsProvider).activeSessionId ?? 'default';
         await ref.read(ciWatchProvider.notifier).watchLatestRun(

@@ -2,6 +2,11 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.41] - 2026-11-26
+
+### Fixed
+- **Sync Chat-Result File Changes to Bottom Mini-View:** `WorkspaceDiffNotifier` now merges uncommitted live Git changes with `changedFiles` / tool-edit outputs from the active chat's result (checking matched tool directories when unmatched and combining unified diffs), updates immediately as chat results arrive, and clears committed entries cleanly via `markCommitted` after Commit & Push.
+
 ## [1.0.40] - 2026-11-26
 
 ### Changed

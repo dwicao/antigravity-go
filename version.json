@@ -1,7 +1,7 @@
 {
-  "version": "1.0.40",
+  "version": "1.0.41",
   "buildNumber": 1,
-  "tag": "v1.0.40",
+  "tag": "v1.0.41",
   "changelogUrl": "https://github.com/dwicao/antigravity-go/blob/main/CHANGELOG.md",
-  "releaseNotes": "### Changed\n- **Fast Chat-Switch Diff Performance:**\n  - Memoized `RuntimeController.ensureShellToolchain()` so `buildEnv()` no longer re-spawns BusyBox/Bash health-check processes or re-walks 100+ applets on every `git` command.\n  - Added pure-Java `.git` / `shadow_git` fast-path + single `git status --short --branch -uall` probe in `WorkspaceOps.gitDiff`, skipping `git diff` / `git diff --numstat` / `rev-parse HEAD` entirely when clean or untracked-only.\n  - Added per-session & per-CWD caching, 0ms snapshot swap on chat switch, microtask coalescing, and parallel secondary repo probing in `WorkspaceDiffNotifier`."
+  "releaseNotes": "### Fixed\n- **Sync Chat-Result File Changes to Bottom Mini-View:** `WorkspaceDiffNotifier` now merges uncommitted live Git changes with `changedFiles` / tool-edit outputs from the active chat's result (checking matched tool directories when unmatched and combining unified diffs), updates immediately as chat results arrive, and clears committed entries cleanly via `markCommitted` after Commit & Push."
 }

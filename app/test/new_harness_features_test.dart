@@ -1,5 +1,6 @@
 import 'package:agy_client/agy_client.dart';
 import 'package:antigravity_go/state/chat_models.dart';
+import 'package:antigravity_go/state/chat_state.dart';
 import 'package:antigravity_go/state/chat_turn_helpers.dart';
 import 'package:antigravity_go/state/custom_providers_state.dart';
 import 'package:antigravity_go/state/device_policy_state.dart';
@@ -337,6 +338,32 @@ diff --git a/app/lib/main.dart b/app/lib/main.dart
 
     sessions.selectSession(s2.id);
     expect(container.read(workspaceDiffProvider).loading, isFalse);
+
+    await container.read(chatProvider.notifier).appendSystemFeedback(
+      'Updated chat file',
+      changedFiles: const [
+        FileChangeEntry(
+          path: 'app/lib/chat_sync_test.dart',
+          added: 12,
+          removed: 3,
+          diff: '@@ -1,1 +1,1 @@\n-old\n+new',
+        ),
+      ],
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    final synced = container.read(workspaceDiffProvider);
+    expect(synced.files.any((f) => f.path == 'app/lib/chat_sync_test.dart'), isTrue);
+    expect(synced.unifiedDiff, contains('+new'));
+
+    container.read(workspaceDiffProvider.notifier).markCommitted(synced.files);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(
+      container
+          .read(workspaceDiffProvider)
+          .files
+          .any((f) => f.path == 'app/lib/chat_sync_test.dart'),
+      isFalse,
+    );
   });
 }
 
