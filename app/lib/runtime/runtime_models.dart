@@ -107,6 +107,8 @@ class RuntimeEvent {
     this.requestId,
     this.optionId,
     this.approved,
+    this.comment,
+    this.subagentId,
   });
 
   final String kind;
@@ -122,6 +124,8 @@ class RuntimeEvent {
   final String? requestId;
   final String? optionId;
   final bool? approved;
+  final String? comment;
+  final String? subagentId;
 
   factory RuntimeEvent.fromMap(Map<Object?, Object?> map) {
     final kind = map['kind']?.toString() ?? 'log';
@@ -149,6 +153,8 @@ class RuntimeEvent {
       requestId: map['requestId']?.toString(),
       optionId: map['optionId']?.toString(),
       approved: map['approved'] as bool?,
+      comment: map['comment']?.toString(),
+      subagentId: map['subagentId']?.toString(),
     );
   }
 }

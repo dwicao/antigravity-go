@@ -80,6 +80,8 @@ class ChatComposerBar extends ConsumerWidget {
     required this.onChanged,
     required this.onPickFile,
     required this.onPickImage,
+    this.onPasteClipboardImage,
+    this.onContentInserted,
     required this.onDictateVoice,
     required this.onTriggerSlash,
     required this.onSubmit,
@@ -98,6 +100,8 @@ class ChatComposerBar extends ConsumerWidget {
   final ValueChanged<String> onChanged;
   final VoidCallback onPickFile;
   final VoidCallback onPickImage;
+  final VoidCallback? onPasteClipboardImage;
+  final ValueChanged<KeyboardInsertedContent>? onContentInserted;
   final VoidCallback onDictateVoice;
   final VoidCallback onTriggerSlash;
   final VoidCallback onSubmit;
@@ -154,6 +158,8 @@ class ChatComposerBar extends ConsumerWidget {
                           onPickFile();
                         case 'image':
                           onPickImage();
+                        case 'paste_image':
+                          onPasteClipboardImage?.call();
                         case 'voice':
                           if (!listeningVoice) onDictateVoice();
                         case 'slash':
@@ -183,6 +189,15 @@ class ChatComposerBar extends ConsumerWidget {
                           title: Text('Attach image'),
                         ),
                       ),
+                      if (onPasteClipboardImage != null)
+                        const PopupMenuItem(
+                          value: 'paste_image',
+                          child: ListTile(
+                            dense: true,
+                            leading: Icon(Icons.content_paste_rounded),
+                            title: Text('Paste clipboard image'),
+                          ),
+                        ),
                       PopupMenuItem(
                         value: 'voice',
                         child: ListTile(
@@ -242,6 +257,19 @@ class ChatComposerBar extends ConsumerWidget {
                             maxLines: isDesktopMode ? 8 : 5,
                             textAlignVertical: TextAlignVertical.center,
                             textInputAction: TextInputAction.newline,
+                            contentInsertionConfiguration:
+                                onContentInserted == null
+                                    ? null
+                                    : ContentInsertionConfiguration(
+                                        allowedMimeTypes: const [
+                                          'image/png',
+                                          'image/jpeg',
+                                          'image/webp',
+                                          'image/gif',
+                                          'image/*',
+                                        ],
+                                        onContentInserted: onContentInserted!,
+                                      ),
                             decoration: InputDecoration(
                               isDense: true,
                               border: InputBorder.none,

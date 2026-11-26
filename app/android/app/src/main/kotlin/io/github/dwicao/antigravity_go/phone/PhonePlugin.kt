@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.os.Handler
@@ -16,6 +17,7 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.github.dwicao.antigravity_go.runtime.ApprovalNotificationHelper
 import io.github.dwicao.antigravity_go.runtime.RuntimeController
+import org.json.JSONObject
 
 class PhonePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChannel.StreamHandler {
     private lateinit var appContext: Context
@@ -121,6 +123,55 @@ class PhonePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChannel
             "cancelApprovalNotification" -> {
                 ApprovalNotificationHelper.cancel(appContext)
                 result.success(true)
+            }
+            "postSubagentNotification" -> {
+                val id = ApprovalNotificationHelper.postSubagentProgress(
+                    context = appContext,
+                    subagentId = call.argument<String>("subagentId") ?: "default",
+                    title = call.argument<String>("title") ?: "Subagent running",
+                    message = call.argument<String>("message") ?: "Working in background…",
+                    progress = call.argument<Int>("progress") ?: -1,
+                    turnId = call.argument<String>("turnId") ?: "",
+                    ongoing = call.argument<Boolean>("ongoing") ?: true,
+                )
+                result.success(id >= 0)
+            }
+            "cancelSubagentNotification" -> {
+                val sid = call.argument<String>("subagentId") ?: "default"
+                ApprovalNotificationHelper.cancelSubagentNotification(appContext, sid)
+                result.success(true)
+            }
+            "hasClipboardImage" -> {
+                result.success(ClipboardImageHelper.hasClipboardImage(appContext))
+            }
+            "readClipboardImagePath" -> {
+                result.success(ClipboardImageHelper.readClipboardImageToTempFile(appContext))
+            }
+            "copyContentImageUri" -> {
+                val rawUri = call.argument<String>("uri")?.trim().orEmpty()
+                val hintMime = call.argument<String>("mimeType")
+                if (rawUri.isEmpty()) {
+                    result.success(mapOf("ok" to false, "error" to "empty_uri"))
+                } else {
+                    val uri = Uri.parse(rawUri)
+                    result.success(ClipboardImageHelper.copyImageUriToTempFile(appContext, uri, hintMime))
+                }
+            }
+            "browserAuto" -> {
+                val payloadMap = call.argument<Map<String, Any?>>("payload") ?: emptyMap()
+                val json = JSONObject(payloadMap)
+                Thread {
+                    val res = DeviceGatewayHelper.browserAuto(appContext, json)
+                    val outMap = mutableMapOf<String, Any?>()
+                    val keys = res.keys()
+                    while (keys.hasNext()) {
+                        val k = keys.next()
+                        outMap[k] = res.opt(k)?.let {
+                            if (it is org.json.JSONArray || it is JSONObject) it.toString() else it
+                        }
+                    }
+                    mainHandler.post { result.success(outMap) }
+                }.start()
             }
             "shizukuExec" -> {
                 val cmd = call.argument<String>("command") ?: ""

@@ -333,7 +333,11 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         .listen(_handleAcpWakeup);
     _notifPermSub?.cancel();
     _notifPermSub = RuntimeBridge.instance.events
-        .where((e) => e.kind == 'notification_permission_action')
+        .where(
+          (e) =>
+              e.kind == 'notification_permission_action' ||
+              e.kind == 'notification_cancel_turn',
+        )
         .listen(_handleNotificationPermissionEvent);
     Future.microtask(() {
       if (!ref.mounted) return;
@@ -371,8 +375,13 @@ class ChatNotifier extends Notifier<ChatThreadState> {
 
   void _handleNotificationPermissionEvent(RuntimeEvent evt) {
     if (!ref.mounted) return;
+    if (evt.kind == 'notification_cancel_turn') {
+      unawaited(forceStopAllTasks());
+      return;
+    }
     final turnId = evt.turnId ?? '';
     final optionId = evt.optionId ?? '';
+    final comment = evt.comment?.trim() ?? '';
     if (turnId.isEmpty || optionId.isEmpty) return;
     String? matchingSessionId;
     for (final entry in _sessionRuntimes.entries) {
@@ -409,6 +418,10 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       }
     } else if (state.activeTurnId == turnId) {
       state = state.copyWith(clearPermission: true);
+    }
+
+    if (evt.approved == false && comment.isNotEmpty) {
+      unawaited(sendPrompt('Tool action denied. Instruction: $comment'));
     }
   }
 

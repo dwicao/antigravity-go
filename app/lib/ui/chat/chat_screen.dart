@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:agy_client/agy_client.dart';
 import 'package:file_picker/file_picker.dart';
@@ -9,6 +10,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../../phone/phone_bridge.dart';
 import '../../remote/ssh_agy_runner.dart';
 import '../../runtime/runtime_bridge.dart';
 import '../../runtime/runtime_models.dart';
@@ -701,6 +703,53 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         }
       }
     });
+  }
+
+  Future<void> _pasteClipboardImage() async {
+    final path = await PhoneBridge.instance.readClipboardImagePath();
+    if (!mounted) return;
+    if (path == null || path.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No image found in clipboard')),
+      );
+      return;
+    }
+    if (!_attachments.contains(path)) {
+      setState(() => _attachments.add(path));
+    }
+  }
+
+  Future<void> _handleKeyboardInsertedContent(
+    KeyboardInsertedContent content,
+  ) async {
+    String? savedPath;
+    final data = content.data;
+    if (data != null && data.isNotEmpty) {
+      try {
+        final ext = content.mimeType.contains('jpeg')
+            ? 'jpg'
+            : content.mimeType.contains('webp')
+                ? 'webp'
+                : content.mimeType.contains('gif')
+                    ? 'gif'
+                    : 'png';
+        final outDir = Directory('${Directory.systemTemp.path}/agy_ime_images');
+        if (!outDir.existsSync()) outDir.createSync(recursive: true);
+        final file = File(
+          '${outDir.path}/ime_${DateTime.now().millisecondsSinceEpoch}.$ext',
+        );
+        await file.writeAsBytes(data, flush: true);
+        savedPath = file.path;
+      } catch (_) {}
+    }
+    savedPath ??= await PhoneBridge.instance.copyContentImageUri(
+      content.uri,
+      mimeType: content.mimeType,
+    );
+    if (!mounted || savedPath == null || savedPath.isEmpty) return;
+    if (!_attachments.contains(savedPath)) {
+      setState(() => _attachments.add(savedPath!));
+    }
   }
 
   Future<void> _dictateVoice() async {
@@ -2084,6 +2133,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             onChanged: _onChanged,
             onPickFile: _pickFile,
             onPickImage: _pickImage,
+            onPasteClipboardImage: _pasteClipboardImage,
+            onContentInserted: _handleKeyboardInsertedContent,
             onDictateVoice: _dictateVoice,
             onTriggerSlash: () {
               _inputController.text = '/';

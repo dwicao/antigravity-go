@@ -1,5 +1,6 @@
 package io.github.dwicao.antigravity_go
 
+import io.github.dwicao.antigravity_go.phone.HeadlessBrowserHelper
 import io.github.dwicao.antigravity_go.phone.PhoneMcpServer
 import io.github.dwicao.antigravity_go.runtime.CustomizationsOps
 import io.github.dwicao.antigravity_go.runtime.LifecycleHooksManager
@@ -155,5 +156,16 @@ class NewHarnessNativeTest {
         assertTrue((delRes["status"] ?: "").startsWith(" D remove.txt"))
         assertEquals("stay\n", keepFile.readText())
         toRemove.delete()
+    }
+
+    @Test
+    fun phoneMcpToolsIncludeBrowserAndSubagentAndValidateUrls() {
+        val defs = PhoneMcpServer.toolDefinitions().toString()
+        assertTrue(defs.contains("phone_browser"))
+        assertTrue(defs.contains("phone_subagent_notify"))
+        assertTrue(HeadlessBrowserHelper.isHttpOrHttpsUrl("https://example.com"))
+        assertTrue(HeadlessBrowserHelper.isHttpOrHttpsUrl("http://127.0.0.1:3000"))
+        assertFalse(HeadlessBrowserHelper.isHttpOrHttpsUrl("file:///etc/passwd"))
+        assertFalse(HeadlessBrowserHelper.isHttpOrHttpsUrl("javascript:alert(1)"))
     }
 }

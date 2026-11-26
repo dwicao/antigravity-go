@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import 'package:xterm/xterm.dart';
@@ -26,6 +27,7 @@ class _TerminalPageState extends ConsumerState<TerminalPage> {
   StreamSubscription<RuntimeEvent>? _termSub;
   bool _running = false;
   bool _sessionActive = false;
+  bool _showExtraKeys = true;
 
   @override
   void initState() {
@@ -94,6 +96,14 @@ class _TerminalPageState extends ConsumerState<TerminalPage> {
     await RuntimeBridge.instance.writeTerminalInput(_sessionId, bytes);
   }
 
+  Future<void> _pasteClipboard() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = data?.text;
+    if (text != null && text.isNotEmpty) {
+      await _sendRaw(text);
+    }
+  }
+
   Future<void> _exec(String command) async {
     final trimmed = command.trim();
     if (trimmed.isEmpty) return;
@@ -144,6 +154,16 @@ class _TerminalPageState extends ConsumerState<TerminalPage> {
         title: const Text('Terminal & agy Shell'),
         actions: [
           IconButton(
+            tooltip: _showExtraKeys ? 'Hide extra keys' : 'Show extra keys',
+            onPressed: () => setState(() => _showExtraKeys = !_showExtraKeys),
+            icon: Icon(
+              Icons.keyboard_command_key_rounded,
+              color: _showExtraKeys
+                  ? Theme.of(context).colorScheme.primary
+                  : null,
+            ),
+          ),
+          IconButton(
             tooltip: 'Restart Shell',
             onPressed: _startInteractiveShell,
             icon: const Icon(Icons.refresh),
@@ -163,31 +183,56 @@ class _TerminalPageState extends ConsumerState<TerminalPage> {
               autofocus: false,
             ),
           ),
-          SizedBox(
-            height: 36,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              children: [
-                for (final item in const [
-                  ('Ctrl+C', '\x03'),
-                  ('Ctrl+D', '\x04'),
-                  ('Tab', '\t'),
-                  ('Esc', '\x1b'),
-                  ('↑', '\x1b[A'),
-                  ('↓', '\x1b[B'),
-                ])
+          if (_showExtraKeys)
+            SizedBox(
+              height: 40,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                children: [
                   Padding(
                     padding: const EdgeInsets.only(right: 6),
                     child: ActionChip(
                       visualDensity: VisualDensity.compact,
-                      label: Text(item.$1),
-                      onPressed: () => _sendRaw(item.$2),
+                      avatar: const Icon(Icons.content_paste_rounded, size: 14),
+                      label: const Text('Paste'),
+                      onPressed: _pasteClipboard,
                     ),
                   ),
-              ],
+                  for (final item in const [
+                    ('Esc', '\x1b'),
+                    ('Tab', '\t'),
+                    ('Ctrl+C', '\x03'),
+                    ('Ctrl+D', '\x04'),
+                    ('Ctrl+Z', '\x1a'),
+                    ('Ctrl+L', '\x0c'),
+                    ('Ctrl+A', '\x01'),
+                    ('Ctrl+E', '\x05'),
+                    ('↑', '\x1b[A'),
+                    ('↓', '\x1b[B'),
+                    ('←', '\x1b[D'),
+                    ('→', '\x1b[C'),
+                    ('Home', '\x1b[H'),
+                    ('End', '\x1b[F'),
+                    ('PgUp', '\x1b[5~'),
+                    ('PgDn', '\x1b[6~'),
+                    ('/', '/'),
+                    ('-', '-'),
+                    ('|', '|'),
+                    ('~', '~'),
+                    ('@', '@'),
+                  ])
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: ActionChip(
+                        visualDensity: VisualDensity.compact,
+                        label: Text(item.$1),
+                        onPressed: () => _sendRaw(item.$2),
+                      ),
+                    ),
+                ],
+              ),
             ),
-          ),
           SafeArea(
             top: false,
             child: Padding(

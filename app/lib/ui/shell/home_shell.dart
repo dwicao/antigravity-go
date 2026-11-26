@@ -171,6 +171,27 @@ class _HomeShellState extends ConsumerState<HomeShell>
       }
     });
 
+    ref.listen<List<ActiveSubagent>>(
+        chatProvider.select((c) => c.activeSubagents), (prev, next) {
+      final activeNext = next.where((s) => s.isActive).toList();
+      final activePrev = (prev ?? const []).where((s) => s.isActive).toList();
+      if (activeNext.isEmpty && activePrev.isNotEmpty) {
+        PhoneBridge.instance.cancelSubagentNotification('active_turn');
+        return;
+      }
+      if (activeNext.isNotEmpty && _shouldPostAlert(settings)) {
+        final turnId = ref.read(chatProvider).activeTurnId ?? '';
+        final roles = activeNext.map((s) => s.role).take(3).join(', ');
+        PhoneBridge.instance.postSubagentNotification(
+          subagentId: 'active_turn',
+          title:
+              '${activeNext.length} subagent${activeNext.length == 1 ? '' : 's'} active',
+          message: roles,
+          turnId: turnId,
+        );
+      }
+    });
+
     ref.listen<AgyPermissionRequestEvent?>(
         chatProvider.select((c) => c.pendingPermission), (prev, next) {
       if (next == null) {

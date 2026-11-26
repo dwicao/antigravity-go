@@ -1,4 +1,5 @@
 import 'package:agy_client/agy_client.dart';
+import 'package:antigravity_go/runtime/runtime_models.dart';
 import 'package:antigravity_go/state/chat_state.dart';
 import 'package:antigravity_go/state/chat_turn_helpers.dart';
 import 'package:antigravity_go/state/custom_providers_state.dart';
@@ -10,9 +11,11 @@ import 'package:antigravity_go/state/share_inbox_state.dart';
 import 'package:antigravity_go/state/side_panel_state.dart';
 import 'package:antigravity_go/state/workspace_diff_state.dart';
 import 'package:antigravity_go/theme/app_theme.dart';
+import 'package:antigravity_go/ui/chat/chat_composer_bar.dart';
 import 'package:antigravity_go/ui/chat/message_bubble.dart';
 import 'package:antigravity_go/ui/chat/message_metrics_footer.dart';
 import 'package:antigravity_go/ui/chat/workspace_changes_banner.dart';
+import 'package:antigravity_go/ui/terminal/terminal_page.dart';
 import 'package:antigravity_go/ui/workspace/diff_review_view.dart';
 import 'package:antigravity_go/ui/workspace/diff_syntax_highlighter.dart';
 import 'package:antigravity_go/ui/workspace/github_diff_viewer.dart';
@@ -445,6 +448,76 @@ diff --git a/app/lib/main.dart b/app/lib/main.dart
     expect(extracted[0].diff, contains(' keep1'));
     expect(extracted[1].path, 'app/lib/obsolete.dart');
     expect(extracted[1].deleted, isTrue);
+  });
+
+  testWidgets('RuntimeEvent parses comment/subagentId, Composer supports IME paste & Terminal exposes extra keys', (tester) async {
+    final evt = RuntimeEvent.fromMap({
+      'kind': 'notification_permission_action',
+      'turnId': 't1',
+      'optionId': 'deny',
+      'approved': false,
+      'comment': 'Use safe path instead',
+      'subagentId': 'sub-9',
+    });
+    expect(evt.comment, 'Use safe path instead');
+    expect(evt.subagentId, 'sub-9');
+
+    final ctrl = TextEditingController();
+    addTearDown(ctrl.dispose);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          theme: _theme(),
+          home: Scaffold(
+            body: ChatComposerBar(
+              inputController: ctrl,
+              isBusy: false,
+              isStreamingCurrentSession: false,
+              listeningVoice: false,
+              isDesktopMode: false,
+              enterToSend: false,
+              ctxSnap: HarnessContextSnapshot.fromState(
+                const HarnessState(),
+                usedTokens: 1000,
+              ),
+              onKeyEvent: (_, _) => KeyEventResult.ignored,
+              onChanged: (_) {},
+              onPickFile: () {},
+              onPickImage: () {},
+              onPasteClipboardImage: () {},
+              onContentInserted: (_) {},
+              onDictateVoice: () {},
+              onTriggerSlash: () {},
+              onSubmit: () {},
+              onSteerSubmit: () {},
+              onToggleEnterToSend: (_) {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final field = tester.widget<TextField>(find.byType(TextField));
+    expect(field.contentInsertionConfiguration, isNotNull);
+
+    await tester.tap(find.byTooltip('Attach or CLI tools'));
+    await tester.pumpAndSettle();
+    expect(find.text('Paste clipboard image'), findsOneWidget);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          theme: _theme(),
+          home: const TerminalPage(),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('Paste'), findsOneWidget);
+    expect(find.text('Ctrl+Z'), findsOneWidget);
+    expect(find.text('Esc'), findsOneWidget);
   });
 }
 

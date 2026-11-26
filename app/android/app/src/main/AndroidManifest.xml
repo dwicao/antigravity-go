@@ -5,11 +5,13 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <uses-permission
@@ -96,6 +98,15 @@
                 android:value="Runs the local Antigravity CLI agent harness" />
         </service>
 
+        <service
+            android:name=".voice.VoiceForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="microphone|specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps voice dictation and TTS sessions active with notification Mute/Stop controls" />
+        </service>
+
         <receiver
             android:name=".runtime.AutomationAlarmReceiver"
             android:exported="false">
@@ -119,6 +130,8 @@
             <intent-filter>
                 <action android:name="io.github.dwicao.antigravity_go.ACTION_APPROVE_TOOL" />
                 <action android:name="io.github.dwicao.antigravity_go.ACTION_DENY_TOOL" />
+                <action android:name="io.github.dwicao.antigravity_go.ACTION_DENY_WITH_COMMENT" />
+                <action android:name="io.github.dwicao.antigravity_go.ACTION_CANCEL_SUBAGENT" />
             </intent-filter>
         </receiver>
 

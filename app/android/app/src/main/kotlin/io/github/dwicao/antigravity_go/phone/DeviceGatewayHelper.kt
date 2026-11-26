@@ -94,15 +94,17 @@ object DeviceGatewayHelper {
     fun clipboard(context: Context, action: String, text: String = ""): JSONObject {
         val appCtx = context.applicationContext
         if (action.equals("get", ignoreCase = true)) {
-            val ref = AtomicReference("")
+            val textRef = AtomicReference("")
+            val hasImgRef = AtomicReference(false)
             val latch = CountDownLatch(1)
             mainHandler.post {
                 try {
                     val cm = appCtx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                     val clip = cm?.primaryClip
                     if (clip != null && clip.itemCount > 0) {
-                        ref.set(clip.getItemAt(0).text?.toString() ?: "")
+                        textRef.set(clip.getItemAt(0).text?.toString() ?: "")
                     }
+                    hasImgRef.set(ClipboardImageHelper.hasClipboardImage(appCtx))
                 } catch (_: Throwable) {
                 } finally {
                     latch.countDown()
@@ -112,7 +114,8 @@ object DeviceGatewayHelper {
             return JSONObject()
                 .put("allowed", true)
                 .put("ok", true)
-                .put("text", ref.get())
+                .put("text", textRef.get())
+                .put("hasImage", hasImgRef.get())
         }
 
         mainHandler.post {
@@ -370,4 +373,40 @@ object DeviceGatewayHelper {
         }
         return res
     }
+
+    fun subagentNotify(
+        context: Context,
+        subagentId: String,
+        title: String,
+        message: String,
+        progress: Int = -1,
+        turnId: String = "",
+        ongoing: Boolean = true,
+        cancel: Boolean = false,
+    ): JSONObject {
+        val cleanId = subagentId.ifBlank { "default" }
+        if (cancel) {
+            io.github.dwicao.antigravity_go.runtime.ApprovalNotificationHelper
+                .cancelSubagentNotification(context, cleanId)
+            return JSONObject().put("allowed", true).put("ok", true).put("cancelled", true)
+        }
+        val notifId = io.github.dwicao.antigravity_go.runtime.ApprovalNotificationHelper
+            .postSubagentProgress(
+                context = context,
+                subagentId = cleanId,
+                title = title,
+                message = message,
+                progress = progress,
+                turnId = turnId,
+                ongoing = ongoing,
+            )
+        return JSONObject()
+            .put("allowed", true)
+            .put("ok", notifId >= 0)
+            .put("subagentId", cleanId)
+            .put("notificationId", notifId)
+    }
+
+    fun browserAuto(context: Context, payload: JSONObject): JSONObject =
+        HeadlessBrowserHelper.handle(context, payload)
 }

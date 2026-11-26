@@ -308,6 +308,30 @@ class PhoneMcpServer(
                 onActionLogged("shizuku_ui_dump", "uiautomator", res.optBoolean("allowed", false), res.optString("error", "OK"))
                 return res
             }
+            "subagent_notify" -> {
+                if (ctx == null) return JSONObject().put("allowed", false).put("error", "Android context unavailable")
+                val sid = payload.optString("subagentId", "default")
+                val title = payload.optString("title", "Subagent running")
+                val res = DeviceGatewayHelper.subagentNotify(
+                    context = ctx,
+                    subagentId = sid,
+                    title = title,
+                    message = payload.optString("message", ""),
+                    progress = payload.optInt("progress", -1),
+                    turnId = payload.optString("turnId", ""),
+                    ongoing = payload.optBoolean("ongoing", true),
+                    cancel = payload.optBoolean("cancel", false),
+                )
+                onActionLogged("subagent_notify", "$sid: $title".take(64), res.optBoolean("allowed", true), "OK")
+                return res
+            }
+            "browser_auto" -> {
+                if (ctx == null) return JSONObject().put("allowed", false).put("error", "Android context unavailable")
+                val subAction = payload.optString("action", "")
+                val res = DeviceGatewayHelper.browserAuto(ctx, payload)
+                onActionLogged("browser_auto", "$subAction ${payload.optString("url", "")}".trim().take(64), res.optBoolean("allowed", false), res.optString("error", "OK"))
+                return res
+            }
         }
         return executeAccessibilityAction(action, payload)
     }
@@ -631,6 +655,48 @@ class PhoneMcpServer(
                     JSONObject().put("type", "object").put("properties", JSONObject()),
                 )
 
+            val subagentNotifyTool = JSONObject()
+                .put("name", "phone_subagent_notify")
+                .put("description", "Post, update, or dismiss a low-importance Android subagent progress notification with Cancel action.")
+                .put(
+                    "inputSchema",
+                    JSONObject()
+                        .put("type", "object")
+                        .put(
+                            "properties",
+                            JSONObject()
+                                .put("subagentId", JSONObject().put("type", "string"))
+                                .put("title", JSONObject().put("type", "string"))
+                                .put("message", JSONObject().put("type", "string"))
+                                .put("progress", JSONObject().put("type", "integer"))
+                                .put("turnId", JSONObject().put("type", "string"))
+                                .put("ongoing", JSONObject().put("type", "boolean"))
+                                .put("cancel", JSONObject().put("type", "boolean")),
+                        ),
+                )
+
+            val browserTool = JSONObject()
+                .put("name", "phone_browser")
+                .put("description", "Control an isolated offscreen Android WebView browser (navigate, eval, click, type, get_text, screenshot, console_logs, close).")
+                .put(
+                    "inputSchema",
+                    JSONObject()
+                        .put("type", "object")
+                        .put(
+                            "properties",
+                            JSONObject()
+                                .put("action", JSONObject().put("type", "string").put("description", "navigate|eval|click|type|get_text|screenshot|console_logs|close"))
+                                .put("url", JSONObject().put("type", "string"))
+                                .put("selector", JSONObject().put("type", "string"))
+                                .put("text", JSONObject().put("type", "string"))
+                                .put("script", JSONObject().put("type", "string"))
+                                .put("path", JSONObject().put("type", "string"))
+                                .put("maxChars", JSONObject().put("type", "integer"))
+                                .put("clear", JSONObject().put("type", "boolean")),
+                        )
+                        .put("required", JSONArray().put("action")),
+                )
+
             return JSONArray()
                 .put(screenTool)
                 .put(tapTool)
@@ -646,6 +712,8 @@ class PhoneMcpServer(
                 .put(shizukuLogcatTool)
                 .put(shizukuInstallTool)
                 .put(shizukuUiDumpTool)
+                .put(subagentNotifyTool)
+                .put(browserTool)
         }
 
         /**
@@ -719,6 +787,8 @@ class PhoneMcpServer(
                         "phone_shizuku_logcat", "shizuku_logcat" -> "shizuku_logcat"
                         "phone_shizuku_install", "shizuku_install" -> "shizuku_install"
                         "phone_shizuku_ui_dump", "shizuku_ui_dump" -> "shizuku_ui_dump"
+                        "phone_subagent_notify", "subagent_notify" -> "subagent_notify"
+                        "phone_browser", "browser_auto", "phone_browser_automate" -> "browser_auto"
                         else -> ""
                     }
                     if (action.isEmpty()) {

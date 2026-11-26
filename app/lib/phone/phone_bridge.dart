@@ -230,6 +230,89 @@ class PhoneBridge {
     } catch (_) {}
   }
 
+  Future<bool> postSubagentNotification({
+    required String subagentId,
+    required String title,
+    required String message,
+    int progress = -1,
+    String turnId = '',
+    bool ongoing = true,
+  }) async {
+    try {
+      return await _method.invokeMethod<bool>('postSubagentNotification', {
+            'subagentId': subagentId,
+            'title': title,
+            'message': message,
+            'progress': progress,
+            'turnId': turnId,
+            'ongoing': ongoing,
+          }) ??
+          false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> cancelSubagentNotification(String subagentId) async {
+    try {
+      await _method.invokeMethod<void>(
+        'cancelSubagentNotification',
+        {'subagentId': subagentId},
+      );
+    } catch (_) {}
+  }
+
+  Future<bool> hasClipboardImage() async {
+    try {
+      return await _method.invokeMethod<bool>('hasClipboardImage') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<String?> readClipboardImagePath() async {
+    try {
+      final raw = await _method.invokeMethod<Map<Object?, Object?>>(
+        'readClipboardImagePath',
+      );
+      if (raw == null || raw['ok'] != true) return null;
+      return raw['path']?.toString();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<String?> copyContentImageUri(
+    String uri, {
+    String? mimeType,
+  }) async {
+    try {
+      final raw = await _method.invokeMethod<Map<Object?, Object?>>(
+        'copyContentImageUri',
+        {'uri': uri, 'mimeType': mimeType},
+      );
+      if (raw == null || raw['ok'] != true) return null;
+      return raw['path']?.toString();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<Map<String, Object?>> browserAuto(
+    Map<String, Object?> payload,
+  ) async {
+    try {
+      final raw = await _method.invokeMethod<Map<Object?, Object?>>(
+        'browserAuto',
+        {'payload': payload},
+      );
+      if (raw == null) return const {};
+      return raw.map((k, v) => MapEntry(k.toString(), v));
+    } catch (_) {
+      return const {};
+    }
+  }
+
   Future<Map<String, Object?>> shizukuExec(String command) async {
     try {
       final raw = await _method.invokeMethod<Map<Object?, Object?>>(

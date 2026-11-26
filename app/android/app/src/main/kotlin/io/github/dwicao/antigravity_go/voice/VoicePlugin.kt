@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.speech.RecognizerIntent
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
@@ -30,9 +31,17 @@ class VoicePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, ActivityAwar
         appContext = binding.applicationContext
         channel = MethodChannel(binding.binaryMessenger, "agy/voice")
         channel.setMethodCallHandler(this)
+        VoiceForegroundService.stateListener = { active, muted ->
+            if (muted) {
+                runCatching { tts?.stop() }
+            } else if (!active) {
+                runCatching { tts?.stop() }
+            }
+        }
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        VoiceForegroundService.stateListener = null
         channel.setMethodCallHandler(null)
         runCatching {
             tts?.stop()
@@ -83,18 +92,47 @@ class VoicePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, ActivityAwar
             }
             "speak" -> {
                 val text = call.argument<String>("text")?.trim().orEmpty()
-                if (text.isEmpty()) {
+                if (text.isEmpty() || VoiceForegroundService.muted) {
                     result.success(false)
                     return
                 }
                 val localeCode = call.argument<String>("locale")?.trim().orEmpty()
+                if (text.length > 80) {
+                    runCatching { VoiceForegroundService.start(appContext, "Reading response aloud") }
+                }
                 speakText(text, localeCode)
                 result.success(true)
             }
             "stopSpeaking" -> {
                 pendingSpeechText = null
                 runCatching { tts?.stop() }
+                VoiceForegroundService.stop(appContext)
                 result.success(true)
+            }
+            "startVoiceService" -> {
+                val status = call.argument<String>("statusText") ?: "Voice mode active"
+                runCatching { VoiceForegroundService.start(appContext, status) }
+                result.success(mapOf("active" to true, "muted" to VoiceForegroundService.muted))
+            }
+            "stopVoiceService" -> {
+                pendingSpeechText = null
+                runCatching { tts?.stop() }
+                VoiceForegroundService.stop(appContext)
+                result.success(mapOf("active" to false, "muted" to false))
+            }
+            "setVoiceMuted" -> {
+                val muted = call.argument<Boolean>("muted") ?: false
+                VoiceForegroundService.setMuted(appContext, muted)
+                if (muted) runCatching { tts?.stop() }
+                result.success(mapOf("active" to VoiceForegroundService.active, "muted" to VoiceForegroundService.muted))
+            }
+            "voiceServiceStatus" -> {
+                result.success(
+                    mapOf(
+                        "active" to VoiceForegroundService.active,
+                        "muted" to VoiceForegroundService.muted,
+                    )
+                )
             }
             else -> result.notImplemented()
         }
@@ -108,12 +146,23 @@ class VoicePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, ActivityAwar
             tts = TextToSpeech(appContext) { status ->
                 if (status == TextToSpeech.SUCCESS) {
                     ttsReady = true
+                    tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                        override fun onStart(utteranceId: String?) {}
+                        override fun onDone(utteranceId: String?) {
+                            VoiceForegroundService.stop(appContext)
+                        }
+
+                        @Deprecated("Deprecated in Java")
+                        override fun onError(utteranceId: String?) {
+                            VoiceForegroundService.stop(appContext)
+                        }
+                    })
                     if (localeCode.isNotEmpty()) {
                         runCatching { tts?.language = Locale.forLanguageTag(localeCode) }
                     }
                     val queued = pendingSpeechText
                     pendingSpeechText = null
-                    if (!queued.isNullOrBlank()) {
+                    if (!queued.isNullOrBlank() && !VoiceForegroundService.muted) {
                         tts?.speak(queued, TextToSpeech.QUEUE_FLUSH, null, "agy_summary")
                     }
                 }

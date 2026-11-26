@@ -2,6 +2,16 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.44] - 2026-11-26
+
+### Added
+- **Adopted Mobile-Native Capabilities from `antigravity-android#37`:**
+  - **Rich Tool Approvals (`RemoteInput`) & Subagent Cancel Notifications:** `ApprovalNotificationHelper` & `ApprovalNotificationReceiver` now include a **Deny w/ Comment** inline direct-reply action (API 31+ `FLAG_MUTABLE`) that forwards instructions directly into `ChatNotifier`, plus a low-importance `agy_subagents` progress channel with a **Cancel** action and `phone_subagent_notify` MCP tool.
+  - **Gboard / Keyboard & Clipboard Image Paste (`ClipboardImageHelper`):** Added 12 MiB-capped safe `content://` image reading (`ClipboardImageHelper`), `ContentInsertionConfiguration` (`image/*`) on `ChatComposerBar` so Gboard/IME screenshots commit straight into chat attachments, and a **Paste clipboard image** action in the composer menu.
+  - **Headless Offscreen Browser Subagent (`HeadlessBrowserHelper` / `phone_browser`):** Isolated offscreen WebView automation (zero `@JavascriptInterface`, strict `http`/`https` allowlist) supporting `navigate`, `eval`, `click`, `type`, `get_text`, `screenshot`, `console_logs`, and `close` via `PhoneMcpServer` & `PhoneBridge`.
+  - **Voice Foreground Service (`VoiceForegroundService`):** Added `agy_voice` notification channel with bounded wake lock, gentle passive audio focus, and notification **Mute/Unmute** + **Stop Voice** controls wired into `VoicePlugin`.
+  - **Expanded Terminal Extra-Keys & Localhost Live Preview:** Expanded `TerminalPage` with full shell extra-keys (`Ctrl+Z/L/A/E`, arrow keys, `Home`/`End`/`PgUp`/`PgDn`, `/`, `-`, `|`, `~`, `@`, `Paste` & toggle) and upgraded `RemoteWebPage` with `http://127.0.0.1` Localhost Preview & external browser launcher.
+
 ## [1.0.43] - 2026-11-26
 
 ### Fixed

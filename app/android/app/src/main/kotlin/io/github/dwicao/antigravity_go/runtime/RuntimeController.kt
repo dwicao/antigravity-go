@@ -1520,6 +1520,7 @@ am start -a android.intent.action.VIEW -d "${'$'}url" >/dev/null 2>&1 || echo "[
         requestId: Any,
         optionId: String,
         approved: Boolean,
+        comment: String? = null,
     ) {
         acpManager.respondToPermission(turnId, requestId, optionId)
         emit(
@@ -1529,6 +1530,20 @@ am start -a android.intent.action.VIEW -d "${'$'}url" >/dev/null 2>&1 || echo "[
                 "requestId" to requestId.toString(),
                 "optionId" to optionId,
                 "approved" to approved,
+                "comment" to comment,
+            )
+        )
+    }
+
+    fun handleNotificationCancelTurn(turnId: String, subagentId: String) {
+        if (turnId.isNotBlank()) {
+            cancelTurn(turnId)
+        }
+        emit(
+            mapOf(
+                "kind" to "notification_cancel_turn",
+                "turnId" to turnId,
+                "subagentId" to subagentId,
             )
         )
     }
