@@ -292,8 +292,11 @@ class AcpCodec {
       return null;
     }
     if (decoded is! Map) return null;
-    final root = _asMap(decoded);
+    return parseDecodedMessage(_asMap(decoded));
+  }
 
+  /// Parses an already-decoded JSON-RPC message map from `agy acp`.
+  AgyChatEvent? parseDecodedMessage(Map<String, dynamic> root) {
     final error = _asMap(root['error']);
     if (error.isNotEmpty) {
       final code = (error['code'] as num?)?.toInt();

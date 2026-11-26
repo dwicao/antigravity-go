@@ -13,6 +13,15 @@ import 'chat_models.dart';
 String _encodeChatMessagesJson(List<Map<String, dynamic>> raw) =>
     jsonEncode(raw);
 
+List<ChatMessage> _decodeChatMessagesJson(String raw) {
+  final decoded = jsonDecode(raw);
+  if (decoded is! List) return const [];
+  return decoded
+      .whereType<Map<String, dynamic>>()
+      .map(ChatMessage.fromJson)
+      .toList();
+}
+
 class SessionSearchHit {
   const SessionSearchHit({
     required this.session,
@@ -38,8 +47,8 @@ class ChatMessageStore {
     try {
       final support = await getApplicationSupportDirectory();
       final dir = Directory('${support.path}/agy_sessions');
-      if (!dir.existsSync()) {
-        dir.createSync(recursive: true);
+      if (!await dir.exists()) {
+        await dir.create(recursive: true);
       }
       return dir;
     } on MissingPluginException {
@@ -57,15 +66,14 @@ class ChatMessageStore {
     final safeId = _safeFileName(sessionId);
     if (dir != null) {
       final file = File('${dir.path}/$safeId.json');
-      if (file.existsSync()) {
+      if (await file.exists()) {
         try {
-          final decoded = jsonDecode(await file.readAsString());
-          if (decoded is List) {
-            return decoded
-                .whereType<Map<String, dynamic>>()
-                .map(ChatMessage.fromJson)
-                .toList();
-          }
+          final rawJson = await file.readAsString();
+          final offload = rawJson.length > 16384 &&
+              !Platform.environment.containsKey('FLUTTER_TEST');
+          return offload
+              ? await compute(_decodeChatMessagesJson, rawJson)
+              : _decodeChatMessagesJson(rawJson);
         } catch (_) {}
       }
     }
@@ -148,11 +156,11 @@ class ChatMessageStore {
       try {
         await target.writeAsString(encoded, flush: true);
       } catch (_) {}
-      if (tmp.existsSync()) {
-        try {
-          tmp.deleteSync();
-        } catch (_) {}
-      }
+      try {
+        if (await tmp.exists()) {
+          await tmp.delete();
+        }
+      } catch (_) {}
     }
   }
 
@@ -162,11 +170,11 @@ class ChatMessageStore {
       final safeId = _safeFileName(sessionId);
       final target = File('${dir.path}/$safeId.json');
       try {
-        if (target.existsSync()) target.deleteSync();
+        if (await target.exists()) await target.delete();
       } catch (_) {}
       final tmp = File('${dir.path}/.$safeId.tmp');
       try {
-        if (tmp.existsSync()) tmp.deleteSync();
+        if (await tmp.exists()) await tmp.delete();
       } catch (_) {}
     }
     final prefs = await SharedPreferences.getInstance();

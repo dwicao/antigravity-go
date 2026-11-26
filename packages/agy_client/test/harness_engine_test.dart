@@ -436,5 +436,67 @@ void main() {
       expect(map, contains('lib/main.dart'));
       expect(map, contains('packages/core.dart'));
     });
+
+    test('HarnessContextSnapshot implements value equality and RepoMapBuilder hits cache for same parameters', () async {
+      const a = HarnessContextSnapshot(
+        usedTokens: 12000,
+        budgetTokens: 256000,
+        ratio: 12000 / 256000,
+        needsWarning: false,
+        shouldCompact: false,
+        statusLabel: 'Healthy',
+        compactedMessages: 1,
+        activeMessages: 8,
+        compactAtTokens: 204800,
+      );
+      const b = HarnessContextSnapshot(
+        usedTokens: 12000,
+        budgetTokens: 256000,
+        ratio: 12000 / 256000,
+        needsWarning: false,
+        shouldCompact: false,
+        statusLabel: 'Healthy',
+        compactedMessages: 1,
+        activeMessages: 8,
+        compactAtTokens: 204800,
+      );
+      const c = HarnessContextSnapshot(
+        usedTokens: 13000,
+        budgetTokens: 256000,
+        ratio: 13000 / 256000,
+        needsWarning: false,
+        shouldCompact: false,
+        statusLabel: 'Healthy',
+        compactedMessages: 1,
+        activeMessages: 8,
+        compactAtTokens: 204800,
+      );
+      expect(a, equals(b));
+      expect(a.hashCode, equals(b.hashCode));
+      expect(a, isNot(equals(c)));
+
+      final tmp = await Directory.systemTemp.createTemp('agy_cache_map_');
+      addTearDown(() async {
+        RepoMapBuilder.invalidateCache(tmp.path);
+        if (await tmp.exists()) await tmp.delete(recursive: true);
+      });
+      final src = File('${tmp.path}/sample.dart');
+      await src.writeAsString('class CachedWidget {}\n');
+      final first = await RepoMapBuilder.buildFromDirectory(
+        tmp.path,
+        maxTokens: 600,
+        maxFiles: 80,
+      );
+      expect(first, contains('CachedWidget'));
+
+      // Overwrite file without invalidating cache: second identical call serves cached map.
+      await src.writeAsString('class ModifiedWidget {}\n');
+      final cached = await RepoMapBuilder.buildFromDirectory(
+        tmp.path,
+        maxTokens: 600,
+        maxFiles: 80,
+      );
+      expect(cached, equals(first));
+    });
   });
 }

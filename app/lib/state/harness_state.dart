@@ -132,6 +132,24 @@ class HarnessState {
 final harnessProvider =
     NotifierProvider<HarnessNotifier, HarnessState>(HarnessNotifier.new);
 
+final Expando<List<String>> _completedMsgToolStringsCache =
+    Expando<List<String>>('completedMsgToolStrings');
+
+List<String> _toolStringsForMessage(ChatMessage m) {
+  if (!m.isStreaming) {
+    final cached = _completedMsgToolStringsCache[m];
+    if (cached != null) return cached;
+  }
+  final out = [
+    for (final t in m.tools)
+      '${t.toolName} ${t.parameters.isEmpty ? '' : jsonEncode(t.parameters)} ${t.output ?? ''} ${t.error ?? ''}',
+  ];
+  if (!m.isStreaming) {
+    _completedMsgToolStringsCache[m] = out;
+  }
+  return out;
+}
+
 final contextBudgetProvider = Provider<HarnessContextSnapshot>((ref) {
   final messages = ref.watch(chatProvider.select((s) => s.messages));
   final selectedModelId =
@@ -189,10 +207,7 @@ final contextBudgetProvider = Provider<HarnessContextSnapshot>((ref) {
           ? '${m.text}\n${m.thoughts}'
           : m.text,
     ),
-    toolOutputs: activeMessages.expand((m) => m.tools).map((t) {
-      final params = t.parameters.isEmpty ? '' : jsonEncode(t.parameters);
-      return '${t.toolName} $params ${t.output ?? ''} ${t.error ?? ''}';
-    }),
+    toolOutputs: activeMessages.expand(_toolStringsForMessage),
     modelId: threadModelId,
     overrideBudgetTokens: overrideBudget,
     compactedMessages: compactedCount,
@@ -226,12 +241,7 @@ final contextBudgetProvider = Provider<HarnessContextSnapshot>((ref) {
           messageTexts: activeMessages.take(lastUsageIdx + 1).map((m) => m.text),
           toolOutputs: activeMessages
               .take(lastUsageIdx + 1)
-              .expand((m) => m.tools)
-              .map((t) {
-                final params =
-                    t.parameters.isEmpty ? '' : jsonEncode(t.parameters);
-                return '${t.toolName} $params ${t.output ?? ''} ${t.error ?? ''}';
-              }),
+              .expand(_toolStringsForMessage),
           modelId: threadModelId,
         );
         baseTokens = math.min(rawTurnTokens, prefixSnap.usedTokens + 16000);
@@ -292,6 +302,9 @@ class HarnessNotifier extends Notifier<HarnessState> {
   static const _kHooksJson = 'agy_harness_lifecycle_hooks';
   static const _kCustomVerify = 'agy_harness_custom_verify';
 
+  String? _lastPrewarmKey;
+  DateTime? _lastPrewarmAt;
+
   @override
   HarnessState build() {
     ref.listen<bool>(
@@ -304,6 +317,7 @@ class HarnessNotifier extends Notifier<HarnessState> {
             unawaited(
               refreshRepoMap(
                 maxTokens: state.quotaSaverEnabled ? 600 : 1000,
+                maxFiles: state.quotaSaverEnabled ? 80 : 120,
               ),
             );
           }
@@ -319,6 +333,7 @@ class HarnessNotifier extends Notifier<HarnessState> {
             unawaited(
               refreshRepoMap(
                 maxTokens: state.quotaSaverEnabled ? 600 : 1000,
+                maxFiles: state.quotaSaverEnabled ? 80 : 120,
               ),
             );
           }
@@ -332,6 +347,14 @@ class HarnessNotifier extends Notifier<HarnessState> {
   void _prewarmCurrentWorkspace([String? overrideCwd]) {
     if (!ref.read(runtimeProvider).status.isReady) return;
     final cwd = overrideCwd ?? _activeWorkspace();
+    final now = DateTime.now();
+    if (_lastPrewarmKey == cwd &&
+        _lastPrewarmAt != null &&
+        now.difference(_lastPrewarmAt!) < const Duration(seconds: 5)) {
+      return;
+    }
+    _lastPrewarmKey = cwd;
+    _lastPrewarmAt = now;
     final project = ref.read(projectsProvider).activeProject;
     final settings = ref.read(settingsProvider);
     final perms = ref.read(permissionsProvider);
@@ -472,12 +495,13 @@ class HarnessNotifier extends Notifier<HarnessState> {
     await prefs.setString(_kHooksJson, encoded);
   }
 
-  Future<String> refreshRepoMap({int maxTokens = 1400}) async {
+  Future<String> refreshRepoMap({int maxTokens = 1400, int maxFiles = 120}) async {
     final cwd = _activeWorkspace();
     if (cwd.isEmpty) return '';
     final mapText = await RepoMapBuilder.buildFromDirectory(
       cwd,
       maxTokens: maxTokens,
+      maxFiles: maxFiles,
     );
     if (ref.mounted) {
       state = state.copyWith(repoMapPreview: mapText);

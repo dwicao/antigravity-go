@@ -1,12 +1,15 @@
 import 'package:agy_client/agy_client.dart';
 import 'package:antigravity_go/runtime/runtime_models.dart';
 import 'package:antigravity_go/state/background_tasks_state.dart';
+import 'package:antigravity_go/state/chat_message_store.dart';
+import 'package:antigravity_go/state/chat_models.dart';
 import 'package:antigravity_go/state/chat_state.dart';
 import 'package:antigravity_go/state/chat_turn_helpers.dart';
 import 'package:antigravity_go/state/runtime_state.dart';
 import 'package:antigravity_go/state/sessions_state.dart';
 import 'package:antigravity_go/ui/chat/chat_screen.dart';
 import 'package:antigravity_go/ui/chat/message_bubble.dart';
+import 'package:antigravity_go/ui/chat/secret_mask.dart';
 import 'package:antigravity_go/ui/chat/subagents_activity_banner.dart';
 import 'package:antigravity_go/ui/shell/background_tasks_sheet.dart';
 import 'package:flutter/material.dart';
@@ -1238,5 +1241,63 @@ void main() {
 
     await tester.pumpWidget(const SizedBox());
     await tester.pump(const Duration(milliseconds: 500));
+  });
+
+  test('AgySecretMask fast-path skips benign text accurately and still redacts all secret patterns', () {
+    const shortSafe = 'hi';
+    expect(identical(AgySecretMask.mask(shortSafe), shortSafe), isTrue);
+
+    const benignLong =
+        'Refactoring controller layer with 42 files changed and zero errors';
+    expect(identical(AgySecretMask.mask(benignLong), benignLong), isTrue);
+
+    expect(
+      AgySecretMask.mask('https://alice:s3cr3tPass@example.com/repo.git'),
+      'https://alice:••••@example.com/repo.git',
+    );
+    expect(
+      AgySecretMask.mask('Authorization: bEaReR AbCdEfGh123456'),
+      'Authorization: bEaReR ••••',
+    );
+    expect(
+      AgySecretMask.mask('Key sk-abcdefghijklmnop1234 and AIzaSyD123456789012345678901'),
+      'Key sk-abc•••• and AIzaSy••••',
+    );
+    expect(
+      AgySecretMask.mask('eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3OCJ9.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c'),
+      'eyJ••••',
+    );
+    expect(
+      AgySecretMask.mask('-----BEGIN RSA PRIVATE KEY-----\nabc\n-----END RSA PRIVATE KEY-----'),
+      '-----PRIVATE KEY REDACTED-----',
+    );
+  });
+
+  test('ChatMessageStore save and load roundtrip handles concurrent serialized writes', () async {
+    const sessionId = 'store-perf-test-session';
+    final firstBatch = [
+      ChatMessage(
+        id: 'm1',
+        role: ChatRole.user,
+        text: 'First prompt',
+        createdAt: DateTime(2026, 11, 26, 10, 0),
+      ),
+    ];
+    final secondBatch = [
+      ...firstBatch,
+      ChatMessage(
+        id: 'm2',
+        role: ChatRole.assistant,
+        text: 'Final response persisted cleanly',
+        createdAt: DateTime(2026, 11, 26, 10, 1),
+      ),
+    ];
+    await Future.wait([
+      ChatMessageStore.instance.save(sessionId, firstBatch),
+      ChatMessageStore.instance.save(sessionId, secondBatch),
+    ]);
+    final loaded = await ChatMessageStore.instance.load(sessionId);
+    expect(loaded.length, 2);
+    expect(loaded.last.text, 'Final response persisted cleanly');
   });
 }

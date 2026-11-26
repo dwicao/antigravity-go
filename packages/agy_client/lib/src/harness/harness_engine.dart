@@ -343,6 +343,33 @@ class HarnessContextSnapshot {
   final int? compactAtTokens;
 
   int get percentage => (ratio * 100).clamp(0, 100).round();
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is HarnessContextSnapshot &&
+          other.usedTokens == usedTokens &&
+          other.budgetTokens == budgetTokens &&
+          other.ratio == ratio &&
+          other.needsWarning == needsWarning &&
+          other.shouldCompact == shouldCompact &&
+          other.statusLabel == statusLabel &&
+          other.compactedMessages == compactedMessages &&
+          other.activeMessages == activeMessages &&
+          other.compactAtTokens == compactAtTokens;
+
+  @override
+  int get hashCode => Object.hash(
+        usedTokens,
+        budgetTokens,
+        ratio,
+        needsWarning,
+        shouldCompact,
+        statusLabel,
+        compactedMessages,
+        activeMessages,
+        compactAtTokens,
+      );
 }
 
 /// Tracks conversation token saturation to trigger proactive `/compact`
@@ -357,6 +384,8 @@ class HarnessContextMonitor {
   static const int minQuotaCompactTokens = 256000;
   static const int mediumQuotaCompactTokens = 512000;
   static const int maxQuotaCompactTokens = 800000;
+
+  static final RegExp _wsCollapseRe = RegExp(r'\s+');
 
   static final RegExp _largeTaskPromptRe = RegExp(
     r'(?:^|\s)(?:/(?:plan|boost|goal|teamwork|swarm)\b)|'
@@ -548,7 +577,7 @@ class HarnessContextMonitor {
     String lastAssistant = '';
 
     for (final t in turns) {
-      final cleaned = t.text.trim().replaceAll(RegExp(r'\s+'), ' ');
+      final cleaned = t.text.trim().replaceAll(_wsCollapseRe, ' ');
       if (t.role == 'user' && cleaned.isNotEmpty) {
         userRequests.add(
           cleaned.length > 140 ? '${cleaned.substring(0, 140)}…' : cleaned,
@@ -586,7 +615,7 @@ class HarnessContextMonitor {
     if (toolList.isNotEmpty) {
       buf.writeln('\n#### Tools Run');
       for (final tool in toolList.take(12)) {
-        final oneLine = tool.replaceAll(RegExp(r'\s+'), ' ');
+        final oneLine = tool.replaceAll(_wsCollapseRe, ' ');
         buf.writeln(
           '- ${oneLine.length > 120 ? '${oneLine.substring(0, 120)}…' : oneLine}',
         );

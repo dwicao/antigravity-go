@@ -236,8 +236,9 @@ class OpenAiCompatRunner {
       final mime = _imageMimeForPath(path);
       if (mime == null) continue;
       final file = File(path);
-      if (!file.existsSync()) continue;
-      final len = file.lengthSync();
+      final stat = await file.stat();
+      if (stat.type != FileSystemEntityType.file) continue;
+      final len = stat.size;
       if (len <= 0 || len > 4 * 1024 * 1024) continue;
       try {
         final b64 = base64Encode(await file.readAsBytes());
@@ -309,12 +310,11 @@ class OpenAiCompatRunner {
       var lastCtxTokens = 0;
       final fullResponse = StringBuffer();
       var includeStreamOptions = true;
+      final client = http.Client();
+      ctrl.client = client;
 
       for (var round = 0; round < _maxToolRounds; round++) {
         if (ctrl.cancelled) break;
-
-        final client = http.Client();
-        ctrl.client = client;
 
         final bodyMap = <String, dynamic>{
           'model': profile.modelId,
@@ -333,7 +333,6 @@ class OpenAiCompatRunner {
         try {
           resp = await client.send(req).timeout(const Duration(seconds: 45));
         } catch (e) {
-          client.close();
           if (ctrl.cancelled) return;
           yield AgyErrorEvent(message: 'Network error calling ${profile.name}: $e');
           return;
@@ -341,7 +340,6 @@ class OpenAiCompatRunner {
 
         if (resp.statusCode == 400 && includeStreamOptions) {
           final errBody = await resp.stream.bytesToString();
-          client.close();
           if (errBody.toLowerCase().contains('stream_options')) {
             includeStreamOptions = false;
             round--;
@@ -356,7 +354,6 @@ class OpenAiCompatRunner {
 
         if (resp.statusCode < 200 || resp.statusCode >= 300) {
           final errBody = await resp.stream.bytesToString();
-          client.close();
           yield AgyErrorEvent(
             message: 'HTTP ${resp.statusCode} from ${profile.name}: $errBody',
             code: resp.statusCode,
@@ -370,7 +367,6 @@ class OpenAiCompatRunner {
 
         if (ctype.contains('application/json')) {
           final rawJson = await resp.stream.bytesToString();
-          client.close();
           final slice = parser.parseLine(rawJson);
           if (slice?.errorMessage != null) {
             yield AgyErrorEvent(message: slice!.errorMessage!);
@@ -395,7 +391,6 @@ class OpenAiCompatRunner {
             final slice = parser.parseLine(line);
             if (slice == null) continue;
             if (slice.errorMessage != null) {
-              client.close();
               yield AgyErrorEvent(message: slice.errorMessage!);
               return;
             }
@@ -423,9 +418,7 @@ class OpenAiCompatRunner {
             fullResponse.write(tail.text);
             yield AgyTextDeltaEvent(delta: tail.text);
           }
-          client.close();
         }
-        ctrl.client = null;
 
         final u = parser.latestUsage;
         if (u != null) {

@@ -11,6 +11,10 @@ final customizationsProvider =
 );
 
 class CustomizationsNotifier extends Notifier<List<CustomizationItem>> {
+  String? _lastRefreshedCwd;
+  DateTime? _lastRefreshedAt;
+  Future<void>? _inFlightRefresh;
+
   @override
   List<CustomizationItem> build() {
     ref.listen(
@@ -27,16 +31,39 @@ class CustomizationsNotifier extends Notifier<List<CustomizationItem>> {
     return projDir.isNotEmpty ? projDir : runtimeRoot;
   }
 
-  Future<void> refresh() async {
+  Future<void> refresh({bool force = false}) {
     final cwd = _resolveCwd();
-    final items = await RuntimeBridge.instance.listCustomizations(cwd);
-    if (!ref.mounted) return;
-    state = items;
+    final now = DateTime.now();
+    if (!force &&
+        _inFlightRefresh != null &&
+        _lastRefreshedCwd == cwd) {
+      return _inFlightRefresh!;
+    }
+    if (!force &&
+        _lastRefreshedCwd == cwd &&
+        _lastRefreshedAt != null &&
+        now.difference(_lastRefreshedAt!) < const Duration(seconds: 2)) {
+      return Future<void>.value();
+    }
+    _lastRefreshedCwd = cwd;
+    final future = () async {
+      final items = await RuntimeBridge.instance.listCustomizations(cwd);
+      _lastRefreshedAt = DateTime.now();
+      if (!ref.mounted) return;
+      state = items;
+    }();
+    _inFlightRefresh = future;
+    future.whenComplete(() {
+      if (identical(_inFlightRefresh, future)) {
+        _inFlightRefresh = null;
+      }
+    });
+    return future;
   }
 
   Future<bool> saveFile(String path, String content) async {
     final ok = await RuntimeBridge.instance.writeWorkspaceFile(path, content);
-    if (ok) await refresh();
+    if (ok) await refresh(force: true);
     return ok;
   }
 
@@ -53,7 +80,7 @@ class CustomizationsNotifier extends Notifier<List<CustomizationItem>> {
       cwd: _resolveCwd(),
       content: content,
     );
-    if (path != null) await refresh();
+    if (path != null) await refresh(force: true);
     return path;
   }
 

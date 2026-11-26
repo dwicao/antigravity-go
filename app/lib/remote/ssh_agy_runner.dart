@@ -102,11 +102,12 @@ class SshAgyRunner {
 
     for (final rawPath in localPaths) {
       final file = File(rawPath);
-      if (!file.existsSync() || file.statSync().type != FileSystemEntityType.file) {
+      final stat = await file.stat();
+      if (stat.type != FileSystemEntityType.file) {
         continue;
       }
       final mime = _imageMimeForPath(rawPath);
-      final len = file.lengthSync();
+      final len = stat.size;
       if (mime != null && len > 0 && len <= 4 * 1024 * 1024) {
         try {
           final bytes = await file.readAsBytes();
@@ -281,7 +282,7 @@ class SshAgyRunner {
 
         if (msgId is num && msgId.toInt() == initId) {
           if (msg.containsKey('error')) {
-            final evt = codec.parseNotificationOrRequest(trimmed);
+            final evt = codec.parseDecodedMessage(msg);
             if (evt != null) yield evt;
             break;
           }
@@ -342,7 +343,7 @@ class SshAgyRunner {
             continue;
           }
 
-          final evt = codec.parseNotificationOrRequest(trimmed);
+          final evt = codec.parseDecodedMessage(msg);
           if (evt != null) yield evt;
 
           final res = msg['result'];
@@ -434,7 +435,7 @@ class SshAgyRunner {
           continue;
         }
 
-        final evt = codec.parseNotificationOrRequest(trimmed);
+        final evt = codec.parseDecodedMessage(msg);
         if (evt != null) {
           yield evt;
         }
@@ -444,10 +445,17 @@ class SshAgyRunner {
         }
       }
 
-      final errBytes = await session.stderr.fold<List<int>>(
-        <int>[],
-        (prev, chunk) => prev..addAll(chunk),
-      );
+      const maxErrBytes = 65536;
+      final errBytes = <int>[];
+      await for (final chunk in session.stderr) {
+        if (errBytes.length >= maxErrBytes) continue;
+        final remaining = maxErrBytes - errBytes.length;
+        if (chunk.length <= remaining) {
+          errBytes.addAll(chunk);
+        } else {
+          errBytes.addAll(chunk.take(remaining));
+        }
+      }
       final errText = utf8.decode(errBytes, allowMalformed: true).trim();
       await session.done;
       final exitCode = session.exitCode ?? 0;

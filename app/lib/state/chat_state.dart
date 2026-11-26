@@ -55,8 +55,25 @@ class _SessionTurnRuntime {
   Timer? uiEmitTimer;
   bool pendingUiEmit = false;
   double latestTokensPerSec = 0;
+  String? pendingAssistantId;
+  final StringBuffer pendingThoughtDelta = StringBuffer();
+  final StringBuffer pendingTextDelta = StringBuffer();
+  TokenUsage? pendingStepUsage;
+
+  bool get hasPendingDeltas =>
+      pendingThoughtDelta.isNotEmpty ||
+      pendingTextDelta.isNotEmpty ||
+      pendingStepUsage != null;
+
+  void clearPendingDeltas() {
+    pendingAssistantId = null;
+    pendingThoughtDelta.clear();
+    pendingTextDelta.clear();
+    pendingStepUsage = null;
+  }
 
   void dispose() {
+    clearPendingDeltas();
     uiEmitTimer?.cancel();
     uiEmitTimer = null;
     stallWatchdog?.cancel();
@@ -754,7 +771,9 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       rt.pendingUiEmit = false;
       rt.uiEmitTimer = Timer(const Duration(milliseconds: 48), () {
         rt.uiEmitTimer = null;
-        if (!ref.mounted || _loadedSessionId != sessionId) return;
+        if (!ref.mounted) return;
+        _flushPendingDeltas(sessionId);
+        if (_loadedSessionId != sessionId) return;
         if (rt.pendingUiEmit) {
           rt.pendingUiEmit = false;
           final latest = _inFlightMessages[sessionId];
@@ -1342,6 +1361,65 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     );
   }
 
+  void _flushPendingDeltas(String sessionId, {bool coalesceUi = false}) {
+    final rt = _sessionRuntimes[sessionId];
+    if (rt == null || !rt.hasPendingDeltas) return;
+    final assistantId = rt.pendingAssistantId;
+    final thoughtDelta = rt.pendingThoughtDelta.toString();
+    final textDelta = rt.pendingTextDelta.toString();
+    final stepUsage = rt.pendingStepUsage;
+    rt.clearPendingDeltas();
+    if (assistantId == null) return;
+
+    final msgs = _messagesForSession(sessionId);
+    final idx = msgs.indexWhere((m) => m.id == assistantId);
+    if (idx < 0) return;
+    final current = msgs[idx];
+    if (!current.isStreaming || current.completedAt != null) return;
+
+    var nextSteps = current.steps;
+    if (thoughtDelta.isNotEmpty) {
+      final updatedSteps = [...nextSteps];
+      if (updatedSteps.isNotEmpty &&
+          updatedSteps.last.kind == ChatMilestoneKind.thought) {
+        final last = updatedSteps.last;
+        updatedSteps[updatedSteps.length - 1] =
+            last.copyWith(text: '${last.text}$thoughtDelta');
+      } else {
+        updatedSteps.add(
+          ChatMilestoneStep(
+            id: 'thought-${updatedSteps.length}',
+            kind: ChatMilestoneKind.thought,
+            text: thoughtDelta,
+          ),
+        );
+      }
+      nextSteps = updatedSteps;
+    }
+    if (textDelta.isNotEmpty) {
+      nextSteps = _appendTextStep(nextSteps, textDelta);
+    }
+    final nextUsage = ChatTurnHelpers.mergeStepUsage(current.usage, stepUsage);
+    _replaceMessageInSession(
+      sessionId,
+      idx,
+      current.copyWith(
+        thoughts: thoughtDelta.isEmpty
+            ? current.thoughts
+            : '${current.thoughts}$thoughtDelta',
+        text: textDelta.isEmpty ? current.text : '${current.text}$textDelta',
+        steps: nextSteps,
+        usage: nextUsage,
+        contextTokens: (stepUsage?.contextTokens ?? 0) > 0
+            ? stepUsage!.contextTokens
+            : current.contextTokens,
+      ),
+      tokensPerSecond:
+          _loadedSessionId == sessionId ? rt.latestTokensPerSec : null,
+      coalesceUi: coalesceUi,
+    );
+  }
+
   void _handleEvent(
     AgySessionSummary session,
     String assistantId,
@@ -1353,6 +1431,9 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         _loadedSessionId == session.id &&
         state.stallWarning != null) {
       state = state.copyWith(clearStallWarning: true);
+    }
+    if (evt is! AgyThoughtDeltaEvent && evt is! AgyTextDeltaEvent) {
+      _flushPendingDeltas(session.id);
     }
     final msgs = _messagesForSession(session.id);
     final idx = msgs.indexWhere((m) => m.id == assistantId);
@@ -1390,6 +1471,25 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         final rate = _loadedSessionId == session.id
             ? _recordRateSample(session.id, evt.delta)
             : null;
+        if (rt != null) {
+          if (rt.pendingAssistantId != null &&
+              rt.pendingAssistantId != assistantId) {
+            _flushPendingDeltas(session.id);
+          }
+          rt.pendingAssistantId = assistantId;
+          rt.pendingThoughtDelta.write(evt.delta);
+          rt.pendingStepUsage = ChatTurnHelpers.mergeStepUsage(
+            rt.pendingStepUsage,
+            evt.stepUsage,
+          );
+          if (rate != null) rt.latestTokensPerSec = rate;
+          if (rt.uiEmitTimer == null) {
+            _flushPendingDeltas(session.id, coalesceUi: true);
+          } else {
+            rt.pendingUiEmit = true;
+          }
+          break;
+        }
         final nextSteps = [...current.steps];
         if (evt.delta.isNotEmpty) {
           if (nextSteps.isNotEmpty &&
@@ -1429,6 +1529,25 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         final rate = _loadedSessionId == session.id
             ? _recordRateSample(session.id, evt.delta)
             : null;
+        if (rt != null) {
+          if (rt.pendingAssistantId != null &&
+              rt.pendingAssistantId != assistantId) {
+            _flushPendingDeltas(session.id);
+          }
+          rt.pendingAssistantId = assistantId;
+          rt.pendingTextDelta.write(evt.delta);
+          rt.pendingStepUsage = ChatTurnHelpers.mergeStepUsage(
+            rt.pendingStepUsage,
+            evt.stepUsage,
+          );
+          if (rate != null) rt.latestTokensPerSec = rate;
+          if (rt.uiEmitTimer == null) {
+            _flushPendingDeltas(session.id, coalesceUi: true);
+          } else {
+            rt.pendingUiEmit = true;
+          }
+          break;
+        }
         final nextSteps = _appendTextStep(current.steps, evt.delta);
         final nextUsage =
             ChatTurnHelpers.mergeStepUsage(current.usage, evt.stepUsage);
@@ -1474,7 +1593,9 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           final mergedOutput = switch ((prevHasDiff, nextOut)) {
             (_, null) => prevOut,
             (true, final String nxt) when !nextHasDiff =>
-              nxt.trim().isEmpty ? prevOut : '${nxt.trim()}\n\n$prevOut',
+              nxt.trim().isEmpty
+                  ? prevOut
+                  : _boundToolOutput('${nxt.trim()}\n\n$prevOut'),
             _ => nextOut,
           };
           tools[tIdx] = ChatToolStep(
@@ -1482,7 +1603,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
             toolName: resolvedToolName,
             state: evt.state,
             parameters: mergedParams,
-            output: _boundToolOutput(mergedOutput),
+            output: mergedOutput,
             error: evt.errorMessage ?? prev.error,
             durationSeconds: evt.durationSeconds ?? prev.durationSeconds,
             startedAt: prev.startedAt,
@@ -1784,6 +1905,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     required String assistantId,
     required String text,
   }) {
+    _flushPendingDeltas(session.id);
     final msgs = _messagesForSession(session.id);
     final idx = msgs.indexWhere((m) => m.id == assistantId);
     if (idx >= 0) {

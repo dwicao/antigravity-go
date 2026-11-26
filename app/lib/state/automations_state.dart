@@ -129,11 +129,11 @@ class AutomationsNotifier extends Notifier<List<AgyAutomation>> {
         final p = a.triggerTarget.trim();
         if (p.isEmpty) return false;
         try {
-          final type = FileSystemEntity.typeSync(p);
+          final type = await FileSystemEntity.type(p);
           if (type == FileSystemEntityType.notFound) return false;
           final stat = type == FileSystemEntityType.directory
-              ? Directory(p).statSync()
-              : File(p).statSync();
+              ? await Directory(p).stat()
+              : await File(p).stat();
           final prev = _fileMtimes[a.id];
           _fileMtimes[a.id] = stat.modified;
           if (prev == null) return false;

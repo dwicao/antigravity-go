@@ -117,6 +117,9 @@ class RepoMapBuilder {
   };
 
   /// Extracts structural symbols from a single file's [source].
+  static final RegExp _typeNameSplitRe = RegExp(r'[\s{(:]');
+  static final RegExp _wsCollapseRe = RegExp(r'\s+');
+
   static RepoMapFileSummary summarizeFile(String relativePath, String source) {
     final ext = relativePath.split('.').last.toLowerCase();
     final lines = source.replaceAll('\r\n', '\n').split('\n');
@@ -166,7 +169,7 @@ class RepoMapBuilder {
       final tm = _typeDeclRe.firstMatch(trimmed);
       if (tm != null) {
         final kind = tm.group(1)!;
-        final rawName = tm.group(2)!.split(RegExp(r'[\s{(:]')).first.trim();
+        final rawName = tm.group(2)!.split(_typeNameSplitRe).first.trim();
         if (rawName.isNotEmpty) {
           symbols.add(
             RepoSymbol(kind: kind, name: rawName, line: lineNo),
@@ -266,7 +269,7 @@ class RepoMapBuilder {
   }
 
   static String _compactParams(String raw) {
-    final compact = raw.replaceAll(RegExp(r'\s+'), ' ').trim();
+    final compact = raw.replaceAll(_wsCollapseRe, ' ').trim();
     if (compact.length <= 48) return compact;
     return '${compact.substring(0, 45)}...)';
   }
@@ -374,15 +377,29 @@ class RepoMapBuilder {
         ? root.path
         : '${root.path}${Platform.pathSeparator}';
     final summaries = <RepoMapFileSummary>[];
-    for (final file in collected) {
-      try {
-        if (await file.length() > 256 * 1024) continue;
-        final content = await file.readAsString();
-        final rel = file.path.startsWith(rootPrefix)
-            ? file.path.substring(rootPrefix.length)
-            : file.path;
-        summaries.add(summarizeFile(rel.replaceAll('\\', '/'), content));
-      } catch (_) {}
+    const batchSize = 8;
+    for (var start = 0; start < collected.length; start += batchSize) {
+      final end = (start + batchSize < collected.length)
+          ? start + batchSize
+          : collected.length;
+      final batch = collected.sublist(start, end);
+      final results = await Future.wait(
+        batch.map((file) async {
+          try {
+            if (await file.length() > 256 * 1024) return null;
+            final content = await file.readAsString();
+            final rel = file.path.startsWith(rootPrefix)
+                ? file.path.substring(rootPrefix.length)
+                : file.path;
+            return summarizeFile(rel.replaceAll('\\', '/'), content);
+          } catch (_) {
+            return null;
+          }
+        }),
+      );
+      for (final s in results) {
+        if (s != null) summaries.add(s);
+      }
     }
 
     final rendered = renderRepoMap(

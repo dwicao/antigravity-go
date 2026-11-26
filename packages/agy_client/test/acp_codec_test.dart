@@ -240,5 +240,26 @@ void main() {
       expect(outLines.length, lessThan(260));
       expect(hugeEvt.output, contains('more)'));
     });
+
+    test('parseDecodedMessage matches parseNotificationOrRequest without re-decoding', () {
+      final codec = AcpCodec();
+      final rawMap = <String, dynamic>{
+        'jsonrpc': '2.0',
+        'method': 'session/update',
+        'params': {
+          'update': {
+            'sessionUpdate': 'agent_message_chunk',
+            'content': {'type': 'text', 'text': 'Hello fast path'},
+          },
+        },
+      };
+      final fromMap = codec.parseDecodedMessage(rawMap) as AgyTextDeltaEvent?;
+      final fromJson =
+          codec.parseNotificationOrRequest(jsonEncode(rawMap)) as AgyTextDeltaEvent?;
+      expect(fromMap, isNotNull);
+      expect(fromJson, isNotNull);
+      expect(fromMap!.delta, equals(fromJson!.delta));
+      expect(fromMap.delta, 'Hello fast path');
+    });
   });
 }
