@@ -304,8 +304,9 @@ class SettingsNotifier extends Notifier<AppSettings> {
       notifyBackgroundOnly: _dirtyKeys.contains('agy_notify_bg_only')
           ? state.notifyBackgroundOnly
           : (prefs.getBool('agy_notify_bg_only') ?? true),
-      selectedModelId:
-          prefs.getString('agy_selected_model') ?? 'Orchestrator (Neon)',
+      selectedModelId: _dirtyKeys.contains('agy_selected_model')
+          ? state.selectedModelId
+          : (prefs.getString('agy_selected_model') ?? 'Orchestrator (Neon)'),
       reasoningEffort: _dirtyKeys.contains('agy_effort')
           ? state.reasoningEffort
           : (prefs.getString('agy_effort') ?? 'medium'),
@@ -453,6 +454,7 @@ class SettingsNotifier extends Notifier<AppSettings> {
   }
 
   Future<void> setModel(String modelId) async {
+    _dirtyKeys.add('agy_selected_model');
     state = state.copyWith(selectedModelId: modelId);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('agy_selected_model', modelId);

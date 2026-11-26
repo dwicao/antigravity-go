@@ -899,7 +899,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       );
     }
     final lastCompactIdx = messages.lastIndexWhere((m) => m.isCompactionSummary);
-    final active = lastCompactIdx >= 0 ? messages.sublist(lastCompactIdx) : messages;
+    final active =
+        lastCompactIdx >= 0 ? messages.sublist(lastCompactIdx + 1) : messages;
     var toolCalls = 0;
     final changedPaths = <String>{};
     String? previousEffort;
