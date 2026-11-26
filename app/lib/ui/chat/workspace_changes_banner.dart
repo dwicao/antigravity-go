@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:agy_client/agy_client.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -32,17 +34,21 @@ class _WorkspaceChangesBannerState
 
   @override
   Widget build(BuildContext context) {
-    final diffState = ref.watch(workspaceDiffProvider);
-    final files = diffState.files;
+    final files = ref.watch(workspaceDiffProvider.select((s) => s.files));
     if (files.isEmpty) return const SizedBox.shrink();
 
     final theme = Theme.of(context);
     final semantic = AgySemanticColors.of(context);
-    final totalAdded = diffState.totalAdded;
-    final totalRemoved = diffState.totalRemoved;
+    var totalAdded = 0;
+    var totalRemoved = 0;
+    for (final f in files) {
+      totalAdded += f.added;
+      totalRemoved += f.removed;
+    }
 
-    return Container(
-      key: const ValueKey('workspace-changes-banner'),
+    return RepaintBoundary(
+      child: Container(
+        key: const ValueKey('workspace-changes-banner'),
       margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
       decoration: BoxDecoration(
         color: theme.colorScheme.surfaceContainerHigh.withOpacity(0.9),
@@ -147,10 +153,9 @@ class _WorkspaceChangesBannerState
           ),
           if (_expanded) ...[
             const Divider(height: 1),
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 132),
+            SizedBox(
+              height: math.min(files.length * 36.0, 132.0),
               child: ListView.separated(
-                shrinkWrap: true,
                 padding: EdgeInsets.zero,
                 itemCount: files.length,
                 separatorBuilder: (_, _) => Divider(
@@ -259,6 +264,7 @@ class _WorkspaceChangesBannerState
             ),
           ],
         ],
+      ),
       ),
     );
   }

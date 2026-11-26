@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:agy_client/agy_client.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../remote/ssh_agy_runner.dart';
@@ -66,21 +67,33 @@ final workspaceDiffProvider =
 /// per-CWD caching so the bottom-of-chat mini-view updates instantaneously and
 /// always reflects files changed in the active chat result.
 class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
-  static const Duration _cwdCacheTtl = Duration(milliseconds: 1200);
+  static const Duration _cwdCacheTtl = Duration(milliseconds: 1500);
+  static const Duration _streamingThrottleInterval =
+      Duration(milliseconds: 1500);
   static const int _maxCacheEntries = 24;
 
   int _refreshToken = 0;
   bool _scheduledCoalesced = false;
   bool _pendingForce = false;
+  bool _refreshInFlight = false;
+  Timer? _streamingThrottleTimer;
   String? _currentSessionId;
   final Map<String, WorkspaceDiffState> _sessionCache = {};
   final Map<String, ({WorkspaceDiffState state, DateTime fetchedAt})> _cwdCache =
       {};
   final Map<String, Set<String>> _committedPathsBySession = {};
 
+  @visibleForTesting
+  bool get hasPendingStreamingThrottleForTest =>
+      _streamingThrottleTimer?.isActive == true;
+
   @override
   WorkspaceDiffState build() {
     _currentSessionId = ref.read(sessionsProvider).activeSessionId;
+    ref.onDispose(() {
+      _streamingThrottleTimer?.cancel();
+      _streamingThrottleTimer = null;
+    });
 
     ref.listen<String?>(
       sessionsProvider.select((s) => s.activeSessionId),
@@ -127,6 +140,9 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
       chatProvider.select((c) => c.isStreaming),
       (prev, next) {
         if (prev == true && next == false) {
+          _streamingThrottleTimer?.cancel();
+          _streamingThrottleTimer = null;
+          _applyInstantChatResultMerge();
           _scheduleRefresh(force: true);
         }
       },
@@ -135,8 +151,14 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
       chatProvider.select((c) => _messagesSignature(c.messages)),
       (prev, next) {
         if (prev != next) {
-          _applyInstantChatResultMerge();
-          _scheduleRefresh(force: true);
+          if (ref.read(chatProvider).isStreaming) {
+            _scheduleStreamingRefresh();
+          } else {
+            _streamingThrottleTimer?.cancel();
+            _streamingThrottleTimer = null;
+            _applyInstantChatResultMerge();
+            _scheduleRefresh(force: true);
+          }
         }
       },
     );
@@ -222,14 +244,55 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
       return;
     }
     final merged = _mergeGitAndChatFiles(state.files, chatFiles);
-    if (merged.length != state.files.length) {
-      state = state.copyWith(
+    _emitIfChanged(
+      state.copyWith(
         files: merged,
         unifiedDiff: state.unifiedDiff.isNotEmpty
             ? state.unifiedDiff
             : _joinFileDiffs(merged),
-      );
+      ),
+    );
+  }
+
+  void _scheduleStreamingRefresh() {
+    if (_streamingThrottleTimer?.isActive == true) return;
+    _streamingThrottleTimer = Timer(_streamingThrottleInterval, () {
+      _streamingThrottleTimer = null;
+      if (!ref.mounted) return;
+      _applyInstantChatResultMerge();
+      if (!_refreshInFlight) {
+        _scheduleRefresh(force: true);
+      }
+    });
+  }
+
+  void _emitIfChanged(WorkspaceDiffState next) {
+    if (!_sameStateSummary(state, next)) {
+      state = next;
     }
+  }
+
+  static bool _sameStateSummary(WorkspaceDiffState a, WorkspaceDiffState b) {
+    if (a.loading != b.loading ||
+        a.cwd != b.cwd ||
+        a.branch != b.branch ||
+        a.status != b.status ||
+        a.unifiedDiff.length != b.unifiedDiff.length ||
+        a.files.length != b.files.length) {
+      return false;
+    }
+    for (var i = 0; i < a.files.length; i++) {
+      final fa = a.files[i];
+      final fb = b.files[i];
+      if (fa.path != fb.path ||
+          fa.added != fb.added ||
+          fa.removed != fb.removed ||
+          fa.created != fb.created ||
+          fa.deleted != fb.deleted) {
+        return false;
+      }
+    }
+    return true;
   }
 
   void _scheduleRefresh({bool force = false}) {
@@ -266,22 +329,22 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
   }
 
   static int _messagesSignature(List<ChatMessage> messages) {
-    var totalChanged = 0;
-    var completedTools = 0;
-    for (final m in messages) {
-      totalChanged += m.changedFiles.length;
-      for (final t in m.tools) {
-        if (t.state == ToolCallState.completed) completedTools++;
+    if (messages.isEmpty) return 0;
+    final last = messages.last;
+    var completedEditTools = 0;
+    for (final t in last.tools) {
+      if (t.state == ToolCallState.completed &&
+          (ChatTurnHelpers.isFileEditTool(t) ||
+              ChatTurnHelpers.hasSuccessfulGitCommit(t))) {
+        completedEditTools++;
       }
     }
-    final last = messages.isEmpty ? null : messages.last;
     return Object.hash(
       messages.length,
-      totalChanged,
-      completedTools,
-      last?.id,
-      last?.isStreaming,
-      last?.tools.length,
+      last.id,
+      last.isStreaming,
+      last.changedFiles.length,
+      completedEditTools,
     );
   }
 
@@ -506,6 +569,7 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
   Future<void> refresh({bool showLoading = false, bool force = false}) async {
     if (!ref.mounted) return;
     final token = ++_refreshToken;
+    _refreshInFlight = true;
     final activeSid =
         ref.read(sessionsProvider).activeSessionId ?? _currentSessionId;
     final primaryCwd = resolveActiveCwd();
@@ -524,8 +588,9 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
               ? cached.state.unifiedDiff
               : _joinFileDiffs(effective),
         );
-        state = nextState;
+        _emitIfChanged(nextState);
         if (activeSid != null) _putSessionCache(activeSid, nextState);
+        _refreshInFlight = false;
         return;
       }
     }
@@ -535,15 +600,19 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
     }
 
     if (primaryCwd.isEmpty && sshHost == null) {
-      if (!ref.mounted || token != _refreshToken) return;
+      if (!ref.mounted || token != _refreshToken) {
+        _refreshInFlight = false;
+        return;
+      }
       final nextState = WorkspaceDiffState(
         loading: false,
         cwd: '',
         files: chatFiles,
         unifiedDiff: _joinFileDiffs(chatFiles),
       );
-      state = nextState;
+      _emitIfChanged(nextState);
       if (activeSid != null) _putSessionCache(activeSid, nextState);
+      _refreshInFlight = false;
       return;
     }
 
@@ -624,10 +693,12 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
       if (!primaryHasChanges || hasUnmatchedChatFiles) {
         final isPrimaryRealRepo =
             chosenBranch.isNotEmpty && chosenBranch != 'shadow-checkpoint';
-        final secondary = <String>{
+        final secondary = (<String>{
           ..._recentToolCwds(),
           if (!isPrimaryRealRepo && !primaryHasChanges) ..._fallbackProjectCwds(),
-        }..remove(primaryCwd);
+        }..remove(primaryCwd))
+            .take(2)
+            .toList(growable: false);
 
         if (secondary.isNotEmpty) {
           final results = await Future.wait(
@@ -703,7 +774,7 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
         unifiedDiff: effectiveDiff,
         files: effectiveFiles,
       );
-      state = nextState;
+      _emitIfChanged(nextState);
       _putCwdCache(primaryCwd, WorkspaceDiffState(
         cwd: chosenCwd,
         branch: chosenBranch,
@@ -732,8 +803,12 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
         files: latestChatFiles,
         unifiedDiff: _joinFileDiffs(latestChatFiles),
       );
-      state = nextState;
+      _emitIfChanged(nextState);
       if (activeSid != null) _putSessionCache(activeSid, nextState);
+    } finally {
+      if (token == _refreshToken) {
+        _refreshInFlight = false;
+      }
     }
   }
 

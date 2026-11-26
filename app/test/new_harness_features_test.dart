@@ -687,6 +687,47 @@ diff --git a/app/lib/main.dart b/app/lib/main.dart
 
     expect(container.read(settingsProvider).speedTier, InferenceSpeedTier.ultrafast);
   });
+
+  test('WorkspaceDiffNotifier throttles refreshes during active streaming tool edits', () async {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final diffNotifier = container.read(workspaceDiffProvider.notifier);
+    final chatNotifier = container.read(chatProvider.notifier);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    chatNotifier.seedStreamingTurnForTest(
+      sessionId: 'stream-diff-sess',
+      turnId: 'turn-1',
+      messages: [
+        ChatMessage(
+          id: 'a-stream',
+          role: ChatRole.assistant,
+          text: 'Editing files...',
+          createdAt: DateTime.utc(2026, 11, 26, 12, 0),
+          isStreaming: true,
+          tools: const [
+            ChatToolStep(
+              id: 'e1',
+              toolName: 'edit_file',
+              state: ToolCallState.completed,
+              parameters: {
+                'Path': 'app/lib/foo.dart',
+                'Target': 'oldLine',
+                'Replacement': 'newLine',
+              },
+            ),
+          ],
+        ),
+      ],
+    );
+
+    // Streaming update should schedule the 1.5s trailing throttle instead of
+    // synchronously computing diffs / updating the banner on the UI thread.
+    expect(diffNotifier.hasPendingStreamingThrottleForTest, isTrue);
+    await chatNotifier.stopStreaming(sessionId: 'stream-diff-sess');
+    expect(diffNotifier.hasPendingStreamingThrottleForTest, isFalse);
+  });
 }
 
 class _FakeWorkspaceDiffNotifier extends WorkspaceDiffNotifier {

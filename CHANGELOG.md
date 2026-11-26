@@ -2,6 +2,15 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.48] - 2026-11-26
+
+### Improved
+- **Smooth Mini-Diff Banner Performance During Streaming Edits:**
+  - Replaced `O(N_messages * N_tools)` `_messagesSignature` scanning on every 33ms token delta with an `O(1)` latest-turn file-edit signature check in `WorkspaceDiffNotifier`.
+  - Throttled mini-diff refreshes during active streaming (`1500ms` trailing debounce instead of running Myers diffs & `git diff` on every single tool event), capped secondary `gitDiffDetailed` directory checks to at most `2` recent tool directories, and skipped redundant state emissions when file summaries haven't changed.
+  - Offloaded large unified diff parsing (`>48 KB`) to a background Dart isolate via `compute()` in `RuntimeBridge.gitDiffDetailed`.
+  - Isolated `WorkspaceChangesBanner` with `RepaintBoundary`, `select((s) => s.files)`, and bounded fixed-height `ListView` (removing expensive `shrinkWrap: true` intrinsic layout passes).
+
 ## [1.0.47] - 2026-11-26
 
 ### Changed & Improved

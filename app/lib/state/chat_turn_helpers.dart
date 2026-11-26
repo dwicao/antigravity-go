@@ -139,7 +139,7 @@ class ChatTurnHelpers {
     return (added: added, removed: removed);
   }
 
-  static bool _isFileEditTool(ChatToolStep step) {
+  static bool isFileEditTool(ChatToolStep step) {
     final nameLower = step.toolName.toLowerCase();
     final p = step.parameters;
     final hasEditParams = p.containsKey('Replacement') ||
@@ -238,7 +238,7 @@ class ChatTurnHelpers {
     final byPath = <String, FileChangeEntry>{};
     for (final step in tools) {
       if (step.state == ToolCallState.failed) continue;
-      if (!_isFileEditTool(step)) continue;
+      if (!isFileEditTool(step)) continue;
       final nameLower = step.toolName.toLowerCase();
       final p = step.parameters;
       final isDeleteTool = nameLower.contains('delete_file') ||

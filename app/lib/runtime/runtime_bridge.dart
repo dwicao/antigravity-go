@@ -1,9 +1,20 @@
 import 'dart:async';
 
 import 'package:agy_client/agy_client.dart';
+import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/services.dart';
 
 import 'runtime_models.dart';
+
+List<FileChangeEntry> _parseGitDiffOutputs(
+  ({String status, String numstat, String diff}) args,
+) {
+  return FileChangeEntry.fromGitOutputs(
+    status: args.status,
+    numstat: args.numstat,
+    diff: args.diff,
+  );
+}
 
 /// Platform bridge to Kotlin `RuntimePlugin` (`agy/runtime` & `agy/runtime/events`).
 class RuntimeBridge {
@@ -552,15 +563,21 @@ class RuntimeBridge {
       final diff = raw?['diff']?.toString() ?? '';
       final branch = raw?['branch']?.toString() ?? '';
       final numstat = raw?['numstat']?.toString() ?? '';
+      final files = diff.length > 48 * 1024
+          ? await compute(
+              _parseGitDiffOutputs,
+              (status: status, numstat: numstat, diff: diff),
+            )
+          : FileChangeEntry.fromGitOutputs(
+              status: status,
+              numstat: numstat,
+              diff: diff,
+            );
       return (
         status: status,
         diff: diff,
         branch: branch,
-        files: FileChangeEntry.fromGitOutputs(
-          status: status,
-          numstat: numstat,
-          diff: diff,
-        ),
+        files: files,
       );
     } on MissingPluginException {
       return (
