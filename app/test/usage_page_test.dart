@@ -1,6 +1,8 @@
 import 'dart:convert';
 
+import 'package:agy_client/agy_client.dart';
 import 'package:antigravity_go/state/usage_state.dart';
+import 'package:antigravity_go/ui/usage/stats_page.dart';
 import 'package:antigravity_go/ui/usage/usage_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -199,5 +201,60 @@ Upgrade\thttps://antigravity.google/g1-upgrade
     final afterRefresh = container.read(usageProvider);
     expect(afterRefresh.overallFiveHourRemainingPct, 88);
     expect(afterRefresh.lastProbeError, isNull);
+  });
+
+  testWidgets('StatsPage renders lifetime spend, tokens, per-model breakdown, and timeframes cleanly',
+      (tester) async {
+    tester.view.physicalSize = const Size(360, 720);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    await container.read(usageProvider.notifier).recordTurn(
+          modelId: 'gemini-4-hydrogen',
+          sessionId: 'chat-1',
+          usage: const TokenUsage(
+            inputTokens: 120000,
+            cacheReadTokens: 80000,
+            outputTokens: 20000,
+            thinkingTokens: 10000,
+            totalTokens: 150000,
+          ),
+        );
+    await container.read(usageProvider.notifier).recordTurn(
+          modelId: 'claude-opus-5-5-medium',
+          sessionId: 'chat-2',
+          usage: const TokenUsage(
+            inputTokens: 40000,
+            cacheReadTokens: 10000,
+            outputTokens: 10000,
+            thinkingTokens: 5000,
+            totalTokens: 55000,
+          ),
+        );
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(home: StatsPage()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Stats & Spend'), findsOneWidget);
+    expect(find.text('Estimated Spend'), findsOneWidget);
+    expect(find.text('Requests / Turns'), findsOneWidget);
+    expect(find.text('2'), findsWidgets);
+    expect(find.text('Token & Cost Breakdown'), findsOneWidget);
+
+    await tester.scrollUntilVisible(find.text('Models Used (2)'), 160);
+    expect(find.text('Gemini 4 Hydrogen'), findsOneWidget);
+    expect(find.text('Claude Opus 5.5'), findsOneWidget);
+
+    await tester.scrollUntilVisible(find.text('Workspace & Account Data'), 160);
+    expect(find.text('Workspace & Account Data'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 }

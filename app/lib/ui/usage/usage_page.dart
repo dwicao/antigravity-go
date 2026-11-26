@@ -7,6 +7,7 @@ import '../../state/auth_state.dart';
 import '../../state/usage_state.dart';
 import '../../theme/app_theme.dart';
 import '../chat/message_bubble.dart' show formatChatTimestamp;
+import 'stats_page.dart';
 
 class UsagePage extends ConsumerStatefulWidget {
   const UsagePage({super.key, this.autoRefreshOnOpen = true});
@@ -58,6 +59,13 @@ class _UsagePageState extends ConsumerState<UsagePage> {
       appBar: AppBar(
         title: const Text('Usage Limits & Quotas'),
         actions: [
+          IconButton(
+            tooltip: 'Stats & Spend',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const StatsPage()),
+            ),
+            icon: const Icon(Icons.bar_chart_rounded),
+          ),
           IconButton(
             tooltip: 'Refresh from agy /usage',
             onPressed: _probing ? null : () => _refreshLive(force: true),

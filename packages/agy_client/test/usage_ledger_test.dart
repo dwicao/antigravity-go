@@ -47,5 +47,64 @@ void main() {
       expect(claudeGpt.fiveHourTokensUsed, 0);
       expect(claudeGpt.weeklyTokensUsed, 5000);
     });
+
+    test('LifetimeUsageStats and UsageStatsAggregator compute spend, cache savings, and timeframes',
+        () {
+      final now = DateTime.utc(2026, 11, 27, 6, 0);
+      final oldTurn = UsageLedgerRecord(
+        timestamp: now.subtract(const Duration(days: 20)),
+        modelId: 'gemini-4-neon',
+        sessionId: 's-old',
+        usage: const TokenUsage(
+          inputTokens: 100000,
+          cacheReadTokens: 60000,
+          outputTokens: 20000,
+          thinkingTokens: 10000,
+          totalTokens: 130000,
+        ),
+      );
+      final recentTurn = UsageLedgerRecord(
+        timestamp: now.subtract(const Duration(hours: 2)),
+        modelId: 'gemini-4-hydrogen',
+        sessionId: 's-new',
+        usage: const TokenUsage(
+          inputTokens: 50000,
+          cacheReadTokens: 25000,
+          outputTokens: 10000,
+          thinkingTokens: 5000,
+          totalTokens: 65000,
+        ),
+      );
+
+      final ledger = UsageLedger([oldTurn, recentTurn]);
+      // Rolling ledger prunes turns older than 14 days on add(), whereas lifetime preserves all-time.
+      ledger.pruneOlderThan(const Duration(days: 14), now: now);
+      var lifetime = LifetimeUsageStats.empty.addRecord(oldTurn).addRecord(recentTurn);
+      lifetime = LifetimeUsageStats.decodeJson(lifetime.encodeJson());
+
+      final allTime = UsageStatsAggregator.build(
+        ledger: ledger,
+        lifetime: lifetime,
+        timeframe: StatsTimeframe.allTime,
+        now: now,
+      );
+      expect(allTime.requests, 2);
+      expect(allTime.distinctSessions, 2);
+      expect(allTime.usage.totalTokens, 195000);
+      expect(allTime.cacheSavedUsd, greaterThan(0.05));
+      expect(allTime.models.length, 2);
+      expect(allTime.models.first.modelId, 'gemini-4-neon');
+      expect(allTime.toMarkdownReport(), contains('Gemini 4 Neon'));
+
+      final fiveHours = UsageStatsAggregator.build(
+        ledger: ledger,
+        lifetime: lifetime,
+        timeframe: StatsTimeframe.fiveHours,
+        now: now,
+      );
+      expect(fiveHours.requests, 1);
+      expect(fiveHours.usage.totalTokens, 65000);
+      expect(fiveHours.models.single.modelId, 'gemini-4-hydrogen');
+    });
   });
 }

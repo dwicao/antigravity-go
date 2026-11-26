@@ -15,6 +15,7 @@ import '../settings/background_guide_page.dart';
 import '../settings/diagnostics_page.dart';
 import '../settings/settings_page.dart';
 import '../update/update_sheet.dart';
+import '../usage/stats_page.dart';
 import '../usage/usage_page.dart';
 import '../workspace/diff_review_view.dart';
 import 'session_search_page.dart';
@@ -52,6 +53,17 @@ class _CommandPaletteDialogState extends ConsumerState<CommandPaletteDialog> {
         () {
           Navigator.of(context).pop();
           ref.read(sessionsProvider.notifier).createSession();
+        },
+      ),
+      (
+        'Stats & Spend Analytics',
+        'View cumulative USD spend, tokens, requests & per-model breakdown',
+        Icons.bar_chart_rounded,
+        () {
+          Navigator.of(context).pop();
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(builder: (_) => const StatsPage()),
+          );
         },
       ),
       (

@@ -24,6 +24,7 @@ export 'src/protocol/usage_output_parser.dart';
 export 'src/transport/agy_transport.dart';
 export 'src/usage/model_pricing.dart';
 export 'src/usage/usage_ledger.dart';
+export 'src/usage/usage_stats.dart';
 export 'src/voice/voice_prompt_normalizer.dart';
 export 'src/harness/harness_engine.dart';
 export 'src/harness/lifecycle_hooks.dart';

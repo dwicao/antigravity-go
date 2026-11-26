@@ -19,6 +19,7 @@ import '../phone/phone_control_page.dart';
 import '../remote/custom_providers_page.dart';
 import '../remote/ssh_hosts_page.dart';
 import '../update/update_sheet.dart';
+import '../usage/stats_page.dart';
 import '../usage/usage_page.dart';
 import 'background_guide_page.dart';
 import 'diagnostics_page.dart';
@@ -291,9 +292,20 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               ),
             ),
             _section(
-              'usage quota runtime ssh remote hosts external models phone control safetygate',
+              'stats spend cost tokens requests analytics usage quota runtime ssh remote hosts external models phone control safetygate',
               Column(
                 children: [
+                  _tile(
+                    theme,
+                    icon: Icons.bar_chart_rounded,
+                    title: 'Stats & Spend',
+                    subtitle:
+                        'Total spend (\$), tokens, cache savings & per-model stats',
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(builder: (_) => const StatsPage()),
+                    ),
+                  ),
+                  const Divider(height: 1),
                   _tile(
                     theme,
                     icon: Icons.speed_rounded,

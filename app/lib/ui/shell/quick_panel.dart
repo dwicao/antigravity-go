@@ -13,6 +13,7 @@ import '../remote/ssh_hosts_page.dart';
 import '../settings/runtime_setup_page.dart';
 import '../settings/settings_page.dart';
 import '../terminal/terminal_page.dart';
+import '../usage/stats_page.dart';
 import '../usage/usage_page.dart';
 import '../workspace/workspace_page.dart';
 
@@ -86,6 +87,26 @@ class QuickPanel extends ConsumerWidget {
                           ),
                         ),
                         const Spacer(),
+                        TextButton.icon(
+                          style: TextButton.styleFrom(
+                            visualDensity: VisualDensity.compact,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 2,
+                            ),
+                            minimumSize: Size.zero,
+                          ),
+                          onPressed: () => pushPage(const StatsPage()),
+                          icon: const Icon(Icons.bar_chart_rounded, size: 15),
+                          label: Text(
+                            'Stats · ${ModelPricingCatalog.formatUsd(ref.read(usageProvider.notifier).lifetimeStats.estimatedCostUsd)}',
+                            style: const TextStyle(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
                         const Icon(Icons.chevron_right, size: 18),
                       ],
                     ),

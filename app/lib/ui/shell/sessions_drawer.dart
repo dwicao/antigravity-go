@@ -14,6 +14,7 @@ import '../customizations/customizations_page.dart';
 import '../remote/ssh_hosts_page.dart';
 import '../replay/conversation_replay_page.dart';
 import '../settings/settings_page.dart';
+import '../usage/stats_page.dart';
 import '../usage/usage_page.dart';
 import 'command_palette.dart';
 import 'session_search_page.dart';
@@ -359,6 +360,18 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
                       Navigator.of(context).push(
                         MaterialPageRoute<void>(
                           builder: (_) => const CustomizationsPage(),
+                        ),
+                      );
+                    },
+                  ),
+                  _SidebarNavTile(
+                    icon: Icons.bar_chart_rounded,
+                    title: 'Stats & Spend',
+                    onTap: () {
+                      widget.onClose?.call();
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const StatsPage(),
                         ),
                       );
                     },

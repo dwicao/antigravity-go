@@ -15,15 +15,31 @@ final usageProvider =
 
 class UsageNotifier extends Notifier<UsageQuotaSnapshot> {
   static const _ledgerPrefsKey = 'agy_usage_ledger_v1';
+  static const _lifetimePrefsKey = 'agy_lifetime_usage_stats_v1';
   static const _probeCachePrefsKey = 'agy_usage_probe_cache_v1';
   static const Duration _probeFreshnessWindow = Duration(seconds: 60);
 
   final UsageLedger _ledger = UsageLedger();
+  LifetimeUsageStats _lifetime = LifetimeUsageStats.empty;
   ParsedUsageReport? _lastLiveProbe;
   String? _lastRawOutput;
   String? _lastProbeError;
   DateTime? _lastProbeAt;
   Future<void>? _inFlightProbe;
+
+  LifetimeUsageStats get lifetimeStats => _lifetime;
+
+  UsageStatsSummary buildStatsSummary(
+    StatsTimeframe timeframe, {
+    DateTime? now,
+  }) {
+    return UsageStatsAggregator.build(
+      ledger: _ledger,
+      lifetime: _lifetime,
+      timeframe: timeframe,
+      now: now,
+    );
+  }
 
   @override
   UsageQuotaSnapshot build() {
@@ -48,6 +64,13 @@ class UsageNotifier extends Notifier<UsageQuotaSnapshot> {
       } catch (_) {
         // Ignore corrupt cache and rebuild cleanly.
       }
+    }
+    final lifetimeRaw = prefs.getString(_lifetimePrefsKey);
+    if (lifetimeRaw != null && lifetimeRaw.isNotEmpty) {
+      _lifetime = LifetimeUsageStats.decodeJson(lifetimeRaw);
+    } else if (_ledger.records.isNotEmpty) {
+      _lifetime = LifetimeUsageStats.fromRecords(_ledger.records);
+      await prefs.setString(_lifetimePrefsKey, _lifetime.encodeJson());
     }
     final probeCacheRaw = prefs.getString(_probeCachePrefsKey);
     if (probeCacheRaw != null && probeCacheRaw.isNotEmpty && _lastLiveProbe == null) {
@@ -92,14 +115,14 @@ class UsageNotifier extends Notifier<UsageQuotaSnapshot> {
         usage.outputTokens <= 0) {
       return;
     }
-    _ledger.add(
-      UsageLedgerRecord(
-        timestamp: DateTime.now().toUtc(),
-        modelId: modelId,
-        usage: usage,
-        sessionId: sessionId,
-      ),
+    final record = UsageLedgerRecord(
+      timestamp: DateTime.now().toUtc(),
+      modelId: modelId,
+      usage: usage,
+      sessionId: sessionId,
     );
+    _ledger.add(record);
+    _lifetime = _lifetime.addRecord(record);
     _emit();
     final prefs = await SharedPreferences.getInstance();
     if (!ref.mounted) return;
@@ -107,6 +130,14 @@ class UsageNotifier extends Notifier<UsageQuotaSnapshot> {
       _ledgerPrefsKey,
       jsonEncode(_ledger.records.map((r) => r.toJson()).toList()),
     );
+    await prefs.setString(_lifetimePrefsKey, _lifetime.encodeJson());
+  }
+
+  Future<void> resetLifetimeStats() async {
+    _lifetime = LifetimeUsageStats.empty;
+    _emit();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_lifetimePrefsKey);
   }
 
   /// Probes `agy` (on-device or active SSH workstation) for live `/usage`, `/credits`, and `agy models`.
