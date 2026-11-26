@@ -2,6 +2,14 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.52] - 2026-11-26
+
+### Changed & Improved
+- **Model-Preserving Adaptive Thinking Effort (`HarnessTurnRouter`):**
+  - Eliminated hidden model downgrading to `gemini-3.8-flash` or `gemini-4-hydrogen` overrides across Smart Effort Routing, `Fast`/`Ultrafast` speed tiers, and `/compact`. Turns now always honor the user's selected model to prevent future deprecation breakage and unexpected model swaps.
+  - Added full 5-tier Thinking Effort adaptation (`low`, `medium`, `high`, `xhigh`, `max`) using weighted semantic and structural complexity scoring with full English and Bahasa Indonesia (formal & casual/mixed) prompt detection.
+  - Expanded `AgyModelInfo.availableEfforts` and `supportsMaxEffort` across Gemini 4 (`Neon`, `Carbon`, `Argon`, `Hydrogen`), Claude (`Opus 5.5`, `Sonnet 5.5`), and dynamically discovered models that support `Max` effort, and updated Harness UI copy accordingly.
+
 ## [1.0.51] - 2026-11-26
 
 ### Fixed & Improved
