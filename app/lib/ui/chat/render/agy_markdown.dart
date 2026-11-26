@@ -14,10 +14,14 @@ import '../../../theme/app_theme.dart';
 /// Modeled on DSH-Go's `stream_repair.dart`: closes unfinished inline delimiters
 /// (`**`, `*`, `~~`, `` ` ``) at the end of a streaming reply so partial Markdown
 /// never flickers or falls back to raw symbols.
+final RegExp _streamingFenceRegex = RegExp(r'^```', multiLine: true);
+final RegExp _pathSplitRegex = RegExp(r'[/\\]');
+final RegExp _whitespaceSplitRegex = RegExp(r'\s+');
+
 String repairStreamingMarkdown(String text) {
   if (text.isEmpty) return text;
   // Don't modify inside an unclosed fenced code block.
-  final fenceMatches = RegExp(r'^```', multiLine: true).allMatches(text).length;
+  final fenceMatches = _streamingFenceRegex.allMatches(text).length;
   if (fenceMatches.isOdd) return text;
 
   final lastNewline = text.lastIndexOf('\n');
@@ -37,6 +41,100 @@ String repairStreamingMarkdown(String text) {
   return '$prefix$repaired';
 }
 
+class _MarkdownThemeCacheKey {
+  const _MarkdownThemeCacheKey({
+    required this.brightness,
+    required this.primary,
+    required this.outlineVariant,
+    required this.inlineCodeFg,
+    required this.inlineCodeBg,
+    required this.codeWellBorder,
+    required this.quoteBar,
+    required this.quoteText,
+    required this.textPrimary,
+    required this.textSecondary,
+    required this.info,
+    required this.success,
+    required this.warning,
+    required this.warningContainer,
+    required this.onWarningContainer,
+    required this.danger,
+    required this.tableBorder,
+    required this.tableHeaderBg,
+    required this.tableStripeBg,
+    required this.secondary,
+  });
+
+  final Brightness brightness;
+  final Color primary;
+  final Color outlineVariant;
+  final Color inlineCodeFg;
+  final Color inlineCodeBg;
+  final Color codeWellBorder;
+  final Color quoteBar;
+  final Color quoteText;
+  final Color textPrimary;
+  final Color textSecondary;
+  final Color info;
+  final Color success;
+  final Color warning;
+  final Color warningContainer;
+  final Color onWarningContainer;
+  final Color danger;
+  final Color tableBorder;
+  final Color tableHeaderBg;
+  final Color tableStripeBg;
+  final bool secondary;
+
+  @override
+  bool operator ==(Object other) =>
+      other is _MarkdownThemeCacheKey &&
+      other.brightness == brightness &&
+      other.primary == primary &&
+      other.outlineVariant == outlineVariant &&
+      other.inlineCodeFg == inlineCodeFg &&
+      other.inlineCodeBg == inlineCodeBg &&
+      other.codeWellBorder == codeWellBorder &&
+      other.quoteBar == quoteBar &&
+      other.quoteText == quoteText &&
+      other.textPrimary == textPrimary &&
+      other.textSecondary == textSecondary &&
+      other.info == info &&
+      other.success == success &&
+      other.warning == warning &&
+      other.warningContainer == warningContainer &&
+      other.onWarningContainer == onWarningContainer &&
+      other.danger == danger &&
+      other.tableBorder == tableBorder &&
+      other.tableHeaderBg == tableHeaderBg &&
+      other.tableStripeBg == tableStripeBg &&
+      other.secondary == secondary;
+
+  @override
+  int get hashCode => Object.hash(
+        brightness,
+        primary,
+        outlineVariant,
+        inlineCodeFg,
+        inlineCodeBg,
+        codeWellBorder,
+        quoteBar,
+        quoteText,
+        textPrimary,
+        textSecondary,
+        info,
+        success,
+        warning,
+        warningContainer,
+        onWarningContainer,
+        danger,
+        tableBorder,
+        tableHeaderBg,
+        tableStripeBg,
+        secondary,
+      );
+}
+
 /// High-contrast, dark-mode-safe Markdown renderer modeled on DSH-Go's `MarkdownBody`.
 class AgyMarkdown extends StatelessWidget {
   const AgyMarkdown({
@@ -52,21 +150,40 @@ class AgyMarkdown extends StatelessWidget {
   final bool secondary;
   final bool selectable;
 
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colors = theme.colorScheme;
-    final semantic = AgySemanticColors.of(context);
+  static final Map<_MarkdownThemeCacheKey, GptMarkdownThemeData> _themeCache =
+      <_MarkdownThemeCacheKey, GptMarkdownThemeData>{};
 
-    final baseColor = secondary ? semantic.textSecondary : semantic.textPrimary;
-    final bodyStyle = TextStyle(
-      color: baseColor,
-      fontSize: secondary ? 13.5 : 15.0,
-      height: 1.5,
-      leadingDistribution: TextLeadingDistribution.even,
+  static GptMarkdownThemeData _resolveTheme(
+    ThemeData theme,
+    ColorScheme colors,
+    AgySemanticColors semantic,
+    Color baseColor,
+    bool secondary,
+  ) {
+    final key = _MarkdownThemeCacheKey(
+      brightness: theme.brightness,
+      primary: colors.primary,
+      outlineVariant: colors.outlineVariant,
+      inlineCodeFg: semantic.inlineCodeFg,
+      inlineCodeBg: semantic.inlineCodeBg,
+      codeWellBorder: semantic.codeWellBorder,
+      quoteBar: semantic.quoteBar,
+      quoteText: semantic.quoteText,
+      textPrimary: semantic.textPrimary,
+      textSecondary: semantic.textSecondary,
+      info: semantic.info,
+      success: semantic.success,
+      warning: semantic.warning,
+      warningContainer: semantic.warningContainer,
+      onWarningContainer: semantic.onWarningContainer,
+      danger: semantic.danger,
+      tableBorder: semantic.tableBorder,
+      tableHeaderBg: semantic.tableHeaderBg,
+      tableStripeBg: semantic.tableStripeBg,
+      secondary: secondary,
     );
-
-    final source = streaming ? repairStreamingMarkdown(text) : text;
+    final cached = _themeCache[key];
+    if (cached != null) return cached;
 
     TextStyle heading(double size, {double height = 1.4}) => TextStyle(
           fontSize: secondary ? size * 0.9 : size,
@@ -76,7 +193,7 @@ class AgyMarkdown extends StatelessWidget {
           leadingDistribution: TextLeadingDistribution.even,
         );
 
-    final gptTheme = GptMarkdownThemeData(
+    final built = GptMarkdownThemeData(
       brightness: theme.brightness,
       h1: heading(20),
       h2: heading(18),
@@ -153,6 +270,29 @@ class AgyMarkdown extends StatelessWidget {
         ),
       ),
     );
+    if (_themeCache.length >= 8) {
+      _themeCache.clear();
+    }
+    _themeCache[key] = built;
+    return built;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final semantic = AgySemanticColors.of(context);
+
+    final baseColor = secondary ? semantic.textSecondary : semantic.textPrimary;
+    final bodyStyle = TextStyle(
+      color: baseColor,
+      fontSize: secondary ? 13.5 : 15.0,
+      height: 1.5,
+      leadingDistribution: TextLeadingDistribution.even,
+    );
+
+    final source = streaming ? repairStreamingMarkdown(text) : text;
+    final gptTheme = _resolveTheme(theme, colors, semantic, baseColor, secondary);
 
     Widget content = GptMarkdownTheme(
       gptThemeData: gptTheme,
@@ -300,7 +440,7 @@ class _AgyCodeBlock extends StatelessWidget {
         await target.writeAsString(code);
         savedNotice = 'Saved to $chosen';
       } catch (_) {
-        final name = chosen.split(RegExp(r'[/\\]')).last;
+        final name = chosen.split(_pathSplitRegex).last;
         final dl = await SessionExportHelper.saveTextToDownloads(
           filename: name,
           content: code,
@@ -329,7 +469,7 @@ class _AgyCodeBlock extends StatelessWidget {
   Widget build(BuildContext context) {
     final semantic = AgySemanticColors.of(context);
     final isDiff = language.toLowerCase() == 'diff';
-    final displayLang = language.isEmpty ? 'text' : language.split(RegExp(r'\s+')).first;
+    final displayLang = language.isEmpty ? 'text' : language.split(_whitespaceSplitRegex).first;
 
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 6),

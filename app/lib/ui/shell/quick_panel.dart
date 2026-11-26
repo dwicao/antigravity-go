@@ -25,7 +25,7 @@ class QuickPanel extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final settings = ref.watch(settingsProvider);
     final usage = ref.watch(usageProvider);
-    final runtime = ref.watch(runtimeProvider);
+    final runtimePhase = ref.watch(runtimeProvider.select((r) => r.status.phase));
     final phone = ref.watch(phoneProvider);
     final hosts = ref.watch(hostsProvider);
     final theme = Theme.of(context);
@@ -207,7 +207,7 @@ class QuickPanel extends ConsumerWidget {
             dense: true,
             leading: const Icon(Icons.memory),
             title: const Text('On-Device Runtime'),
-            subtitle: Text(runtime.status.phase.name),
+            subtitle: Text(runtimePhase.name),
             onTap: () => pushPage(const RuntimeSetupPage()),
           ),
           ListTile(

@@ -56,10 +56,33 @@ String _summarizeTitle(String raw, {int maxLen = 56}) {
 /// 3. Active subagent / workflow / scheduled / command tool steps
 /// 4. Queued follow-up prompts waiting for the active turn
 final backgroundTasksProvider = Provider<List<BackgroundTaskItem>>((ref) {
-  final runtime = ref.watch(runtimeProvider);
-  final chat = ref.watch(chatProvider);
-  final sessions = ref.watch(sessionsProvider);
+  final nativeTasks = ref.watch(runtimeProvider.select((r) => r.backgroundTasks));
+  final activeSessionId =
+      ref.watch(sessionsProvider.select((s) => s.activeSessionId));
+  ref.watch(sessionsProvider.select((s) => s.sessions.length));
+  final activeBgIds =
+      ref.watch(chatProvider.select((c) => c.activeBackgroundSessionIds));
+  final queuedPrompts = ref.watch(chatProvider.select((c) => c.queuedPrompts));
+  final isStreaming = ref.watch(chatProvider.select((c) => c.isStreaming));
+  final activeSubagents =
+      ref.watch(chatProvider.select((c) => c.activeSubagents));
+  ref.watch(
+    chatProvider.select((c) {
+      var sig = 0;
+      for (final m in c.messages) {
+        if (!m.isStreaming) continue;
+        for (final t in m.tools) {
+          if (t.state == ToolCallState.running) {
+            sig = Object.hash(sig, t.id, t.toolName, t.parameters.length);
+          }
+        }
+      }
+      return sig;
+    }),
+  );
   final ciWatches = ref.watch(ciWatchProvider);
+  final sessions = ref.read(sessionsProvider);
+  final messages = ref.read(chatProvider).messages;
 
   final items = <BackgroundTaskItem>[];
   final seenNativeIds = <String>{};
@@ -83,7 +106,7 @@ final backgroundTasksProvider = Provider<List<BackgroundTaskItem>>((ref) {
   }
 
   // 1. Native background shell processes (from AcpSessionManager terminal/create).
-  for (final t in runtime.backgroundTasks) {
+  for (final t in nativeTasks) {
     if (t.kind == 'terminal') {
       seenNativeIds.add(t.id);
       nativeTerminalTitles.add(t.title.toLowerCase());
@@ -102,8 +125,7 @@ final backgroundTasksProvider = Provider<List<BackgroundTaskItem>>((ref) {
   }
 
   // 2. Active turns in sessions other than the currently visible session.
-  final activeSessionId = sessions.activeSessionId;
-  for (final sid in chat.activeBackgroundSessionIds) {
+  for (final sid in activeBgIds) {
     if (sid == activeSessionId) continue;
     AgySessionSummary? match;
     for (final s in sessions.sessions) {
@@ -129,7 +151,7 @@ final backgroundTasksProvider = Provider<List<BackgroundTaskItem>>((ref) {
 
   // 3. Running tool steps in currently streaming assistant messages only.
   final activeSubagentToolIds = <String>{};
-  for (final m in chat.messages) {
+  for (final m in messages) {
     if (!m.isStreaming) {
       continue;
     }
@@ -164,7 +186,7 @@ final backgroundTasksProvider = Provider<List<BackgroundTaskItem>>((ref) {
   }
 
   // 3b. Spawned subagents working in background even after parent turn ended.
-  for (final sub in chat.activeSubagents) {
+  for (final sub in activeSubagents) {
     if (!sub.isActive || activeSubagentToolIds.contains(sub.id)) continue;
     final subLabel = sub.typeName.isNotEmpty && sub.typeName != sub.role
         ? '${sub.typeName} · Subagent working in background'
@@ -184,12 +206,12 @@ final backgroundTasksProvider = Provider<List<BackgroundTaskItem>>((ref) {
   }
 
   // 4. Queued follow-up prompts waiting in background queue.
-  for (var i = 0; i < chat.queuedPrompts.length; i++) {
+  for (var i = 0; i < queuedPrompts.length; i++) {
     items.add(
       BackgroundTaskItem(
         id: 'queued:$i',
         kind: BackgroundTaskKind.queued,
-        title: _summarizeTitle(chat.queuedPrompts[i]),
+        title: _summarizeTitle(queuedPrompts[i]),
         subtitle: 'Queued prompt #${i + 1}',
         startedAt: DateTime.now(),
         queuedIndex: i,
@@ -199,8 +221,8 @@ final backgroundTasksProvider = Provider<List<BackgroundTaskItem>>((ref) {
   }
 
   // 5. Fallback: if a native turn is running for an untracked session, surface it.
-  if (chat.activeBackgroundSessionIds.isEmpty && !chat.isStreaming) {
-    for (final t in runtime.backgroundTasks) {
+  if (activeBgIds.isEmpty && !isStreaming) {
+    for (final t in nativeTasks) {
       if (t.kind == 'turn' && !seenNativeIds.contains(t.id)) {
         items.add(
           BackgroundTaskItem(

@@ -831,15 +831,43 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     );
     final isCurrentSessionBusy = chat.isStreaming || hasCurrentSessionRunningTool;
 
-    final auth = ref.watch(authProvider);
-    final hosts = ref.watch(hostsProvider);
+    final auth = ref.watch(
+      authProvider.select((a) => (
+            initialized: a.initialized,
+            isAuthenticated: a.isAuthenticated,
+            email: a.email,
+          )),
+    );
+    final hosts = ref.watch(
+      hostsProvider.select((h) => (
+            activeSshHostName: h.activeSshHost?.name,
+            hasActiveSshHost: h.activeSshHost != null,
+            isLocalActive: h.isLocalActive,
+          )),
+    );
     final ctxSnap = ref.watch(contextBudgetProvider);
-    final project = ref.watch(projectsProvider).activeProject;
-    final runtime = ref.watch(runtimeProvider);
-    final settings = ref.watch(settingsProvider);
+    final projectName =
+        ref.watch(projectsProvider.select((p) => p.activeProject.name));
+    final runtime = ref.watch(
+      runtimeProvider.select((r) => (
+            initialized: r.initialized,
+            isReady: r.status.isReady,
+            phase: r.status.phase,
+            errorMessage: r.status.errorMessage,
+            busy: r.busy,
+          )),
+    );
+    final settings = ref.watch(
+      settingsProvider.select((s) => (
+            selectedModelId: s.selectedModelId,
+            batteryNetworkPolicyEnabled: s.batteryNetworkPolicyEnabled,
+          )),
+    );
     final activeCustom = ref.watch(activeCustomProviderProvider);
-    final perms = ref.watch(permissionsProvider);
-    final sidePanel = ref.watch(sidePanelProvider);
+    final isDexMode =
+        ref.watch(permissionsProvider.select((p) => p.isDexMode));
+    final showSidePanel =
+        ref.watch(sidePanelProvider.select((s) => s.showSidePanel));
     final devicePolicy = ref.watch(devicePolicyProvider);
     final pendingShare = ref.watch(sharedInboxProvider);
     if (pendingShare != null) {
@@ -907,30 +935,33 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     final theme = Theme.of(context);
     final semantic = AgySemanticColors.of(context);
-    final customItems = ref.watch(customizationsProvider);
-    final skillSlashItems = customItems
-        .where((c) => c.kind == CustomizationKind.skill && c.enabled)
-        .map(
-          (s) => AgySlashCommand(
-            command: '/${SkillFrontmatter.sanitizeSlug(s.name)}',
-            argHint: '<task>',
-            description: 'Skill (${s.scope}): ${s.description}',
-          ),
-        )
-        .where(
-          (cmd) => !AgyCliCatalog.slashCommands
-              .any((builtIn) => builtIn.command == cmd.command),
-        )
-        .toList();
-    final slashMatches = _showSlashMenu
-        ? [
-            ...AgyCliCatalog.slashCommands,
-            ...skillSlashItems,
-          ].where((c) => c.matches(_inputController.text)).toList()
-        : const <AgySlashCommand>[];
+    final List<AgySlashCommand> slashMatches;
+    if (_showSlashMenu) {
+      final customItems = ref.watch(customizationsProvider);
+      final skillSlashItems = customItems
+          .where((c) => c.kind == CustomizationKind.skill && c.enabled)
+          .map(
+            (s) => AgySlashCommand(
+              command: '/${SkillFrontmatter.sanitizeSlug(s.name)}',
+              argHint: '<task>',
+              description: 'Skill (${s.scope}): ${s.description}',
+            ),
+          )
+          .where(
+            (cmd) => !AgyCliCatalog.slashCommands
+                .any((builtIn) => builtIn.command == cmd.command),
+          );
+      final query = _inputController.text;
+      slashMatches = [
+        ...AgyCliCatalog.slashCommands.where((c) => c.matches(query)),
+        ...skillSlashItems.where((c) => c.matches(query)),
+      ];
+    } else {
+      slashMatches = const <AgySlashCommand>[];
+    }
 
     final activeModel = AgyModelCatalog.resolve(settings.selectedModelId);
-    final hostLabel = hosts.activeSshHost?.name ?? 'On Device';
+    final hostLabel = hosts.activeSshHostName ?? 'On Device';
     final isNarrow = MediaQuery.sizeOf(context).width < 520;
 
     Widget wrapCentered(Widget child) {
@@ -966,7 +997,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      project.name,
+                      projectName,
                       overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.w700,
@@ -986,7 +1017,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   ],
                 ),
               ),
-              if (perms.isDexMode) ...[
+              if (isDexMode) ...[
                 const SizedBox(width: 8),
                 const Chip(
                   visualDensity: VisualDensity.compact,
@@ -1027,10 +1058,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 onPressed: () =>
                     ref.read(sidePanelProvider.notifier).toggleSidePanel(),
                 icon: Icon(
-                  sidePanel.showSidePanel
+                  showSidePanel
                       ? Icons.vertical_split
                       : Icons.vertical_split_outlined,
-                  color: sidePanel.showSidePanel
+                  color: showSidePanel
                       ? theme.colorScheme.primary
                       : null,
                 ),
@@ -1201,12 +1232,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         if (activeCustom == null &&
             ((auth.initialized && !auth.isAuthenticated) ||
                 (runtime.initialized &&
-                    !runtime.status.isReady &&
+                    !runtime.isReady &&
                     hosts.isLocalActive)))
           wrapCentered(
             ChatOnboardingBanner(
               isAuthenticated: auth.isAuthenticated,
-              runtimeReady: runtime.status.isReady,
+              runtimeReady: runtime.isReady,
               runtimeBusy: runtime.busy,
               isLocal: hosts.isLocalActive,
               onSignIn: () => GoogleLoginSheet.show(context),
@@ -1774,17 +1805,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             ],
           ),
         ),
-        if (hosts.activeSshHost == null &&
+        if (!hosts.hasActiveSshHost &&
             !_reconnectDismissed &&
             !isCurrentSessionBusy &&
-            (runtime.status.phase == RuntimePhase.stopped ||
-                runtime.status.phase == RuntimePhase.error))
+            (runtime.phase == RuntimePhase.stopped ||
+                runtime.phase == RuntimePhase.error))
           wrapCentered(
             Container(
               margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(
-                color: runtime.status.phase == RuntimePhase.error
+                color: runtime.phase == RuntimePhase.error
                     ? theme.colorScheme.errorContainer.withOpacity(0.75)
                     : semantic.warningContainer,
                 borderRadius: BorderRadius.circular(12),
@@ -1792,27 +1823,27 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               child: Row(
                 children: [
                   Icon(
-                    runtime.status.phase == RuntimePhase.error
+                    runtime.phase == RuntimePhase.error
                         ? Icons.error_outline
                         : Icons.power_settings_new_rounded,
                     size: 16,
-                    color: runtime.status.phase == RuntimePhase.error
+                    color: runtime.phase == RuntimePhase.error
                         ? theme.colorScheme.onErrorContainer
                         : semantic.onWarningContainer,
                   ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      runtime.status.phase == RuntimePhase.error
-                          ? (runtime.status.errorMessage?.trim().isNotEmpty == true
-                              ? 'Runtime error: ${runtime.status.errorMessage}'
+                      runtime.phase == RuntimePhase.error
+                          ? (runtime.errorMessage?.trim().isNotEmpty == true
+                              ? 'Runtime error: ${runtime.errorMessage}'
                               : 'Local runtime disconnected')
                           : 'Local runtime is stopped — start service to run prompts',
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.bodySmall?.copyWith(
                         fontWeight: FontWeight.w600,
-                        color: runtime.status.phase == RuntimePhase.error
+                        color: runtime.phase == RuntimePhase.error
                             ? theme.colorScheme.onErrorContainer
                             : semantic.onWarningContainer,
                       ),
@@ -1823,7 +1854,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                         ? null
                         : () => ref.read(runtimeProvider.notifier).start(),
                     child: Text(
-                      runtime.status.phase == RuntimePhase.error
+                      runtime.phase == RuntimePhase.error
                           ? 'Retry'
                           : 'Start',
                     ),
@@ -2284,7 +2315,9 @@ class _StreamingAgentStatusBarState extends State<_StreamingAgentStatusBar> {
           const SizedBox(
             width: 12,
             height: 12,
-            child: CircularProgressIndicator(strokeWidth: 2),
+            child: RepaintBoundary(
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
           ),
           const SizedBox(width: 8),
           Text(

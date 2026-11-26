@@ -556,7 +556,7 @@ class _GitHubDiffViewerState extends State<GitHubDiffViewer> {
                     )
                   : Scrollbar(
                       controller: _scrollCtrl,
-                      child: filtered.length <= 40
+                      child: filtered.length <= 8
                           ? SingleChildScrollView(
                               controller: _scrollCtrl,
                               padding: const EdgeInsets.all(10),

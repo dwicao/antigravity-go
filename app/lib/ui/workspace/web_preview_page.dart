@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -77,6 +78,8 @@ class _WebPreviewPageState extends ConsumerState<WebPreviewPage> {
   late final WebViewController _controller;
   late final TextEditingController _urlCtrl;
   final List<WebConsoleEntry> _consoleLogs = [];
+  final List<WebConsoleEntry> _pendingConsoleLogs = [];
+  Timer? _consoleFlushTimer;
   int _progress = 0;
   bool _showConsole = true;
 
@@ -110,6 +113,7 @@ class _WebPreviewPageState extends ConsumerState<WebPreviewPage> {
 
   @override
   void dispose() {
+    _consoleFlushTimer?.cancel();
     _urlCtrl.dispose();
     super.dispose();
   }
@@ -125,21 +129,28 @@ class _WebPreviewPageState extends ConsumerState<WebPreviewPage> {
         message = decoded['message']?.toString() ?? raw;
       }
     } catch (_) {}
-    setState(() {
-      _consoleLogs.add(
-        WebConsoleEntry(
-          level: level,
-          message: message,
-          timestamp: DateTime.now(),
-        ),
-      );
-      if (_consoleLogs.length > 200) {
-        _consoleLogs.removeAt(0);
-      }
+    _pendingConsoleLogs.add(
+      WebConsoleEntry(
+        level: level,
+        message: message,
+        timestamp: DateTime.now(),
+      ),
+    );
+    _consoleFlushTimer ??= Timer(const Duration(milliseconds: 100), () {
+      _consoleFlushTimer = null;
+      if (!mounted || _pendingConsoleLogs.isEmpty) return;
+      final batch = List<WebConsoleEntry>.of(_pendingConsoleLogs);
+      _pendingConsoleLogs.clear();
+      setState(() {
+        _consoleLogs.addAll(batch);
+        if (_consoleLogs.length > 200) {
+          _consoleLogs.removeRange(0, _consoleLogs.length - 200);
+        }
+      });
     });
   }
 
-  void _loadUrl(String raw) {
+  Future<void> _loadUrl(String raw) async {
     var trimmed = raw.trim();
     if (trimmed.isEmpty) return;
     if (!trimmed.contains('://') && !trimmed.startsWith('/')) {
@@ -148,7 +159,8 @@ class _WebPreviewPageState extends ConsumerState<WebPreviewPage> {
     _urlCtrl.text = trimmed;
     if (trimmed.startsWith('/')) {
       final file = File(trimmed);
-      if (file.existsSync()) {
+      if (await file.exists()) {
+        if (!mounted) return;
         _controller.loadFile(file.path);
         return;
       }

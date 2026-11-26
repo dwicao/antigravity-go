@@ -79,6 +79,7 @@ class _WorkspacePageState extends ConsumerState<WorkspacePage> {
             constraints: const BoxConstraints(maxHeight: 420),
             child: Image.file(
               File(path),
+              cacheWidth: 1200,
               fit: BoxFit.contain,
               errorBuilder: (_, _, _) =>
                   const Text('Unable to preview image file.'),
@@ -231,9 +232,10 @@ class _WorkspacePageState extends ConsumerState<WorkspacePage> {
 
   @override
   Widget build(BuildContext context) {
-    final perms = ref.watch(permissionsProvider);
-    final runtimeRoot = ref.watch(runtimeProvider).status.workspaceRoot ?? '';
-    final extRoot = perms.externalStorageRoot;
+    final extRoot =
+        ref.watch(permissionsProvider.select((p) => p.externalStorageRoot));
+    final runtimeRoot =
+        ref.watch(runtimeProvider.select((r) => r.status.workspaceRoot)) ?? '';
     final downloadsPath = '$extRoot/Download';
     final theme = Theme.of(context);
     final q = _searchQuery.trim().toLowerCase();

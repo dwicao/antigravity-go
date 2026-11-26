@@ -26,13 +26,24 @@ class AntigravityGoApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final settings = ref.watch(settingsProvider);
-    final perf = ref.watch(performanceProvider);
-    final dynamicSeed =
-        settings.followWallpaperColor && settings.dynamicAccentArgb != null
-            ? Color(settings.dynamicAccentArgb!)
-            : null;
-    final transitionsTheme = perf.reduceMotion
+    final themeSettings = ref.watch(
+      settingsProvider.select(
+        (s) => (
+          localeCode: s.localeCode,
+          themeMode: s.themeMode,
+          accent: s.accent,
+          followWallpaperColor: s.followWallpaperColor,
+          dynamicAccentArgb: s.dynamicAccentArgb,
+        ),
+      ),
+    );
+    final reduceMotion =
+        ref.watch(performanceProvider.select((p) => p.reduceMotion));
+    final dynamicSeed = themeSettings.followWallpaperColor &&
+            themeSettings.dynamicAccentArgb != null
+        ? Color(themeSettings.dynamicAccentArgb!)
+        : null;
+    final transitionsTheme = reduceMotion
         ? const PageTransitionsTheme(
             builders: {
               TargetPlatform.android: _NoTransitionsBuilder(),
@@ -48,19 +59,19 @@ class AntigravityGoApp extends ConsumerWidget {
     return MaterialApp(
       title: 'Antigravity Go',
       debugShowCheckedModeBanner: false,
-      locale: Locale(settings.localeCode),
-      themeMode: settings.themeMode,
+      locale: Locale(themeSettings.localeCode),
+      themeMode: themeSettings.themeMode,
       theme: applyMotion(
         AgyTheme.build(
           brightness: Brightness.light,
-          accent: settings.accent,
+          accent: themeSettings.accent,
           customSeed: dynamicSeed,
         ),
       ),
       darkTheme: applyMotion(
         AgyTheme.build(
           brightness: Brightness.dark,
-          accent: settings.accent,
+          accent: themeSettings.accent,
           customSeed: dynamicSeed,
         ),
       ),

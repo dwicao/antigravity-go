@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:agy_client/agy_client.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -42,6 +44,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
   bool _showLeftSidebar = true;
   bool _showOverviewPanel = true;
   AppLifecycleState _lifecycleState = AppLifecycleState.resumed;
+  Timer? _updateCheckTimer;
 
   @override
   void initState() {
@@ -61,7 +64,11 @@ class _HomeShellState extends ConsumerState<HomeShell>
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      ref.read(appUpdateProvider.notifier).autoCheckIfDue();
+      _updateCheckTimer = Timer(const Duration(seconds: 3), () {
+        if (mounted) {
+          ref.read(appUpdateProvider.notifier).autoCheckIfDue();
+        }
+      });
       // Touch performanceProvider so saved refresh-rate mode syncs cleanly to MainActivity.
       ref.read(performanceProvider);
       _consumeInitialShortcut();
@@ -82,6 +89,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
 
   @override
   void dispose() {
+    _updateCheckTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _systemChannel.setMethodCallHandler(null);
     super.dispose();
@@ -150,12 +158,15 @@ class _HomeShellState extends ConsumerState<HomeShell>
   @override
   Widget build(BuildContext context) {
     final width = MediaQuery.sizeOf(context).width;
-    final perms = ref.watch(permissionsProvider);
-    final settings = ref.watch(settingsProvider);
-    final sidePanel = ref.watch(sidePanelProvider);
+    final isDexMode = ref.watch(permissionsProvider.select((p) => p.isDexMode));
+    final desktopLayout =
+        ref.watch(settingsProvider.select((s) => s.desktopLayout));
+    final showSidePanel =
+        ref.watch(sidePanelProvider.select((s) => s.showSidePanel));
 
     ref.listen<bool>(chatProvider.select((c) => c.isStreaming), (prev, next) {
       if (prev == true && !next) {
+        final settings = ref.read(settingsProvider);
         if (settings.hapticOnComplete) {
           PhoneBridge.instance.vibrate(durationMs: 45);
         }
@@ -173,6 +184,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
 
     ref.listen<List<ActiveSubagent>>(
         chatProvider.select((c) => c.activeSubagents), (prev, next) {
+      final settings = ref.read(settingsProvider);
       final activeNext = next.where((s) => s.isActive).toList();
       final activePrev = (prev ?? const []).where((s) => s.isActive).toList();
       if (activeNext.isEmpty && activePrev.isNotEmpty) {
@@ -200,6 +212,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
         }
         return;
       }
+      final settings = ref.read(settingsProvider);
       if (prev == null &&
           settings.notifyOnApproval &&
           _shouldPostAlert(settings)) {
@@ -243,20 +256,20 @@ class _HomeShellState extends ConsumerState<HomeShell>
       }
     });
 
-    final isTwoPane = switch (settings.desktopLayout) {
+    final isTwoPane = switch (desktopLayout) {
       DesktopLayoutOverride.desktop => true,
       DesktopLayoutOverride.mobile => false,
       DesktopLayoutOverride.auto => width >= 720,
     };
-    final isThreePane = switch (settings.desktopLayout) {
+    final isThreePane = switch (desktopLayout) {
       DesktopLayoutOverride.desktop => width >= 840,
       DesktopLayoutOverride.mobile => false,
       DesktopLayoutOverride.auto => width >= 1100,
     };
-    final isDesktopUx = switch (settings.desktopLayout) {
+    final isDesktopUx = switch (desktopLayout) {
       DesktopLayoutOverride.desktop => true,
       DesktopLayoutOverride.mobile => false,
-      DesktopLayoutOverride.auto => isTwoPane || perms.isDexMode,
+      DesktopLayoutOverride.auto => isTwoPane || isDexMode,
     };
 
     final bindings = <ShortcutActivator, VoidCallback>{
@@ -322,7 +335,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
                     setState(() => _showOverviewPanel = !_showOverviewPanel),
               ),
             ),
-            if (sidePanel.showSidePanel) ...[
+            if (showSidePanel) ...[
               const VerticalDivider(width: 1),
               const Expanded(flex: 4, child: SidePanelTabs()),
             ],
@@ -358,7 +371,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
                     _scaffoldKey.currentState?.openEndDrawer(),
               ),
             ),
-            if (sidePanel.showSidePanel) ...[
+            if (showSidePanel) ...[
               const VerticalDivider(width: 1),
               const Expanded(flex: 4, child: SidePanelTabs()),
             ],
@@ -380,7 +393,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
             onClose: () => _scaffoldKey.currentState?.closeEndDrawer(),
           ),
         ),
-        body: sidePanel.showSidePanel
+        body: showSidePanel
             ? const SidePanelTabs()
             : ChatScreen(
                 isDesktopMode: isDesktopUx,

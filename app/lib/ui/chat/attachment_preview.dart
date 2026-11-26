@@ -23,6 +23,7 @@ Future<void> showAttachmentImagePreviewDialog(
               maxScale: 4.0,
               child: Image.file(
                 File(path),
+                cacheWidth: 1600,
                 fit: BoxFit.contain,
                 errorBuilder: (context, error, stackTrace) => Padding(
                   padding: const EdgeInsets.all(24),
@@ -85,6 +86,9 @@ class AttachmentImageThumbnail extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final filename = path.split('/').last.split('\\').last;
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    final cacheW = (width * dpr).round().clamp(64, 512);
+    final cacheH = (height * dpr).round().clamp(64, 512);
 
     return Stack(
       clipBehavior: Clip.none,
@@ -107,6 +111,8 @@ class AttachmentImageThumbnail extends StatelessWidget {
                 File(path),
                 width: width,
                 height: height,
+                cacheWidth: cacheW,
+                cacheHeight: cacheH,
                 fit: BoxFit.cover,
                 errorBuilder: (context, error, stackTrace) => Padding(
                   padding: const EdgeInsets.all(6),
@@ -178,10 +184,12 @@ class AttachmentPreviewStrip extends StatelessWidget {
 
     return SizedBox(
       height: hasImage ? 76 : 40,
-      child: ListView(
+      child: ListView.builder(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-        children: attachments.map((a) {
+        itemCount: attachments.length,
+        itemBuilder: (_, index) {
+          final a = attachments[index];
           if (ChatTurnHelpers.isImagePath(a)) {
             return Padding(
               padding: const EdgeInsets.only(right: 8),
@@ -202,7 +210,7 @@ class AttachmentPreviewStrip extends StatelessWidget {
               ),
             ),
           );
-        }).toList(),
+        },
       ),
     );
   }

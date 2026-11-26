@@ -1,4 +1,5 @@
 import 'package:agy_client/agy_client.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -17,6 +18,73 @@ import '../shell/background_tasks_sheet.dart';
 import '../usage/usage_page.dart';
 import '../workspace/diff_review_view.dart';
 
+class _OverviewArtifactSummary {
+  const _OverviewArtifactSummary({
+    required this.id,
+    required this.text,
+  });
+
+  final String id;
+  final String text;
+
+  @override
+  bool operator ==(Object other) =>
+      other is _OverviewArtifactSummary &&
+      other.id == id &&
+      other.text == text;
+
+  @override
+  int get hashCode => Object.hash(id, text);
+}
+
+class _OverviewChatSummary {
+  const _OverviewChatSummary({
+    required this.modifiedFiles,
+    required this.artifacts,
+  });
+
+  factory _OverviewChatSummary.fromState(ChatState chat) {
+    final modified = <String>{};
+    final artifacts = <_OverviewArtifactSummary>[];
+    for (final m in chat.messages) {
+      for (final t in m.tools) {
+        final path = t.parameters['TargetFile'] ??
+            t.parameters['AbsolutePath'] ??
+            t.parameters['path'] ??
+            t.parameters['file'];
+        if (path != null) {
+          final s = path.toString();
+          if (s.isNotEmpty) modified.add(s);
+        }
+      }
+      if (m.role == ChatRole.assistant &&
+          m.text.length > 260 &&
+          (m.text.contains('## ') || m.text.contains('```'))) {
+        artifacts.add(_OverviewArtifactSummary(id: m.id, text: m.text));
+      }
+    }
+    return _OverviewChatSummary(
+      modifiedFiles: modified.toList(growable: false),
+      artifacts: artifacts,
+    );
+  }
+
+  final List<String> modifiedFiles;
+  final List<_OverviewArtifactSummary> artifacts;
+
+  @override
+  bool operator ==(Object other) =>
+      other is _OverviewChatSummary &&
+      listEquals(other.modifiedFiles, modifiedFiles) &&
+      listEquals(other.artifacts, artifacts);
+
+  @override
+  int get hashCode => Object.hash(
+        Object.hashAll(modifiedFiles),
+        Object.hashAll(artifacts),
+      );
+}
+
 /// 1:1 Antigravity App Overview Panel:
 /// - Top launcher rows: Review, Files, Terminal, Browser, Phone Control
 /// - Conversation sections: Usage Quotas, Modified Files, Artifacts, Tool Steps
@@ -27,32 +95,37 @@ class OverviewPanel extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final chat = ref.watch(chatProvider);
+    final summary = ref.watch(
+      chatProvider.select(_OverviewChatSummary.fromState),
+    );
     final bgTasks = ref.watch(backgroundTasksProvider);
-    final usage = ref.watch(usageProvider);
-    final phone = ref.watch(phoneProvider);
-    final settings = ref.watch(settingsProvider);
-    final ctxSnap = ref.watch(contextBudgetProvider);
+    final usage = ref.watch(
+      usageProvider.select((u) => (
+            fiveHourRemaining: u.overallFiveHourRemainingPct,
+            weeklyRemaining: u.overallWeeklyRemainingPct,
+            fiveHourResetAt: u.overallFiveHourResetAt,
+            fiveHourResetText: u.overallFiveHourResetText,
+            weeklyResetAt: u.overallWeeklyResetAt,
+            weeklyResetText: u.overallWeeklyResetText,
+            fiveHourLedgerTotal: u.fiveHourLedgerTokens.totalTokens,
+            weeklyLedgerTotal: u.weeklyLedgerTokens.totalTokens,
+          )),
+    );
+    final accessibilityConnected = ref.watch(
+      phoneProvider.select((p) => p.status.accessibilityConnected),
+    );
+    final settings = ref.watch(
+      settingsProvider.select((s) => (
+            presetLabel: s.permissionPreset.label,
+            allowNonWorkspaceAccess: s.allowNonWorkspaceAccess,
+          )),
+    );
+    final ctxPercentage =
+        ref.watch(contextBudgetProvider.select((c) => c.percentage));
     final theme = Theme.of(context);
 
-    final allTools = chat.messages.expand((m) => m.tools).toList();
-    final modifiedFiles = <String>{};
-    for (final t in allTools) {
-      final path = t.parameters['TargetFile'] ??
-          t.parameters['AbsolutePath'] ??
-          t.parameters['path'] ??
-          t.parameters['file'];
-      if (path != null && path.toString().isNotEmpty) {
-        modifiedFiles.add(path.toString());
-      }
-    }
-
-    final artifacts = chat.messages
-        .where((m) =>
-            m.role == ChatRole.assistant &&
-            m.text.length > 260 &&
-            (m.text.contains('## ') || m.text.contains('```')))
-        .toList();
+    final modifiedFiles = summary.modifiedFiles;
+    final artifacts = summary.artifacts;
 
     void openSideTab(SidePanelTab tab) {
       onClose?.call();
@@ -163,7 +236,7 @@ class OverviewPanel extends ConsumerWidget {
                           leading: const Icon(Icons.engineering_outlined, size: 18),
                           title: const Text('Harness Engineering'),
                           subtitle: Text(
-                            'Context ${ctxSnap.percentage}%, loop guard, /rewind & ledger',
+                            'Context $ctxPercentage%, loop guard, /rewind & ledger',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
@@ -199,9 +272,11 @@ class OverviewPanel extends ConsumerWidget {
                                   SizedBox(
                                     width: 15,
                                     height: 15,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: theme.colorScheme.primary,
+                                    child: RepaintBoundary(
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: theme.colorScheme.primary,
+                                      ),
                                     ),
                                   )
                                 else
@@ -343,15 +418,15 @@ class OverviewPanel extends ConsumerWidget {
                             ),
                             const SizedBox(height: 6),
                             Text(
-                              usage.overallFiveHourRemainingPct != null ||
-                                      usage.overallWeeklyRemainingPct != null
+                              usage.fiveHourRemaining != null ||
+                                      usage.weeklyRemaining != null
                                   ? [
-                                      if (usage.overallFiveHourRemainingPct != null)
-                                        '5h: ${formatQuotaPct(usage.overallFiveHourRemainingPct!)} left (${formatQuotaPct(100.0 - usage.overallFiveHourRemainingPct!)} used${usage.overallFiveHourResetAt != null ? ", ${formatResetCountdown(usage.overallFiveHourResetAt!)}" : (usage.overallFiveHourResetText != null ? ", ${usage.overallFiveHourResetText}" : "")})',
-                                      if (usage.overallWeeklyRemainingPct != null)
-                                        'Weekly: ${formatQuotaPct(usage.overallWeeklyRemainingPct!)} left (${formatQuotaPct(100.0 - usage.overallWeeklyRemainingPct!)} used${usage.overallWeeklyResetAt != null ? ", ${formatResetCountdown(usage.overallWeeklyResetAt!)}" : (usage.overallWeeklyResetText != null ? ", ${usage.overallWeeklyResetText}" : "")})',
+                                      if (usage.fiveHourRemaining != null)
+                                        '5h: ${formatQuotaPct(usage.fiveHourRemaining!)} left (${formatQuotaPct(100.0 - usage.fiveHourRemaining!)} used${usage.fiveHourResetAt != null ? ", ${formatResetCountdown(usage.fiveHourResetAt!)}" : (usage.fiveHourResetText != null ? ", ${usage.fiveHourResetText}" : "")})',
+                                      if (usage.weeklyRemaining != null)
+                                        'Weekly: ${formatQuotaPct(usage.weeklyRemaining!)} left (${formatQuotaPct(100.0 - usage.weeklyRemaining!)} used${usage.weeklyResetAt != null ? ", ${formatResetCountdown(usage.weeklyResetAt!)}" : (usage.weeklyResetText != null ? ", ${usage.weeklyResetText}" : "")})',
                                     ].join(' · ')
-                                  : '5h: ${usage.fiveHourLedgerTokens.totalTokens} tok · 7d: ${usage.weeklyLedgerTokens.totalTokens} tok',
+                                  : '5h: ${usage.fiveHourLedgerTotal} tok · 7d: ${usage.weeklyLedgerTotal} tok',
                               style: theme.textTheme.bodySmall,
                             ),
                             const SizedBox(height: 2),
@@ -464,7 +539,7 @@ class OverviewPanel extends ConsumerWidget {
                         ListTile(
                           dense: true,
                           leading: const Icon(Icons.security, size: 18),
-                          title: Text('Preset: ${settings.permissionPreset.label}'),
+                          title: Text('Preset: ${settings.presetLabel}'),
                           subtitle: Text(
                             settings.allowNonWorkspaceAccess
                                 ? 'Non-workspace file access: Allowed'
@@ -477,7 +552,7 @@ class OverviewPanel extends ConsumerWidget {
                           leading: const Icon(Icons.touch_app_outlined, size: 18),
                           title: const Text('Phone Control'),
                           subtitle: Text(
-                            phone.status.accessibilityConnected
+                            accessibilityConnected
                                 ? 'Accessibility connected'
                                 : 'Accessibility off',
                           ),

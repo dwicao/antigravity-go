@@ -491,12 +491,18 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
 
           if (constraints.maxHeight < 480) {
             return Scrollbar(
-              child: ListView(
-                children: [
-                  ...topControls,
-                  for (final s in filtered) buildSessionTile(s),
-                  ...bottomNav,
-                ],
+              child: ListView.builder(
+                itemCount: topControls.length + filtered.length + bottomNav.length,
+                itemBuilder: (context, index) {
+                  if (index < topControls.length) {
+                    return topControls[index];
+                  }
+                  final sessionIdx = index - topControls.length;
+                  if (sessionIdx < filtered.length) {
+                    return buildSessionTile(filtered[sessionIdx]);
+                  }
+                  return bottomNav[sessionIdx - filtered.length];
+                },
               ),
             );
           }

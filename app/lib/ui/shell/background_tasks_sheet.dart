@@ -64,12 +64,14 @@ class BackgroundTasksAppBarPill extends ConsumerWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 if (hasRunningWork)
-                  SizedBox(
-                    width: 11,
-                    height: 11,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: theme.colorScheme.primary,
+                  RepaintBoundary(
+                    child: SizedBox(
+                      width: 11,
+                      height: 11,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: theme.colorScheme.primary,
+                      ),
                     ),
                   )
                 else
