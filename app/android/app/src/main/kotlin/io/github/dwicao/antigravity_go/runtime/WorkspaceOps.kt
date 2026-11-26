@@ -96,6 +96,7 @@ internal class WorkspaceOps(
         val workEnv = if (shadowDir != null) mapOf("GIT_WORK_TREE" to dir.absolutePath) else emptyMap()
         if (shadowDir != null) {
             ensureShadowExclude(shadowDir)
+            syncShadowIndexIfNeeded(dir, shadowDir)
         }
         val pathFilterArgs = shadowExcludeArgs.toTypedArray()
         val (_, statusWithBranchRaw) = runCapturedArgs(
@@ -108,7 +109,8 @@ internal class WorkspaceOps(
         val firstLine = rawStatusLines.firstOrNull()?.trim() ?: ""
         val hasBranchHeader = firstLine.startsWith("## ")
         val statusLines = if (hasBranchHeader) rawStatusLines.drop(1) else rawStatusLines
-        val statusRaw = statusLines.joinToString("\n").trim()
+        // Preserve leading `' '` in XY porcelain codes like `" D file"` / `" M file"`.
+        val statusRaw = statusLines.dropWhile { it.isBlank() }.joinToString("\n").trimEnd()
         val branch = if (shadowDir != null) {
             "shadow-checkpoint"
         } else if (hasBranchHeader) {
@@ -374,6 +376,22 @@ internal class WorkspaceOps(
         }
     }
 
+    private fun syncShadowIndexIfNeeded(workDir: File, shadowDir: File) {
+        val indexFile = File(shadowDir, "index")
+        if (indexFile.exists()) return
+        runCapturedArgs(gitCmd(shadowDir, "config", "core.bare", "false"), workDir, emptyMap(), 15)
+        val (headCode, _) = runCapturedArgs(
+            gitCmd(shadowDir, "rev-parse", "--verify", "HEAD"),
+            workDir,
+            emptyMap(),
+            15,
+        )
+        if (headCode == 0) {
+            val env = mapOf("GIT_WORK_TREE" to workDir.absolutePath)
+            runCapturedArgs(gitCmd(shadowDir, "read-tree", "HEAD"), workDir, env, 30)
+        }
+    }
+
     private fun ensureShadowGitInitialized(workDir: File, shadowDir: File): String? {
         if (!shadowDir.exists()) {
             shadowDir.mkdirs()
@@ -385,6 +403,7 @@ internal class WorkspaceOps(
             )
             if (initCode != 0) return null
             ensureShadowExclude(shadowDir)
+            runCapturedArgs(gitCmd(shadowDir, "config", "core.bare", "false"), workDir, emptyMap(), 15)
             runCapturedArgs(
                 gitCmd(shadowDir, "config", "user.name", "Antigravity"),
                 workDir,
@@ -407,6 +426,7 @@ internal class WorkspaceOps(
             30,
         )
         if (headCode == 0 && headOut.trim().isNotEmpty()) {
+            syncShadowIndexIfNeeded(workDir, shadowDir)
             return headOut.trim()
         }
         // Seed initial shadow commit so subsequent turns have a valid parent.
@@ -430,6 +450,7 @@ internal class WorkspaceOps(
             val sha = commitOut.trim()
             if (commitCode == 0 && sha.isNotEmpty()) {
                 runCapturedArgs(gitCmd(shadowDir, "update-ref", "HEAD", sha), workDir, emptyMap(), 15)
+                syncShadowIndexIfNeeded(workDir, shadowDir)
                 sha
             } else {
                 null

@@ -118,7 +118,17 @@ class ChangeCard extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(width: 8),
-                      if (file.created && file.added == 0 && file.removed == 0)
+                      if (file.deleted && file.added == 0 && file.removed == 0)
+                        Text(
+                          'deleted',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: semantic.danger,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        )
+                      else if (file.created &&
+                          file.added == 0 &&
+                          file.removed == 0)
                         Text(
                           'new',
                           style: theme.textTheme.labelSmall?.copyWith(

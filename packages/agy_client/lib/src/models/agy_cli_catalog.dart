@@ -307,6 +307,30 @@ class FileChangeEntry {
         diff: json['diff']?.toString(),
       );
 
+  static String _unquoteGitPath(String raw) {
+    var clean = raw.trim();
+    if (clean.startsWith('"') && clean.endsWith('"') && clean.length >= 2) {
+      clean = clean.substring(1, clean.length - 1);
+    }
+    return clean;
+  }
+
+  /// Resolves Git numstat rename notation (`dir/{old.dart => new.dart}` or
+  /// `old.dart => new.dart`) to its destination path so it matches `diff --git`.
+  static String _resolveNumstatPath(String raw) {
+    var clean = _unquoteGitPath(raw);
+    final braceMatch = RegExp(r'^(.*)\{[^}]* => ([^}]*)\}(.*)$').firstMatch(clean);
+    if (braceMatch != null) {
+      clean = '${braceMatch.group(1)}${braceMatch.group(2)}${braceMatch.group(3)}'
+          .replaceAll('//', '/');
+      return clean.trim();
+    }
+    if (clean.contains(' => ')) {
+      clean = _unquoteGitPath(clean.split(' => ').last);
+    }
+    return clean.trim();
+  }
+
   /// Parses `git diff --numstat` or `git show --numstat --format=""` output.
   static List<FileChangeEntry> parseGitNumstat(
     String raw, {
@@ -321,7 +345,7 @@ class FileChangeEntry {
       if (parts.length < 3) continue;
       final added = int.tryParse(parts[0]) ?? 0;
       final removed = int.tryParse(parts[1]) ?? 0;
-      final path = parts.sublist(2).join('\t').trim();
+      final path = _resolveNumstatPath(parts.sublist(2).join('\t'));
       if (path.isEmpty) continue;
       out.add(
         FileChangeEntry(
@@ -336,6 +360,63 @@ class FileChangeEntry {
     return out;
   }
 
+  /// Parses `git status --short` + `git diff --numstat` + unified diff outputs
+  /// into enriched [FileChangeEntry] records, preserving both added and deleted files.
+  static List<FileChangeEntry> fromGitOutputs({
+    required String status,
+    required String numstat,
+    required String diff,
+  }) {
+    final created = <String>{};
+    final deleted = <String>{};
+    for (final rawLine in status.split('\n')) {
+      final line = rawLine.trimRight();
+      if (line.isEmpty) continue;
+      String code;
+      String rawPath;
+      if (line.length >= 4 && line[2] == ' ') {
+        code = line.substring(0, 2);
+        rawPath = line.substring(3);
+      } else if (line.length >= 3 && line[1] == ' ' && line[0] != ' ') {
+        // Recover XY code if caller stripped the leading status space (`" D foo"`).
+        code = ' ${line[0]}';
+        rawPath = line.substring(2);
+      } else {
+        continue;
+      }
+      var path = rawPath.trim();
+      if (path.contains(' -> ')) {
+        path = path.split(' -> ').last.trim();
+      }
+      path = _unquoteGitPath(path);
+      if (path.isEmpty) continue;
+      if (code.contains('?') || code.contains('A') || code.contains('R')) {
+        created.add(path);
+      }
+      if (code.contains('D')) {
+        deleted.add(path);
+      }
+    }
+
+    final files = parseGitNumstat(
+      numstat,
+      createdPaths: created,
+      deletedPaths: deleted,
+    );
+    final seen = files.map((f) => f.path).toSet();
+    for (final path in created) {
+      if (seen.add(path)) {
+        files.add(FileChangeEntry(path: path, created: true));
+      }
+    }
+    for (final path in deleted) {
+      if (seen.add(path)) {
+        files.add(FileChangeEntry(path: path, deleted: true));
+      }
+    }
+    return attachUnifiedDiffs(files, diff);
+  }
+
   /// Splits a full `git diff` / `git show` patch by `diff --git` sections and
   /// attaches the matching per-file patch snippet to each [FileChangeEntry].
   static List<FileChangeEntry> attachUnifiedDiffs(
@@ -343,16 +424,30 @@ class FileChangeEntry {
     String unifiedDiff,
   ) {
     if (entries.isEmpty || unifiedDiff.trim().isEmpty) return entries;
-    final perFile = <String, String>{};
-    final lines = unifiedDiff.split('\n');
+    final perFile = <String, ({String patch, int added, int removed, bool created, bool deleted})>{};
+    final lines = unifiedDiff.replaceAll('\r\n', '\n').split('\n');
     String? currentPath;
+    var added = 0;
+    var removed = 0;
+    var created = false;
+    var deleted = false;
     final buf = StringBuffer();
 
     void flush() {
       if (currentPath != null && buf.isNotEmpty) {
-        perFile[currentPath] = buf.toString().trimRight();
+        perFile[currentPath] = (
+          patch: buf.toString().trimRight(),
+          added: added,
+          removed: removed,
+          created: created,
+          deleted: deleted,
+        );
       }
       buf.clear();
+      added = 0;
+      removed = 0;
+      created = false;
+      deleted = false;
     }
 
     for (final line in lines) {
@@ -361,31 +456,40 @@ class FileChangeEntry {
         final match = RegExp(
           r'^diff --git (?:"a/(.+?)"|a/(.+?)) (?:"b/(.+?)"|b/(.+))$',
         ).firstMatch(line);
-        currentPath = (match?.group(3) ?? match?.group(4))?.trim();
+        final raw = match?.group(3) ?? match?.group(4);
+        currentPath = raw == null ? null : _unquoteGitPath(raw);
         buf.writeln(line);
       } else if (currentPath != null) {
-        if (line.startsWith('+++ b/')) {
-          currentPath = line.substring(6).trim();
+        if (line.startsWith('--- /dev/null')) {
+          created = true;
+        } else if (line.startsWith('+++ /dev/null')) {
+          deleted = true;
+        } else if (line.startsWith('+++ b/')) {
+          currentPath = _unquoteGitPath(line.substring(6));
         } else if (line.startsWith('+++ "b/') && line.endsWith('"')) {
           currentPath = line.substring(7, line.length - 1).trim();
+        } else if (line.startsWith('+') && !line.startsWith('+++')) {
+          added++;
+        } else if (line.startsWith('-') && !line.startsWith('---')) {
+          removed++;
         }
         buf.writeln(line);
       }
     }
     flush();
 
-    return entries
-        .map(
-          (e) => FileChangeEntry(
-            path: e.path,
-            added: e.added,
-            removed: e.removed,
-            created: e.created,
-            deleted: e.deleted,
-            diff: perFile[e.path] ?? e.diff,
-          ),
-        )
-        .toList();
+    return entries.map((e) {
+      final info = perFile[e.path] ?? perFile[_unquoteGitPath(e.path)];
+      if (info == null) return e;
+      return FileChangeEntry(
+        path: e.path,
+        added: e.added > 0 ? e.added : info.added,
+        removed: e.removed > 0 ? e.removed : info.removed,
+        created: e.created || info.created,
+        deleted: e.deleted || info.deleted,
+        diff: info.patch,
+      );
+    }).toList();
   }
 }
 

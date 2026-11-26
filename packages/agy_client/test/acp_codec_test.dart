@@ -110,6 +110,15 @@ void main() {
       );
       expect((refusal! as AgyTurnResultEvent).status, 'ERROR');
       expect(ReasoningEffort.fromString('max'), ReasoningEffort.max);
+
+      // Even when rawOutput is a plain confirmation string, diffPreview (-old/+new) is preserved.
+      final editWithRawOut = codec.parseNotificationOrRequest(
+        '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call_update","toolCallId":"tc-10","title":"Edit","status":"completed","rawOutput":"Updated a.dart","locations":[{"path":"lib/a.dart"}],"content":[{"type":"diff","path":"lib/a.dart","oldText":"goneLine","newText":"addedLine"}]}}}',
+      );
+      expect(editWithRawOut, isA<AgyToolCallEvent>());
+      final tc10 = editWithRawOut! as AgyToolCallEvent;
+      expect(tc10.output, contains('-goneLine'));
+      expect(tc10.output, contains('+addedLine'));
     });
 
     test('encodes session/resume and multimodal session/prompt image blocks', () {

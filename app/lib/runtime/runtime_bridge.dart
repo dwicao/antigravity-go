@@ -520,41 +520,15 @@ class RuntimeBridge {
       final diff = raw?['diff']?.toString() ?? '';
       final branch = raw?['branch']?.toString() ?? '';
       final numstat = raw?['numstat']?.toString() ?? '';
-      final created = <String>{};
-      final deleted = <String>{};
-      for (final line in status.split('\n')) {
-        if (line.length < 4) continue;
-        final code = line.substring(0, 2);
-        var path = line.substring(3).trim();
-        if (path.contains(' -> ')) {
-          path = path.split(' -> ').last.trim();
-        }
-        if (path.startsWith('"') && path.endsWith('"') && path.length >= 2) {
-          path = path.substring(1, path.length - 1);
-        }
-        if (path.isEmpty) continue;
-        if (code.contains('?') || code.contains('A') || code.contains('R')) {
-          created.add(path);
-        }
-        if (code.contains('D')) deleted.add(path);
-      }
-      final files = FileChangeEntry.parseGitNumstat(
-        numstat,
-        createdPaths: created,
-        deletedPaths: deleted,
-      );
-      // Include untracked files that `git diff --numstat` doesn't list yet
-      final seen = files.map((f) => f.path).toSet();
-      for (final path in created) {
-        if (!seen.contains(path)) {
-          files.add(FileChangeEntry(path: path, created: true));
-        }
-      }
       return (
         status: status,
         diff: diff,
         branch: branch,
-        files: FileChangeEntry.attachUnifiedDiffs(files, diff),
+        files: FileChangeEntry.fromGitOutputs(
+          status: status,
+          numstat: numstat,
+          diff: diff,
+        ),
       );
     } on MissingPluginException {
       return (

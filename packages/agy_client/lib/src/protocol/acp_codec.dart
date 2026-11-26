@@ -362,10 +362,19 @@ class AcpCodec {
               (_mapToolStatus(status) == ToolCallState.failed
                   ? (rawOut?.toString() ?? extracted.output)
                   : null);
-          final outStr = rawOut is String
+          final baseOut = rawOut is String
               ? rawOut
-              : (rawOut != null ? jsonEncode(rawOut) : extracted.output) ??
-                  extracted.diffPreview;
+              : (rawOut != null ? jsonEncode(rawOut) : extracted.output);
+          final outStr = (extracted.diffPreview != null &&
+                  extracted.diffPreview!.trim().isNotEmpty)
+              ? [
+                  if (baseOut != null &&
+                      baseOut.trim().isNotEmpty &&
+                      !baseOut.contains('@@ '))
+                    baseOut.trim(),
+                  extracted.diffPreview!,
+                ].join('\n\n')
+              : baseOut;
           final rawParams = _asMap(update['rawInput']);
           final locs = _asList(update['locations']);
           final locPath = locs.isNotEmpty

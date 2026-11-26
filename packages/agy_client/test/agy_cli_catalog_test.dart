@@ -103,4 +103,45 @@ No previous warnings
     expect(parsed[1].name, 'github');
     expect(parsed[1].enabled, isFalse);
   });
+
+  test('FileChangeEntry.fromGitOutputs preserves leading-space deletions and renames', () {
+    const status = ' D app/lib/removed_first.dart\nR  app/lib/old.dart -> app/lib/new.dart\nD app/lib/trimmed_del.dart';
+    const numstat = '0\t9\tapp/lib/removed_first.dart\n1\t4\tapp/lib/{old.dart => new.dart}';
+    const diff = '''
+diff --git a/app/lib/removed_first.dart b/app/lib/removed_first.dart
+deleted file mode 100644
+--- a/app/lib/removed_first.dart
++++ /dev/null
+@@ -1,2 +0,0 @@
+-line1
+-line2
+diff --git a/app/lib/old.dart b/app/lib/new.dart
+similarity index 60%
+rename from app/lib/old.dart
+rename to app/lib/new.dart
+--- a/app/lib/old.dart
++++ b/app/lib/new.dart
+@@ -1,4 +1,1 @@
+-a
++b
+''';
+    final files = FileChangeEntry.fromGitOutputs(
+      status: status,
+      numstat: numstat,
+      diff: diff,
+    );
+    expect(files.map((f) => f.path), containsAll([
+      'app/lib/removed_first.dart',
+      'app/lib/new.dart',
+      'app/lib/trimmed_del.dart',
+    ]));
+    final first = files.firstWhere((f) => f.path == 'app/lib/removed_first.dart');
+    expect(first.deleted, isTrue);
+    expect(first.removed, 9);
+    final renamed = files.firstWhere((f) => f.path == 'app/lib/new.dart');
+    expect(renamed.removed, 4);
+    expect(renamed.diff, contains('-a'));
+    final trimmedDel = files.firstWhere((f) => f.path == 'app/lib/trimmed_del.dart');
+    expect(trimmedDel.deleted, isTrue);
+  });
 }

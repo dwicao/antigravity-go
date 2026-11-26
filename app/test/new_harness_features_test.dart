@@ -415,6 +415,37 @@ diff --git a/app/lib/main.dart b/app/lib/main.dart
       'ello',
     );
   });
+
+  test('ChatTurnHelpers preserves removals via LCS diff, multi-edit hunks, and delete_file', () {
+    final extracted = ChatTurnHelpers.extractChangedFilesFromTools([
+      const ChatToolStep(
+        id: 'tc-lcs-del',
+        toolName: 'replace_file_content',
+        state: ToolCallState.completed,
+        parameters: {
+          'TargetFile': 'app/lib/clean.dart',
+          'TargetContent': 'keep1\nremovedA\nremovedB\nkeep2',
+          'ReplacementContent': 'keep1\nkeep2',
+        },
+      ),
+      const ChatToolStep(
+        id: 'tc-del-file',
+        toolName: 'delete_file',
+        state: ToolCallState.completed,
+        parameters: {
+          'TargetFile': 'app/lib/obsolete.dart',
+        },
+      ),
+    ]);
+    expect(extracted, hasLength(2));
+    expect(extracted[0].path, 'app/lib/clean.dart');
+    expect(extracted[0].added, 0);
+    expect(extracted[0].removed, 2);
+    expect(extracted[0].diff, contains('-removedA'));
+    expect(extracted[0].diff, contains(' keep1'));
+    expect(extracted[1].path, 'app/lib/obsolete.dart');
+    expect(extracted[1].deleted, isTrue);
+  });
 }
 
 class _FakeWorkspaceDiffNotifier extends WorkspaceDiffNotifier {

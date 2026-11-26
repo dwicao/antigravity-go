@@ -134,5 +134,26 @@ class NewHarnessNativeTest {
         assertFalse((diffRes["diff"] ?: "").contains("/storage/emulated/0"))
         assertFalse((diffRes["numstat"] ?: "").contains("phone_storage"))
         assertFalse((diffRes["status"] ?: "").contains("phone_storage"))
+
+        // Verify pure file deletion in shadow-git reports removal without phantom untracked additions.
+        mainFile.writeText("v1\n")
+        File(work, "brand_new.kt").delete()
+        val toRemove = File(work, "to_remove.kt").apply { writeText("remove_me_1\nremove_me_2\n") }
+        val cp2 = ops.createCheckpoint(work.absolutePath)
+        assertEquals(true, cp2["ok"])
+        // Seed HEAD with toRemove included via a second shadow workspace to test clean deletion.
+        val delWork = Files.createTempDirectory("agy-del-work-").toFile().apply { deleteOnExit() }
+        val keepFile = File(delWork, "keep.txt").apply { writeText("stay\n") }
+        val removeFile = File(delWork, "remove.txt").apply { writeText("gone1\ngone2\n") }
+        ops.createCheckpoint(delWork.absolutePath)
+        removeFile.delete()
+        val delRes = ops.gitDiff(delWork.absolutePath)
+        assertTrue((delRes["diff"] ?: "").contains("-gone1"))
+        assertTrue((delRes["numstat"] ?: "").contains("0\t2\tremove.txt"))
+        assertFalse((delRes["status"] ?: "").contains("keep.txt"))
+        assertFalse((delRes["numstat"] ?: "").contains("keep.txt"))
+        assertTrue((delRes["status"] ?: "").startsWith(" D remove.txt"))
+        assertEquals("stay\n", keepFile.readText())
+        toRemove.delete()
     }
 }

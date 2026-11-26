@@ -2,6 +2,15 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.43] - 2026-11-26
+
+### Fixed
+- **Accurate Diff Removal (`-`) Tracking Across Shadow Git, Git CLI, ACP & Chat Tools:**
+  - Seeded `${shadowDir}/index` (`core.bare = false` + `read-tree HEAD`) in `WorkspaceOps` so Shadow Git diffs don't misreport unmodified files as `D` + `??` phantom additions and accurately report deletions.
+  - Preserved leading `' '` in Git porcelain v1 status lines (` D file` / ` M file`) instead of `.trim()` chopping the first character off removed file paths, and added `deletedPaths` fallback + Git rename (`{old => new}`) normalization in `FileChangeEntry.fromGitOutputs`.
+  - Preserved `diffPreview` (`oldText`/`newText`) in `AcpCodec` even when `rawOutput` or text `content` is present, and merged `tool_call` -> `tool_call_update` parameters/outputs in `ChatNotifier`.
+  - Upgraded `ChatTurnHelpers` with LCS line diffing, `delete_file`/`remove_file` recognition, multi-hunk retention per file, and a `deleted` 0-line badge in `ChangeCard`.
+
 ## [1.0.42] - 2026-11-26
 
 ### Added

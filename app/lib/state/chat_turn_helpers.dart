@@ -103,7 +103,7 @@ class ChatTurnHelpers {
     return null;
   }
 
-  static String? buildToolDiff(
+  static ({String diff, int added, int removed}) _buildDiffWithStats(
     String path,
     String? oldText,
     String? newText,
@@ -114,24 +114,100 @@ class ChatTurnHelpers {
     final newLines = newText == null || newText.isEmpty
         ? const <String>[]
         : newText.split('\n');
-    if (oldLines.isEmpty && newLines.isEmpty) return null;
+    if (oldLines.isEmpty && newLines.isEmpty) {
+      return (diff: '', added: 0, removed: 0);
+    }
+
+    final ops = <String>[];
+    var added = 0;
+    var removed = 0;
+
+    if (oldLines.isEmpty) {
+      for (final l in newLines) {
+        ops.add('+$l');
+        added++;
+      }
+    } else if (newLines.isEmpty) {
+      for (final l in oldLines) {
+        ops.add('-$l');
+        removed++;
+      }
+    } else if (oldLines.length * newLines.length <= 40000) {
+      // Myers/LCS diff so unchanged context lines aren't double-counted as + and -.
+      final m = oldLines.length;
+      final n = newLines.length;
+      final dp = List.generate(m + 1, (_) => List<int>.filled(n + 1, 0));
+      for (var i = m - 1; i >= 0; i--) {
+        for (var j = n - 1; j >= 0; j--) {
+          if (oldLines[i] == newLines[j]) {
+            dp[i][j] = dp[i + 1][j + 1] + 1;
+          } else {
+            dp[i][j] = dp[i + 1][j] >= dp[i][j + 1] ? dp[i + 1][j] : dp[i][j + 1];
+          }
+        }
+      }
+      var i = 0;
+      var j = 0;
+      while (i < m || j < n) {
+        if (i < m && j < n && oldLines[i] == newLines[j]) {
+          ops.add(' ${oldLines[i]}');
+          i++;
+          j++;
+        } else if (i < m && (j == n || dp[i + 1][j] >= dp[i][j + 1])) {
+          ops.add('-${oldLines[i]}');
+          removed++;
+          i++;
+        } else {
+          ops.add('+${newLines[j]}');
+          added++;
+          j++;
+        }
+      }
+    } else {
+      for (final l in oldLines) {
+        ops.add('-$l');
+        removed++;
+      }
+      for (final l in newLines) {
+        ops.add('+$l');
+        added++;
+      }
+    }
+
     final buf = StringBuffer()
       ..writeln('--- a/$path')
       ..writeln('+++ b/$path')
       ..writeln('@@ -1,${oldLines.length} +1,${newLines.length} @@');
-    for (final line in oldLines.take(80)) {
-      buf.writeln('-$line');
+    const maxOps = 160;
+    for (final op in ops.take(maxOps)) {
+      buf.writeln(op);
     }
-    if (oldLines.length > 80) {
-      buf.writeln('-... (${oldLines.length - 80} more)');
+    if (ops.length > maxOps) {
+      buf.writeln(' ... (${ops.length - maxOps} more)');
     }
-    for (final line in newLines.take(80)) {
-      buf.writeln('+$line');
+    return (diff: buf.toString().trimRight(), added: added, removed: removed);
+  }
+
+  static String? buildToolDiff(
+    String path,
+    String? oldText,
+    String? newText,
+  ) {
+    final res = _buildDiffWithStats(path, oldText, newText);
+    return res.diff.isEmpty ? null : '${res.diff}\n';
+  }
+
+  static ({int added, int removed}) _countPatchLines(String patch) {
+    var added = 0;
+    var removed = 0;
+    for (final l in patch.split('\n')) {
+      if (l.startsWith('+') && !l.startsWith('+++')) {
+        added++;
+      } else if (l.startsWith('-') && !l.startsWith('---')) {
+        removed++;
+      }
     }
-    if (newLines.length > 80) {
-      buf.writeln('+... (${newLines.length - 80} more)');
-    }
-    return buf.toString();
+    return (added: added, removed: removed);
   }
 
   static List<FileChangeEntry> extractChangedFilesFromTools(
@@ -149,15 +225,30 @@ class ChatTurnHelpers {
           p.containsKey('newText') ||
           p.containsKey('old_string') ||
           p.containsKey('new_string') ||
-          p.containsKey('CodeContent');
+          p.containsKey('oldContent') ||
+          p.containsKey('newContent') ||
+          p.containsKey('old_content') ||
+          p.containsKey('new_content') ||
+          p.containsKey('originalContent') ||
+          p.containsKey('CodeContent') ||
+          p.containsKey('diff') ||
+          p.containsKey('patch');
+      final isDeleteTool = nameLower.contains('delete_file') ||
+          nameLower.contains('remove_file') ||
+          nameLower.contains('unlink') ||
+          nameLower == 'delete' ||
+          p['Deleted'] == true ||
+          p['deleted'] == true;
       final outStr = step.output?.trim() ?? '';
-      final hasOutputDiff =
-          outStr.contains('\n@@ ') || outStr.startsWith('--- a/');
+      final hasOutputDiff = outStr.contains('\n@@ ') ||
+          outStr.startsWith('--- a/') ||
+          outStr.startsWith('@@ ');
       final isFileEdit = nameLower.contains('write') ||
           nameLower.contains('edit') ||
           nameLower.contains('replace') ||
           nameLower.contains('patch') ||
           nameLower.contains('create_file') ||
+          isDeleteTool ||
           ((nameLower == 'file' || nameLower.startsWith('file ')) &&
               (hasEditParams || hasOutputDiff)) ||
           hasOutputDiff;
@@ -196,10 +287,10 @@ class ChatTurnHelpers {
           if (ch is! Map) continue;
           final rep = ch['ReplacementContent']?.toString();
           final tgt = ch['TargetContent']?.toString();
-          if (rep != null && rep.isNotEmpty) added += rep.split('\n').length;
-          if (tgt != null && tgt.isNotEmpty) removed += tgt.split('\n').length;
-          final part = buildToolDiff(path, tgt, rep);
-          if (part != null) buf.writeln(part);
+          final part = _buildDiffWithStats(path, tgt, rep);
+          added += part.added;
+          removed += part.removed;
+          if (part.diff.isNotEmpty) buf.writeln(part.diff);
         }
         final combined = buf.toString().trimRight();
         if (combined.isNotEmpty) diffSnippet = combined;
@@ -211,41 +302,74 @@ class ChatTurnHelpers {
             p['new_text'] ??
             p['new_string'] ??
             p['newString'] ??
+            p['newContent'] ??
+            p['new_content'] ??
+            p['after'] ??
             p['content'];
         final target = p['TargetContent'] ??
             p['oldText'] ??
             p['old_text'] ??
             p['old_string'] ??
-            p['oldString'];
+            p['oldString'] ??
+            p['oldContent'] ??
+            p['old_content'] ??
+            p['originalContent'] ??
+            p['original_content'] ??
+            p['before'];
+        final rawPatch = p['diff'] ?? p['patch'];
         final repStr = replacement?.toString();
         final tgtStr = target?.toString();
-        added = repStr != null && repStr.isNotEmpty ? repStr.split('\n').length : 0;
-        removed = tgtStr != null && tgtStr.isNotEmpty ? tgtStr.split('\n').length : 0;
-        diffSnippet = buildToolDiff(path, tgtStr, repStr);
-      }
-
-      if (diffSnippet == null && hasOutputDiff) {
-        diffSnippet = outStr;
-        if (added == 0 && removed == 0) {
-          for (final l in outStr.split('\n')) {
-            if (l.startsWith('+') && !l.startsWith('+++')) added++;
-            if (l.startsWith('-') && !l.startsWith('---')) removed++;
-          }
+        if (tgtStr != null || repStr != null) {
+          final res = _buildDiffWithStats(path, tgtStr, repStr);
+          added = res.added;
+          removed = res.removed;
+          diffSnippet = res.diff.isEmpty ? null : res.diff;
+        } else if (rawPatch is String && rawPatch.trim().isNotEmpty) {
+          diffSnippet = rawPatch.trimRight();
+          final counts = _countPatchLines(diffSnippet);
+          added = counts.added;
+          removed = counts.removed;
         }
       }
 
-      final created = (p['Overwrite'] == false) ||
-          nameLower.contains('create') ||
-          ((nameLower.contains('write_to_file') ||
-                  nameLower.contains('write_file')) &&
-              removed == 0);
+      if (hasOutputDiff) {
+        final outCounts = _countPatchLines(outStr);
+        if (diffSnippet == null || (added == 0 && removed == 0)) {
+          diffSnippet = outStr.startsWith('@@ ')
+              ? '--- a/$path\n+++ b/$path\n$outStr'
+              : outStr;
+          added = outCounts.added;
+          removed = outCounts.removed;
+        } else if (outCounts.removed > removed) {
+          // Prefer richer ACP diffPreview when tool parameters lacked oldText.
+          diffSnippet = outStr.startsWith('@@ ')
+              ? '--- a/$path\n+++ b/$path\n$outStr'
+              : outStr;
+          added = outCounts.added;
+          removed = outCounts.removed;
+        }
+      }
+
+      final created = !isDeleteTool &&
+          ((p['Overwrite'] == false) ||
+              nameLower.contains('create') ||
+              ((nameLower.contains('write_to_file') ||
+                      nameLower.contains('write_file')) &&
+                  removed == 0));
+      final deleted = isDeleteTool || outStr.contains('+++ /dev/null');
       final prev = byPath[path];
+      final combinedDiff = [
+        if (prev?.diff != null && prev!.diff!.trim().isNotEmpty) prev.diff!.trimRight(),
+        if (diffSnippet != null && diffSnippet.trim().isNotEmpty)
+          diffSnippet.trimRight(),
+      ].join('\n');
       byPath[path] = FileChangeEntry(
         path: path,
         added: (prev?.added ?? 0) + added,
         removed: (prev?.removed ?? 0) + removed,
         created: prev?.created ?? created,
-        diff: diffSnippet ?? prev?.diff,
+        deleted: (prev?.deleted ?? false) || deleted,
+        diff: combinedDiff.isNotEmpty ? combinedDiff : prev?.diff,
       );
     }
     return byPath.values.toList();

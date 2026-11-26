@@ -1360,17 +1360,37 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         final resolvedToolName = evt.toolName != 'tool' || tIdx < 0
             ? evt.toolName
             : tools[tIdx].toolName;
-        final mergedParams = tIdx >= 0 && evt.parameters.isEmpty
-            ? tools[tIdx].parameters
-            : evt.parameters;
+        final mergedParams = tIdx < 0
+            ? evt.parameters
+            : (evt.parameters.isEmpty
+                ? tools[tIdx].parameters
+                : <String, dynamic>{
+                    ...tools[tIdx].parameters,
+                    ...evt.parameters,
+                  });
         if (tIdx >= 0) {
           final prev = tools[tIdx];
+          final prevOut = prev.output;
+          final nextOut = evt.output;
+          final prevHasDiff = prevOut != null &&
+              (prevOut.contains('\n@@ ') ||
+                  prevOut.startsWith('--- a/') ||
+                  prevOut.startsWith('@@ '));
+          final mergedOutput = switch ((prevHasDiff, nextOut)) {
+            (_, null) => prevOut,
+            (true, final String nxt)
+                when !nxt.contains('\n@@ ') &&
+                    !nxt.startsWith('--- a/') &&
+                    !nxt.startsWith('@@ ') =>
+              nxt.trim().isEmpty ? prevOut : '${nxt.trim()}\n\n$prevOut',
+            _ => nextOut,
+          };
           tools[tIdx] = ChatToolStep(
             id: effCallId,
             toolName: resolvedToolName,
             state: evt.state,
             parameters: mergedParams,
-            output: evt.output ?? prev.output,
+            output: mergedOutput,
             error: evt.errorMessage ?? prev.error,
             durationSeconds: evt.durationSeconds ?? prev.durationSeconds,
             startedAt: prev.startedAt,

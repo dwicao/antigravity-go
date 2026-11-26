@@ -299,7 +299,36 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
   ) {
     if (chatFiles.isEmpty) return gitFiles;
     if (gitFiles.isEmpty) return chatFiles;
-    final out = <FileChangeEntry>[...gitFiles];
+    final out = <FileChangeEntry>[];
+    for (final gf in gitFiles) {
+      FileChangeEntry? matchingChat;
+      for (final cf in chatFiles) {
+        if (_pathsReferToSameFile(gf.path, cf.path)) {
+          matchingChat = cf;
+          break;
+        }
+      }
+      if (matchingChat != null &&
+          ((gf.diff == null || gf.diff!.trim().isEmpty) ||
+              (gf.added == 0 &&
+                  gf.removed == 0 &&
+                  (matchingChat.added > 0 || matchingChat.removed > 0)))) {
+        out.add(
+          FileChangeEntry(
+            path: gf.path,
+            added: gf.added > 0 ? gf.added : matchingChat.added,
+            removed: gf.removed > 0 ? gf.removed : matchingChat.removed,
+            created: gf.created || matchingChat.created,
+            deleted: gf.deleted || matchingChat.deleted,
+            diff: (gf.diff != null && gf.diff!.trim().isNotEmpty)
+                ? gf.diff
+                : matchingChat.diff,
+          ),
+        );
+      } else {
+        out.add(gf);
+      }
+    }
     for (final cf in chatFiles) {
       final alreadyInGit =
           out.any((gf) => _pathsReferToSameFile(gf.path, cf.path));
@@ -475,7 +504,7 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
         final branch = parts.first.trim();
         final rest1 =
             (parts.length > 1 ? parts[1] : '').split('\n===NUMSTAT===\n');
-        final status = rest1.first.trim();
+        final status = rest1.first.trimRight();
         final rest2 =
             (rest1.length > 1 ? rest1[1] : '').split('\n===DIFF===\n');
         final numstat = rest2.first.trim();
@@ -510,7 +539,7 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
       final primaryRes = await RuntimeBridge.instance.gitDiffDetailed(primaryCwd);
       if (!ref.mounted || token != _refreshToken) return;
       chosenBranch = primaryRes.branch.trim();
-      chosenStatus = primaryRes.status.trim();
+      chosenStatus = primaryRes.status.trimRight();
       chosenDiff = primaryRes.diff.trim();
       chosenFiles = primaryRes.files;
 
@@ -542,7 +571,7 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
           if (!ref.mounted || token != _refreshToken) return;
           for (final item in results) {
             final branch = item.res.branch.trim();
-            final status = item.res.status.trim();
+            final status = item.res.status.trimRight();
             final diff = item.res.diff.trim();
             if (chosenBranch.isEmpty && branch.isNotEmpty) {
               chosenCwd = item.cwd;
@@ -551,7 +580,7 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
             if (item.res.files.isNotEmpty ||
                 status.isNotEmpty ||
                 diff.isNotEmpty) {
-              if (!primaryHasChanges) {
+              if (!primaryHasChanges && chosenFiles.isEmpty && chosenDiff.isEmpty) {
                 chosenCwd = item.cwd;
                 chosenBranch = branch;
                 chosenStatus = status;
@@ -563,7 +592,11 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
                   chosenDiff = '$chosenDiff\n$diff'.trim();
                 }
               }
-              break;
+              final stillMissing = latestChatFiles.any(
+                (cf) =>
+                    !chosenFiles.any((gf) => _pathsReferToSameFile(gf.path, cf.path)),
+              );
+              if (!stillMissing) break;
             }
           }
         }
@@ -632,35 +665,10 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
     required String numstat,
     required String diff,
   }) {
-    final created = <String>{};
-    final deleted = <String>{};
-    for (final line in status.split('\n')) {
-      if (line.length < 4) continue;
-      final code = line.substring(0, 2);
-      var path = line.substring(3).trim();
-      if (path.contains(' -> ')) {
-        path = path.split(' -> ').last.trim();
-      }
-      if (path.startsWith('"') && path.endsWith('"') && path.length >= 2) {
-        path = path.substring(1, path.length - 1);
-      }
-      if (path.isEmpty) continue;
-      if (code.contains('?') || code.contains('A') || code.contains('R')) {
-        created.add(path);
-      }
-      if (code.contains('D')) deleted.add(path);
-    }
-    final files = FileChangeEntry.parseGitNumstat(
-      numstat,
-      createdPaths: created,
-      deletedPaths: deleted,
+    return FileChangeEntry.fromGitOutputs(
+      status: status,
+      numstat: numstat,
+      diff: diff,
     );
-    final seen = files.map((f) => f.path).toSet();
-    for (final path in created) {
-      if (!seen.contains(path)) {
-        files.add(FileChangeEntry(path: path, created: true));
-      }
-    }
-    return FileChangeEntry.attachUnifiedDiffs(files, diff);
   }
 }
