@@ -2,7 +2,6 @@ package io.github.dwicao.antigravity_go.phone
 
 import android.content.Context
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * Process-wide holder for Phone Control state, loopback [PhoneMcpServer],
@@ -50,7 +49,7 @@ object PhoneControlCoordinator {
     @Volatile
     private var actionListener: ((String, String, Boolean, String) -> Unit)? = null
 
-    private val history = CopyOnWriteArrayList<ActionHistoryEntry>()
+    private val history = ArrayDeque<ActionHistoryEntry>()
     private val customRules = ConcurrentHashMap<String, SafetyGate.AppRuleMode>()
 
     val mcpServer = PhoneMcpServer(
@@ -114,25 +113,30 @@ object PhoneControlCoordinator {
     )
 
     fun recordAction(action: String, target: String, allowed: Boolean, reason: String) {
-        history.add(
-            0,
-            ActionHistoryEntry(
-                action = action,
-                target = target,
-                allowed = allowed,
-                reason = reason,
-                timestampMs = System.currentTimeMillis(),
-            ),
-        )
-        while (history.size > MAX_HISTORY) {
-            runCatching { history.removeAt(history.size - 1) }
+        synchronized(history) {
+            history.addFirst(
+                ActionHistoryEntry(
+                    action = action,
+                    target = target,
+                    allowed = allowed,
+                    reason = reason,
+                    timestampMs = System.currentTimeMillis(),
+                ),
+            )
+            while (history.size > MAX_HISTORY) {
+                history.removeLast()
+            }
         }
     }
 
-    fun getActionLog(): List<Map<String, Any?>> = history.map { it.toMap() }
+    fun getActionLog(): List<Map<String, Any?>> = synchronized(history) {
+        history.map { it.toMap() }
+    }
 
     fun clearActionLog() {
-        history.clear()
+        synchronized(history) {
+            history.clear()
+        }
     }
 
     fun setListener(listener: ((String, String, Boolean, String) -> Unit)?) {

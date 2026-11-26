@@ -854,6 +854,7 @@ class AcpSessionManager(
                                         "stdoutLine" to raw,
                                     )
                                 )
+                                emitTurnExitOnce(turnId, 1, active)
                                 return@submit
                             }
                             initDone = true

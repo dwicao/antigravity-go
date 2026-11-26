@@ -313,20 +313,34 @@ object DeviceGatewayHelper {
                 environment()["RISH_APPLICATION_ID"] = context.packageName
             }
             val proc = pb.start()
-            val out = proc.inputStream.bufferedReader().readText()
+            val outBuf = StringBuilder()
+            val readerThread = Thread {
+                runCatching {
+                    proc.inputStream.bufferedReader().use { br ->
+                        val chunk = CharArray(4096)
+                        while (outBuf.length < 16_384) {
+                            val n = br.read(chunk)
+                            if (n <= 0) break
+                            outBuf.append(chunk, 0, minOf(n, 16_384 - outBuf.length))
+                        }
+                    }
+                }
+            }.apply { isDaemon = true; start() }
             val finished = proc.waitFor(15, TimeUnit.SECONDS)
             if (!finished) {
                 proc.destroyForcibly()
+                readerThread.join(250)
                 return JSONObject()
                     .put("allowed", true)
                     .put("ok", false)
                     .put("error", "Shizuku command timed out after 15s")
             }
+            readerThread.join(500)
             JSONObject()
                 .put("allowed", true)
                 .put("ok", proc.exitValue() == 0)
                 .put("exitCode", proc.exitValue())
-                .put("output", out.take(16_384))
+                .put("output", outBuf.toString())
         }.getOrElse { e ->
             JSONObject().put("allowed", false).put("error", e.message ?: e.toString())
         }

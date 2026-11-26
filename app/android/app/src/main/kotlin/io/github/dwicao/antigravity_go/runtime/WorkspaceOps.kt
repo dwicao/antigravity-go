@@ -318,7 +318,9 @@ internal class WorkspaceOps(
         if (!target.exists() || !target.isDirectory) return emptyList()
         val files = target.listFiles() ?: return emptyList()
         return files
+            .asSequence()
             .sortedWith(compareBy<File>({ !it.isDirectory }, { it.name.lowercase() }))
+            .take(600)
             .map { f ->
                 mapOf(
                     "name" to f.name,
@@ -327,6 +329,7 @@ internal class WorkspaceOps(
                     "size" to if (f.isDirectory) "folder" else "${f.length()} B",
                 )
             }
+            .toList()
     }
 
     fun readFile(path: String): String {

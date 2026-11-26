@@ -155,7 +155,9 @@ internal class TerminalSessionManager(
     }
 
     fun closeSession(sessionId: String) {
-        writers.remove(sessionId)?.let { runCatching { it.close() } }
+        writers.remove(sessionId)?.let { writer ->
+            synchronized(writer) { runCatching { writer.close() } }
+        }
         sessions.remove(sessionId)?.let { runCatching { it.destroyForcibly() } }
         isPtyMode.remove(sessionId)
         ctrlFifos.remove(sessionId)?.let { runCatching { it.delete() } }

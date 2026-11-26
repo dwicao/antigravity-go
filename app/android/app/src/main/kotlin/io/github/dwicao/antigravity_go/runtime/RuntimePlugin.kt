@@ -74,20 +74,23 @@ class RuntimePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChann
             "status" -> result.success(ctrl.statusMap())
             "logs" -> result.success(ctrl.getLogs())
             "install" -> {
-                ctrl.install(call.argument<String>("manifestUrl"))
-                result.success(null)
+                val url = call.argument<String>("manifestUrl")
+                runAsync(result) {
+                    ctrl.install(url)
+                    null
+                }
             }
-            "start" -> {
+            "start" -> runAsync(result) {
                 ctrl.startService()
-                result.success(null)
+                null
             }
-            "stop" -> {
+            "stop" -> runAsync(result) {
                 ctrl.stopService()
-                result.success(null)
+                null
             }
-            "reset" -> {
+            "reset" -> runAsync(result) {
                 ctrl.resetRuntime()
-                result.success(null)
+                null
             }
             "setSafeMode" -> {
                 ctrl.setSafeMode(call.argument<Boolean>("enabled") ?: false)
@@ -220,24 +223,28 @@ class RuntimePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChann
                 val cwd = call.argument<String>("cwd")
                 val cols = call.argument<Int>("cols") ?: 80
                 val rows = call.argument<Int>("rows") ?: 24
-                ctrl.startTerminalSession(sid, cwd, cols, rows)
-                result.success(null)
+                runAsync(result) {
+                    ctrl.startTerminalSession(sid, cwd, cols, rows)
+                    null
+                }
             }
             "resizeTerminalSession" -> {
                 val sid = call.argument<String>("sessionId") ?: ""
                 val cols = call.argument<Int>("cols") ?: 80
                 val rows = call.argument<Int>("rows") ?: 24
-                result.success(ctrl.resizeTerminalSession(sid, cols, rows))
+                runAsync(result) { ctrl.resizeTerminalSession(sid, cols, rows) }
             }
             "writeTerminalInput" -> {
                 val sid = call.argument<String>("sessionId") ?: ""
                 val input = call.argument<String>("input") ?: ""
-                result.success(ctrl.writeTerminalInput(sid, input))
+                runAsync(result) { ctrl.writeTerminalInput(sid, input) }
             }
             "closeTerminalSession" -> {
                 val sid = call.argument<String>("sessionId") ?: ""
-                ctrl.closeTerminalSession(sid)
-                result.success(null)
+                runAsync(result) {
+                    ctrl.closeTerminalSession(sid)
+                    null
+                }
             }
             "respondPermission" -> {
                 val turnId = call.argument<String>("turnId") ?: ""
@@ -249,21 +256,23 @@ class RuntimePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChann
                 result.success(null)
             }
             "cancelTurn" -> {
-                ctrl.cancelTurn(call.argument<String>("turnId") ?: "")
-                result.success(null)
+                val turnId = call.argument<String>("turnId") ?: ""
+                runAsync(result) {
+                    ctrl.cancelTurn(turnId)
+                    null
+                }
             }
             "closeSessionWorker" -> {
                 val sid = call.argument<String>("sessionId") ?: ""
-                result.success(ctrl.closeSessionWorker(sid))
+                runAsync(result) { ctrl.closeSessionWorker(sid) }
             }
             "backgroundTasks" -> result.success(ctrl.listBackgroundTasks())
             "cancelBackgroundTask" -> {
-                val ok = ctrl.cancelBackgroundTask(call.argument<String>("taskId") ?: "")
-                result.success(ok)
+                val taskId = call.argument<String>("taskId") ?: ""
+                runAsync(result) { ctrl.cancelBackgroundTask(taskId) }
             }
-            "forceStopAllBackgroundTasks" -> {
-                val count = ctrl.forceStopAllBackgroundTasks()
-                result.success(count)
+            "forceStopAllBackgroundTasks" -> runAsync(result) {
+                ctrl.forceStopAllBackgroundTasks()
             }
             "writeFile" -> {
                 val path = call.argument<String>("path") ?: ""

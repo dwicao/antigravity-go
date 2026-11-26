@@ -53,11 +53,19 @@ class AgyService : Service() {
                 activeInstance = this
                 val statusText = intent.getStringExtra(EXTRA_STATUS_TEXT)
                     ?: "On-device Antigravity CLI harness active"
+                val prevText = latestStatusText
                 latestStatusText = statusText
+                val isIdle = statusText == IDLE_STATUS_TEXT
                 if (running) {
-                    acquireWakeLock(refresh = true)
-                    val nm = getSystemService(NotificationManager::class.java)
-                    nm.notify(NOTIFICATION_ID, buildNotification(this, latestStatusText))
+                    if (isIdle) {
+                        releaseWakeLock()
+                    } else {
+                        acquireWakeLock(refresh = true)
+                    }
+                    if (prevText != statusText) {
+                        val nm = getSystemService(NotificationManager::class.java)
+                        nm.notify(NOTIFICATION_ID, buildNotification(this, latestStatusText))
+                    }
                 } else {
                     val notification = buildNotification(this, statusText)
                     if (Build.VERSION.SDK_INT >= 34) {
@@ -70,7 +78,9 @@ class AgyService : Service() {
                         startForeground(NOTIFICATION_ID, notification)
                     }
                     running = true
-                    acquireWakeLock(refresh = true)
+                    if (!isIdle) {
+                        acquireWakeLock(refresh = true)
+                    }
                     registerNetworkCallback(controller)
                 }
                 return START_STICKY
@@ -124,7 +134,9 @@ class AgyService : Service() {
                     startForeground(NOTIFICATION_ID, notification)
                 }
                 running = true
-                acquireWakeLock()
+                if (statusText != IDLE_STATUS_TEXT) {
+                    acquireWakeLock()
+                }
                 registerNetworkCallback(controller)
                 return START_STICKY
             }
@@ -161,6 +173,12 @@ class AgyService : Service() {
         runCatching { wakeLock?.acquire(60 * 60 * 1000L) }
     }
 
+    private fun releaseWakeLock() {
+        wakeLock?.let {
+            if (it.isHeld) runCatching { it.release() }
+        }
+    }
+
     private fun registerNetworkCallback(controller: RuntimeController) {
         if (networkCallback != null) return
         val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -188,6 +206,7 @@ class AgyService : Service() {
 
         private const val CHANNEL_ID = "agy_runtime_channel"
         private const val NOTIFICATION_ID = 1001
+        private const val IDLE_STATUS_TEXT = "On-device Antigravity CLI harness active"
         private val mainHandler = Handler(Looper.getMainLooper())
 
         @Volatile
@@ -198,7 +217,10 @@ class AgyService : Service() {
         private var activeInstance: AgyService? = null
 
         @Volatile
-        private var latestStatusText: String = "On-device Antigravity CLI harness active"
+        private var latestStatusText: String = IDLE_STATUS_TEXT
+
+        @Volatile
+        private var lastNotifiedStatusText: String = ""
 
         fun refreshWakeLock(context: Context) {
             if (!running) return
@@ -221,6 +243,7 @@ class AgyService : Service() {
         }
 
         fun updateTurnStatus(context: Context, statusText: String) {
+            val prev = latestStatusText
             latestStatusText = statusText
             if (!running) return
             if (Looper.myLooper() != Looper.getMainLooper()) {
@@ -228,6 +251,13 @@ class AgyService : Service() {
                 mainHandler.post { updateTurnStatus(app, statusText) }
                 return
             }
+            if (statusText == IDLE_STATUS_TEXT) {
+                activeInstance?.releaseWakeLock()
+            }
+            if (prev == statusText && lastNotifiedStatusText == statusText) {
+                return
+            }
+            lastNotifiedStatusText = statusText
             val nm = context.getSystemService(NotificationManager::class.java)
             nm.notify(NOTIFICATION_ID, buildNotification(context, statusText))
         }

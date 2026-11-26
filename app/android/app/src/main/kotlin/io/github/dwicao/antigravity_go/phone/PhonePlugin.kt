@@ -18,17 +18,19 @@ import io.flutter.plugin.common.MethodChannel
 import io.github.dwicao.antigravity_go.runtime.ApprovalNotificationHelper
 import io.github.dwicao.antigravity_go.runtime.RuntimeController
 import org.json.JSONObject
+import java.util.concurrent.Executors
 
 class PhonePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChannel.StreamHandler {
     private lateinit var appContext: Context
     private lateinit var methodChannel: MethodChannel
     private lateinit var eventChannel: EventChannel
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val ioExecutor = Executors.newCachedThreadPool()
     private var eventSink: EventChannel.EventSink? = null
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         appContext = binding.applicationContext
-        PhoneControlCoordinator.bindContext(appContext)
+        ioExecutor.submit { PhoneControlCoordinator.bindContext(appContext) }
         methodChannel = MethodChannel(binding.binaryMessenger, "agy/phone")
         methodChannel.setMethodCallHandler(this)
         eventChannel = EventChannel(binding.binaryMessenger, "agy/phone/events")
@@ -51,6 +53,23 @@ class PhonePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChannel
         PhoneControlCoordinator.setListener(null)
         methodChannel.setMethodCallHandler(null)
         eventChannel.setStreamHandler(null)
+        ioExecutor.shutdown()
+    }
+
+    private inline fun <T> runAsync(
+        result: MethodChannel.Result,
+        crossinline block: () -> T,
+    ) {
+        ioExecutor.submit {
+            try {
+                val res = block()
+                mainHandler.post { result.success(res) }
+            } catch (t: Throwable) {
+                mainHandler.post {
+                    result.error("phone_error", t.message ?: t.toString(), null)
+                }
+            }
+        }
     }
 
     override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
@@ -144,8 +163,8 @@ class PhonePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChannel
             "hasClipboardImage" -> {
                 result.success(ClipboardImageHelper.hasClipboardImage(appContext))
             }
-            "readClipboardImagePath" -> {
-                result.success(ClipboardImageHelper.readClipboardImageToTempFile(appContext))
+            "readClipboardImagePath" -> runAsync(result) {
+                ClipboardImageHelper.readClipboardImageToTempFile(appContext)
             }
             "copyContentImageUri" -> {
                 val rawUri = call.argument<String>("uri")?.trim().orEmpty()
@@ -154,13 +173,15 @@ class PhonePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChannel
                     result.success(mapOf("ok" to false, "error" to "empty_uri"))
                 } else {
                     val uri = Uri.parse(rawUri)
-                    result.success(ClipboardImageHelper.copyImageUriToTempFile(appContext, uri, hintMime))
+                    runAsync(result) {
+                        ClipboardImageHelper.copyImageUriToTempFile(appContext, uri, hintMime)
+                    }
                 }
             }
             "browserAuto" -> {
                 val payloadMap = call.argument<Map<String, Any?>>("payload") ?: emptyMap()
                 val json = JSONObject(payloadMap)
-                Thread {
+                runAsync(result) {
                     val res = DeviceGatewayHelper.browserAuto(appContext, json)
                     val outMap = mutableMapOf<String, Any?>()
                     val keys = res.keys()
@@ -170,57 +191,55 @@ class PhonePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChannel
                             if (it is org.json.JSONArray || it is JSONObject) it.toString() else it
                         }
                     }
-                    mainHandler.post { result.success(outMap) }
-                }.start()
+                    outMap
+                }
             }
             "shizukuExec" -> {
                 val cmd = call.argument<String>("command") ?: ""
-                val res = DeviceGatewayHelper.shizukuExec(appContext, cmd)
-                result.success(
+                runAsync(result) {
+                    val res = DeviceGatewayHelper.shizukuExec(appContext, cmd)
                     mapOf(
                         "ok" to res.optBoolean("ok", false),
                         "allowed" to res.optBoolean("allowed", false),
                         "output" to res.optString("output", res.optString("error", res.optString("reason", ""))),
                     )
-                )
+                }
             }
             "shizukuLogcat" -> {
                 val tag = call.argument<String>("tag") ?: ""
                 val lines = call.argument<Int>("lines") ?: 120
-                val res = DeviceGatewayHelper.shizukuLogcat(appContext, tag, lines)
-                result.success(
+                runAsync(result) {
+                    val res = DeviceGatewayHelper.shizukuLogcat(appContext, tag, lines)
                     mapOf(
                         "ok" to res.optBoolean("ok", false),
                         "allowed" to res.optBoolean("allowed", false),
                         "output" to res.optString("output", res.optString("error", res.optString("reason", ""))),
                     )
-                )
+                }
             }
             "shizukuInstall" -> {
                 val apkPath = call.argument<String>("apkPath") ?: ""
-                val res = DeviceGatewayHelper.shizukuInstallApk(appContext, apkPath)
-                result.success(
+                runAsync(result) {
+                    val res = DeviceGatewayHelper.shizukuInstallApk(appContext, apkPath)
                     mapOf(
                         "ok" to res.optBoolean("ok", false),
                         "allowed" to res.optBoolean("allowed", false),
                         "output" to res.optString("output", res.optString("error", res.optString("reason", ""))),
                     )
-                )
+                }
             }
-            "shizukuUiDump" -> {
+            "shizukuUiDump" -> runAsync(result) {
                 val res = DeviceGatewayHelper.shizukuUiDump(appContext)
-                result.success(
-                    mapOf(
-                        "ok" to res.optBoolean("ok", false),
-                        "allowed" to res.optBoolean("allowed", false),
-                        "output" to res.optString("output", res.optString("error", res.optString("reason", ""))),
-                    )
+                mapOf(
+                    "ok" to res.optBoolean("ok", false),
+                    "allowed" to res.optBoolean("allowed", false),
+                    "output" to res.optString("output", res.optString("error", res.optString("reason", ""))),
                 )
             }
             "setEnabled" -> {
                 val enabled = call.argument<Boolean>("enabled") ?: false
                 PhoneControlCoordinator.setEnabled(enabled)
-                runCatching { RuntimeController.get(appContext).syncPhoneMcpRegistration() }
+                ioExecutor.submit { runCatching { RuntimeController.get(appContext).syncPhoneMcpRegistration() } }
                 result.success(null)
             }
             "setSafetyStrict" -> {

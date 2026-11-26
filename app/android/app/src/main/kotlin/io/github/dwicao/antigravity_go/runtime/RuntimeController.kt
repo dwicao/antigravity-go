@@ -146,6 +146,12 @@ class RuntimeController private constructor(private val appContext: Context) {
     private val turnStartedAt = ConcurrentHashMap<String, Long>()
     private val turnReceivedOutput = ConcurrentHashMap<String, Boolean>()
 
+    @Volatile
+    private var phoneContextBound: Boolean = false
+
+    @Volatile
+    private var lastToolStatusNotifyMs: Long = 0L
+
     private val busyboxApplets = listOf(
         "sh", "ls", "cat", "find", "grep", "egrep", "fgrep", "sed", "awk",
         "head", "tail", "wc", "sort", "uniq", "cut", "tr", "xargs",
@@ -162,8 +168,8 @@ class RuntimeController private constructor(private val appContext: Context) {
         tmpDir.mkdirs()
         homeDir.mkdirs()
         workspaceDir.mkdirs()
-        ensureShellToolchain()
         refreshInitialPhase()
+        executor.submit { ensureShellToolchain() }
     }
 
     private fun refreshInitialPhase() {
@@ -224,7 +230,11 @@ class RuntimeController private constructor(private val appContext: Context) {
                         turnReceivedOutput[turnId] = true
                     }
                     if (line.contains("tool_call") && AgyService.running) {
-                        AgyService.updateTurnStatus(appContext, "Agent running tool step…")
+                        val now = System.currentTimeMillis()
+                        if (now - lastToolStatusNotifyMs >= 1500L) {
+                            lastToolStatusNotifyMs = now
+                            AgyService.updateTurnStatus(appContext, "Agent running tool step…")
+                        }
                     }
                 }
             }
@@ -750,7 +760,10 @@ am start -a android.intent.action.VIEW -d "${'$'}url" >/dev/null 2>&1 || echo "[
     fun syncPhoneMcpRegistration() = customizationsOps.syncPhoneMcpRegistration()
 
     private fun buildEnv(extra: Map<String, String> = emptyMap()): Map<String, String> {
-        PhoneControlCoordinator.bindContext(appContext)
+        if (!phoneContextBound) {
+            PhoneControlCoordinator.bindContext(appContext)
+            phoneContextBound = true
+        }
         ensureShellToolchain()
         val env = LinkedHashMap<String, String>()
         env.putAll(System.getenv())
@@ -1220,7 +1233,19 @@ am start -a android.intent.action.VIEW -d "${'$'}url" >/dev/null 2>&1 || echo "[
             pb.environment().putAll(env)
             pb.redirectErrorStream(true)
             val proc = pb.start()
-            val readFuture = executor.submit<String> { proc.inputStream.bufferedReader().use { it.readText() } }
+            val readFuture = executor.submit<String> {
+                proc.inputStream.bufferedReader().use { br ->
+                    val maxChars = 4 * 1024 * 1024
+                    val buf = StringBuilder()
+                    val chunk = CharArray(8192)
+                    while (buf.length < maxChars) {
+                        val n = br.read(chunk)
+                        if (n <= 0) break
+                        buf.append(chunk, 0, minOf(n, maxChars - buf.length))
+                    }
+                    buf.toString()
+                }
+            }
             val finished = proc.waitFor(timeoutSeconds, TimeUnit.SECONDS)
             val code = if (finished) proc.exitValue() else {
                 proc.destroyForcibly()
@@ -1351,6 +1376,67 @@ am start -a android.intent.action.VIEW -d "${'$'}url" >/dev/null 2>&1 || echo "[
         appContext.packageManager.getPackageInfo(appContext.packageName, 0).versionName ?: "1.0.32"
     }.getOrDefault("1.0.32")
 
+    private data class PreparedTurnSetup(
+        val effectiveCwd: File,
+        val mergedDirs: List<String>,
+        val safeCliMode: String?,
+        val env: Map<String, String>,
+    )
+
+    private fun prepareTurnSetup(
+        cwd: String?,
+        extraDirs: List<String>,
+        mode: String?,
+        skipPermissions: Boolean,
+        safeMode: Boolean,
+        allowNonWorkspaceAccess: Boolean,
+        geminiApiKey: String?,
+    ): PreparedTurnSetup {
+        val storageGranted = hasStorageAccess()
+        val storageEnabled = allowNonWorkspaceAccess && storageGranted
+        if (!safeMode) {
+            customizationsOps.syncManagedGeminiMd(allowStorage = storageEnabled)
+        }
+        customizationsOps.syncPhoneMcpRegistration()
+        try {
+            val currentSettings = readSettings()
+            val patch = mutableMapOf<String, Any?>("allowNonWorkspaceAccess" to storageEnabled)
+            if (skipPermissions) {
+                patch["toolPermission"] = "always-proceed"
+                patch["permissions"] = mapOf(
+                    "allow" to listOf("command(*)", "read_file(*)", "write_file(*)"),
+                )
+            } else {
+                val curPerm = currentSettings["toolPermission"]?.toString()
+                if (curPerm == "auto" || curPerm == "always-proceed") {
+                    patch["toolPermission"] = "default"
+                }
+                if (currentSettings.containsKey("permissions")) {
+                    patch["permissions"] = null
+                }
+            }
+            writeSettings(patch)
+        } catch (_: Throwable) {}
+
+        val effectiveCwd = if (!cwd.isNullOrBlank()) File(cwd) else workspaceDir
+        if (!effectiveCwd.exists()) runCatching { effectiveCwd.mkdirs() }
+        val mergedDirs = defaultExtraDirs(extraDirs)
+        val safeCliMode = when (mode?.lowercase()?.trim()) {
+            null, "", "auto" -> if (skipPermissions) null else "default"
+            else -> mode
+        }
+        val extraEnv = mutableMapOf<String, String>()
+        if (!geminiApiKey.isNullOrBlank()) {
+            extraEnv["GEMINI_API_KEY"] = geminiApiKey
+        }
+        return PreparedTurnSetup(
+            effectiveCwd = effectiveCwd,
+            mergedDirs = mergedDirs,
+            safeCliMode = safeCliMode,
+            env = buildEnv(extraEnv),
+        )
+    }
+
     fun startTurn(
         turnId: String,
         prompt: String,
@@ -1385,45 +1471,6 @@ am start -a android.intent.action.VIEW -d "${'$'}url" >/dev/null 2>&1 || echo "[
             AgyService.updateTurnStatus(appContext, "Agent thinking…")
         }
 
-        val storageGranted = hasStorageAccess()
-        val storageEnabled = allowNonWorkspaceAccess && storageGranted
-        if (!safeMode) {
-            customizationsOps.syncManagedGeminiMd(allowStorage = storageEnabled)
-        }
-        customizationsOps.syncPhoneMcpRegistration()
-
-        try {
-            val currentSettings = readSettings()
-            val patch = mutableMapOf<String, Any?>("allowNonWorkspaceAccess" to storageEnabled)
-            if (skipPermissions) {
-                patch["toolPermission"] = "always-proceed"
-                patch["permissions"] = mapOf(
-                    "allow" to listOf("command(*)", "read_file(*)", "write_file(*)"),
-                )
-            } else {
-                val curPerm = currentSettings["toolPermission"]?.toString()
-                if (curPerm == "auto" || curPerm == "always-proceed") {
-                    patch["toolPermission"] = "default"
-                }
-                if (currentSettings.containsKey("permissions")) {
-                    patch["permissions"] = null
-                }
-            }
-            writeSettings(patch)
-        } catch (_: Throwable) {}
-
-        val effectiveCwd = if (!cwd.isNullOrBlank()) File(cwd) else workspaceDir
-        if (!effectiveCwd.exists()) runCatching { effectiveCwd.mkdirs() }
-        val mergedDirs = defaultExtraDirs(extraDirs)
-        val safeCliMode = when (mode?.lowercase()?.trim()) {
-            null, "", "auto" -> if (skipPermissions) null else "default"
-            else -> mode
-        }
-        val extraEnv = mutableMapOf<String, String>()
-        if (!geminiApiKey.isNullOrBlank()) {
-            extraEnv["GEMINI_API_KEY"] = geminiApiKey
-        }
-
         val useAcpForTurn = useAcp &&
             printTimeoutSeconds == null &&
             !disableSlashCommands &&
@@ -1431,32 +1478,52 @@ am start -a android.intent.action.VIEW -d "${'$'}url" >/dev/null 2>&1 || echo "[
             remoteAgent.isNullOrBlank()
 
         if (useAcpForTurn) {
-            acpManager.startTurn(
-                turnId = turnId,
-                binaryPath = binaryFile.absolutePath,
-                cwd = effectiveCwd,
-                env = buildEnv(extraEnv),
-                prompt = prompt,
-                extraDirs = mergedDirs,
-                existingSessionId = conversationId,
-                modelId = model,
-                effort = effort,
-                modeCli = safeCliMode,
-                skipPermissions = skipPermissions,
-                agent = agent?.takeIf { it.isNotBlank() },
-                attachments = attachments,
-                clientVersion = appVersionName(),
-                onAuthenticated = {
-                    if (!authMarkerFile.exists()) {
-                        writeAuthMarker(true)
-                        emit(mapOf("kind" to "auth_completed"))
-                    }
-                },
-            )
+            executor.submit {
+                val setup = prepareTurnSetup(
+                    cwd = cwd,
+                    extraDirs = extraDirs,
+                    mode = mode,
+                    skipPermissions = skipPermissions,
+                    safeMode = safeMode,
+                    allowNonWorkspaceAccess = allowNonWorkspaceAccess,
+                    geminiApiKey = geminiApiKey,
+                )
+                acpManager.startTurn(
+                    turnId = turnId,
+                    binaryPath = binaryFile.absolutePath,
+                    cwd = setup.effectiveCwd,
+                    env = setup.env,
+                    prompt = prompt,
+                    extraDirs = setup.mergedDirs,
+                    existingSessionId = conversationId,
+                    modelId = model,
+                    effort = effort,
+                    modeCli = setup.safeCliMode,
+                    skipPermissions = skipPermissions,
+                    agent = agent?.takeIf { it.isNotBlank() },
+                    attachments = attachments,
+                    clientVersion = appVersionName(),
+                    onAuthenticated = {
+                        if (!authMarkerFile.exists()) {
+                            writeAuthMarker(true)
+                            emit(mapOf("kind" to "auth_completed"))
+                        }
+                    },
+                )
+            }
             return
         }
 
         executor.submit {
+            val setup = prepareTurnSetup(
+                cwd = cwd,
+                extraDirs = extraDirs,
+                mode = mode,
+                skipPermissions = skipPermissions,
+                safeMode = safeMode,
+                allowNonWorkspaceAccess = allowNonWorkspaceAccess,
+                geminiApiKey = geminiApiKey,
+            )
             try {
                 val cmd = mutableListOf(
                     binaryFile.absolutePath,
@@ -1465,10 +1532,10 @@ am start -a android.intent.action.VIEW -d "${'$'}url" >/dev/null 2>&1 || echo "[
                     "--output-format",
                     "stream-json",
                 )
-                for (dir in mergedDirs) {
+                for (dir in setup.mergedDirs) {
                     if (File(dir).exists()) cmd.addAll(listOf("--add-dir", dir))
                 }
-                if (!safeCliMode.isNullOrBlank()) cmd.addAll(listOf("--mode", safeCliMode))
+                if (!setup.safeCliMode.isNullOrBlank()) cmd.addAll(listOf("--mode", setup.safeCliMode))
                 if (!model.isNullOrBlank()) cmd.addAll(listOf("--model", model))
                 if (!effort.isNullOrBlank() && !(model?.lowercase()?.contains("orchestrator") == true)) {
                     cmd.addAll(listOf("--effort", effort))
@@ -1484,8 +1551,8 @@ am start -a android.intent.action.VIEW -d "${'$'}url" >/dev/null 2>&1 || echo "[
                 if (skipPermissions) cmd.add("--dangerously-skip-permissions")
 
                 val pb = ProcessBuilder(cmd)
-                pb.directory(effectiveCwd)
-                pb.environment().putAll(buildEnv(extraEnv))
+                pb.directory(setup.effectiveCwd)
+                pb.environment().putAll(setup.env)
                 val proc = pb.start()
                 activeTurns[turnId] = proc
                 nonAcpTurnMeta[turnId] = Pair(

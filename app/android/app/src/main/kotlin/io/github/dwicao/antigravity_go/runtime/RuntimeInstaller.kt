@@ -132,6 +132,7 @@ object RuntimeInstaller {
             }
             val total = conn.contentLengthLong.coerceAtLeast(1L)
             var downloaded = 0L
+            var lastReportedFraction = -1.0
             conn.inputStream.use { input ->
                 FileOutputStream(dest).use { out ->
                     val buf = ByteArray(32 * 1024)
@@ -140,7 +141,11 @@ object RuntimeInstaller {
                         if (n <= 0) break
                         out.write(buf, 0, n)
                         downloaded += n
-                        onFraction((downloaded.toDouble() / total.toDouble()).coerceIn(0.0, 1.0))
+                        val frac = (downloaded.toDouble() / total.toDouble()).coerceIn(0.0, 1.0)
+                        if (frac - lastReportedFraction >= 0.02 || frac >= 1.0) {
+                            lastReportedFraction = frac
+                            onFraction(frac)
+                        }
                     }
                 }
             }

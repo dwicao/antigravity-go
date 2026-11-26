@@ -133,11 +133,26 @@ object LifecycleHooksManager {
                     redirectErrorStream(true)
                 }
                 val proc = pb.start()
-                val out = proc.inputStream.bufferedReader().readText().trim()
+                val buf = StringBuilder()
+                val readerThread = Thread {
+                    runCatching {
+                        proc.inputStream.bufferedReader().use { br ->
+                            val chunk = CharArray(2048)
+                            while (buf.length < 8192) {
+                                val n = br.read(chunk)
+                                if (n <= 0) break
+                                buf.append(chunk, 0, minOf(n, 8192 - buf.length))
+                            }
+                        }
+                    }
+                }.apply { isDaemon = true; start() }
                 if (!proc.waitFor(12, TimeUnit.SECONDS)) {
                     proc.destroyForcibly()
+                    readerThread.join(250)
                     log("[PostToolUse:${rule.id}] timed out after 12s")
                 } else {
+                    readerThread.join(500)
+                    val out = buf.toString().trim()
                     log("[PostToolUse:${rule.id}] exit=${proc.exitValue()} ${out.take(240)}")
                 }
             }.onFailure { e ->
