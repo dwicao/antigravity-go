@@ -12,6 +12,7 @@ import 'package:antigravity_go/state/side_panel_state.dart';
 import 'package:antigravity_go/state/workspace_diff_state.dart';
 import 'package:antigravity_go/theme/app_theme.dart';
 import 'package:antigravity_go/ui/chat/chat_composer_bar.dart';
+import 'package:antigravity_go/ui/chat/chat_screen.dart';
 import 'package:antigravity_go/ui/chat/message_bubble.dart';
 import 'package:antigravity_go/ui/chat/message_metrics_footer.dart';
 import 'package:antigravity_go/ui/chat/workspace_changes_banner.dart';
