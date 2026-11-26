@@ -2441,23 +2441,16 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     final settings = ref.read(settingsProvider);
     final harness = ref.read(harnessProvider);
     final activeCustom = ref.read(activeCustomProviderProvider);
-    final turnRoute = activeCustom == null
-        ? HarnessTurnRouter.routeTurn(
-            prompt: prompt,
-            selectedModelId: settings.selectedModelId,
-            selectedEffort: settings.reasoningEffort,
-            speedTierName: settings.speedTier.name,
-            smartRoutingEnabled: harness.smartRoutingEnabled,
-            hasAttachments: attachments.isNotEmpty,
-          )
-        : (
-            modelId: activeCustom.modelId,
-            effort: '',
-            skipRepoMap: false,
-            downgraded: false,
-          );
-    final activeModelId = turnRoute.modelId;
-    final activeEffort = turnRoute.effort;
+    final compactRoute = (activeCustom == null &&
+            sshHost == null &&
+            harness.quotaSaverEnabled)
+        ? HarnessTurnRouter.resolveCompactionRoute()
+        : null;
+    final activeModelId =
+        activeCustom?.modelId ?? compactRoute?.modelId ?? settings.selectedModelId;
+    final activeEffort = activeCustom != null
+        ? ''
+        : (compactRoute?.effort ?? settings.reasoningEffort);
 
     if (activeCustom == null && sshHost == null && !runtime.status.isReady) {
       final fallback = HarnessContextMonitor.buildFallbackCompactionSummary(
