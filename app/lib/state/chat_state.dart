@@ -2607,7 +2607,9 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     final compactRoute = (activeCustom == null &&
             sshHost == null &&
             harness.quotaSaverEnabled)
-        ? HarnessTurnRouter.resolveCompactionRoute()
+        ? HarnessTurnRouter.resolveCompactionRoute(
+            selectedModelId: settings.selectedModelId,
+          )
         : null;
     final activeModelId =
         activeCustom?.modelId ?? compactRoute?.modelId ?? settings.selectedModelId;

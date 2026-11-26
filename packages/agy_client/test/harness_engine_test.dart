@@ -265,20 +265,41 @@ void main() {
   });
 
   group('HarnessTurnRouter & quota-capped monitor', () {
-    test('routes ultrafast, fast, trivial prompts, and compaction cleanly', () {
-      final compactRoute = HarnessTurnRouter.resolveCompactionRoute();
-      expect(compactRoute.modelId, HarnessTurnRouter.fastCompactionModelId);
-      expect(compactRoute.effort, 'low');
+    test('preserves selected model across ultrafast, fast, and compaction routes',
+        () {
+      final hydrogenCompact = HarnessTurnRouter.resolveCompactionRoute(
+        selectedModelId: 'gemini-4-hydrogen',
+      );
+      expect(hydrogenCompact.modelId, 'gemini-4-hydrogen');
+      expect(hydrogenCompact.effort, 'low');
 
-      final ultrafast = HarnessTurnRouter.routeTurn(
-        prompt: 'Implement full OAuth login across 4 files',
+      final orchestratorCompact = HarnessTurnRouter.resolveCompactionRoute(
         selectedModelId: 'Orchestrator (Neon)',
-        selectedEffort: 'high',
+      );
+      expect(orchestratorCompact.modelId, 'Orchestrator (Neon)');
+      expect(orchestratorCompact.effort, isEmpty);
+
+      final ultrafastHydrogen = HarnessTurnRouter.routeTurn(
+        prompt: 'Implement full OAuth login across 4 files',
+        selectedModelId: 'gemini-4-hydrogen',
+        selectedEffort: 'xhigh',
         speedTierName: 'ultrafast',
         smartRoutingEnabled: true,
       );
-      expect(ultrafast.modelId, 'gemini-3.8-flash');
-      expect(ultrafast.effort, 'low');
+      expect(ultrafastHydrogen.modelId, 'gemini-4-hydrogen');
+      expect(ultrafastHydrogen.effort, 'low');
+      expect(ultrafastHydrogen.downgraded, isTrue);
+
+      final ultrafastOrchestrator = HarnessTurnRouter.routeTurn(
+        prompt: 'Implement full OAuth login across 4 files',
+        selectedModelId: 'Orchestrator (Neon)',
+        selectedEffort: '',
+        speedTierName: 'ultrafast',
+        smartRoutingEnabled: true,
+      );
+      expect(ultrafastOrchestrator.modelId, 'Orchestrator (Neon)');
+      expect(ultrafastOrchestrator.effort, '');
+      expect(ultrafastOrchestrator.downgraded, isFalse);
 
       final fast = HarnessTurnRouter.routeTurn(
         prompt: 'Refactor lib/state/chat_state.dart cleanly',
@@ -287,31 +308,10 @@ void main() {
         speedTierName: 'fast',
         smartRoutingEnabled: true,
       );
-      expect(fast.modelId, 'gemini-4-hydrogen');
+      expect(fast.modelId, 'gemini-4-neon');
       expect(fast.effort, 'medium');
       expect(fast.skipRepoMap, isFalse);
-
-      final trivial = HarnessTurnRouter.routeTurn(
-        prompt: 'halo apa kabar',
-        selectedModelId: 'Orchestrator (Neon)',
-        selectedEffort: 'high',
-        speedTierName: 'regular',
-        smartRoutingEnabled: true,
-      );
-      expect(trivial.modelId, 'gemini-4-hydrogen');
-      expect(trivial.effort, 'low');
-      expect(trivial.skipRepoMap, isTrue);
-
-      final heavy = HarnessTurnRouter.routeTurn(
-        prompt: 'Fix race condition in app/lib/state/chat_state.dart and add unit tests',
-        selectedModelId: 'gemini-4-neon',
-        selectedEffort: 'high',
-        speedTierName: 'regular',
-        smartRoutingEnabled: true,
-      );
-      expect(heavy.modelId, 'gemini-4-neon');
-      expect(heavy.effort, 'high');
-      expect(heavy.skipRepoMap, isFalse);
+      expect(fast.downgraded, isTrue);
     });
 
     test('caps auto-compact threshold at maxCompactTokens on 1M context models', () {
@@ -381,30 +381,79 @@ void main() {
       );
     });
 
-    test('routes conversational acks to Flash Low under quotaSaverEnabled', () {
+    test('adapts thinking effort across low/medium/high/extra while obeying selected model',
+        () {
       final ack = HarnessTurnRouter.routeTurn(
         prompt: 'ok siap makasih',
-        selectedModelId: 'Orchestrator (Neon)',
-        selectedEffort: 'high',
+        selectedModelId: 'gemini-4-hydrogen',
+        selectedEffort: 'medium',
         speedTierName: 'regular',
         smartRoutingEnabled: true,
         quotaSaverEnabled: true,
       );
-      expect(ack.modelId, HarnessTurnRouter.fastCompactionModelId);
+      expect(ack.modelId, 'gemini-4-hydrogen');
       expect(ack.effort, 'low');
       expect(ack.skipRepoMap, isTrue);
       expect(ack.downgraded, isTrue);
 
-      final shortQuestion = HarnessTurnRouter.routeTurn(
+      final standardQuestion = HarnessTurnRouter.routeTurn(
         prompt: 'what is riverpod?',
-        selectedModelId: 'Orchestrator (Neon)',
-        selectedEffort: 'high',
+        selectedModelId: 'gemini-4-hydrogen',
+        selectedEffort: 'medium',
         speedTierName: 'regular',
         smartRoutingEnabled: true,
         quotaSaverEnabled: true,
       );
-      expect(shortQuestion.modelId, HarnessTurnRouter.fastCodingModelId);
-      expect(shortQuestion.effort, 'low');
+      expect(standardQuestion.modelId, 'gemini-4-hydrogen');
+      expect(standardQuestion.effort, 'medium');
+      expect(standardQuestion.downgraded, isFalse);
+
+      final complexFix = HarnessTurnRouter.routeTurn(
+        prompt: 'Fix typo in app/lib/state/chat_state.dart and add unit tests',
+        selectedModelId: 'gemini-4-hydrogen',
+        selectedEffort: 'medium',
+        speedTierName: 'regular',
+        smartRoutingEnabled: true,
+        quotaSaverEnabled: true,
+      );
+      expect(complexFix.modelId, 'gemini-4-hydrogen');
+      expect(complexFix.effort, 'high');
+      expect(complexFix.skipRepoMap, isFalse);
+      expect(complexFix.downgraded, isFalse);
+
+      final deepAudit = HarnessTurnRouter.routeTurn(
+        prompt:
+            'Audit the entire codebase for security leaks and redesign multi-file auth architecture end-to-end',
+        selectedModelId: 'gemini-4-hydrogen',
+        selectedEffort: 'medium',
+        speedTierName: 'regular',
+        smartRoutingEnabled: true,
+        quotaSaverEnabled: true,
+      );
+      expect(deepAudit.modelId, 'gemini-4-hydrogen');
+      expect(deepAudit.effort, 'xhigh');
+      expect(deepAudit.downgraded, isFalse);
+
+      final cappedModel = HarnessTurnRouter.routeTurn(
+        prompt: '/plan migrate state management across modules',
+        selectedModelId: 'gemini-4-carbon',
+        selectedEffort: 'medium',
+        speedTierName: 'regular',
+        smartRoutingEnabled: true,
+      );
+      expect(cappedModel.modelId, 'gemini-4-carbon');
+      expect(cappedModel.effort, 'high');
+
+      final manualOnly = HarnessTurnRouter.routeTurn(
+        prompt: 'ok siap makasih',
+        selectedModelId: 'gemini-4-hydrogen',
+        selectedEffort: 'high',
+        speedTierName: 'regular',
+        smartRoutingEnabled: false,
+      );
+      expect(manualOnly.modelId, 'gemini-4-hydrogen');
+      expect(manualOnly.effort, 'high');
+      expect(manualOnly.downgraded, isFalse);
     });
 
     test('RepoMapBuilder uses BFS so deep early dirs do not starve sibling modules', () async {

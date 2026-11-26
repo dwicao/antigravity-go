@@ -279,7 +279,7 @@ class _HarnessPageState extends ConsumerState<HarnessPage> {
                   secondary: const Icon(Icons.savings_outlined, size: 20),
                   title: const Text('Quota Saver Mode'),
                   subtitle: const Text(
-                    'Adaptive 256K–800K auto-compact, Flash for /compact & minimal MCP tools',
+                    'Adaptive 256K–800K auto-compact, Low effort for /compact & minimal MCP tools',
                   ),
                   value: harness.quotaSaverEnabled,
                   onChanged: (v) =>
@@ -291,7 +291,7 @@ class _HarnessPageState extends ConsumerState<HarnessPage> {
                   secondary: const Icon(Icons.alt_route_rounded, size: 20),
                   title: const Text('Smart Effort Routing'),
                   subtitle: const Text(
-                    'Routes short Q&A to Hydrogen Low & greetings/acks to Flash Low',
+                    'Adapts Thinking Effort (Low–Extra) to prompt complexity while keeping your selected model',
                   ),
                   value: harness.smartRoutingEnabled,
                   onChanged: (v) =>
@@ -313,11 +313,11 @@ class _HarnessPageState extends ConsumerState<HarnessPage> {
                       Text(
                         switch (settings.speedTier) {
                           InferenceSpeedTier.regular =>
-                            'Regular: Uses your selected model & effort (smart-routed on trivial prompts)',
+                            'Regular: Keeps your selected model & adapts Thinking Effort (Low–Extra) to complexity',
                           InferenceSpeedTier.fast =>
-                            'Fast: Routes heavy Gemini models to Hydrogen + Medium/Low effort',
+                            'Fast: Keeps your selected model & caps Thinking Effort at Medium (Low on simple prompts)',
                           InferenceSpeedTier.ultrafast =>
-                            'Ultrafast: Uses Gemini 3.8 Flash + Low effort for maximum speed & zero Gemini 4 quota',
+                            'Ultrafast: Keeps your selected model with Low Thinking Effort for fastest responses',
                         },
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant,
@@ -387,7 +387,7 @@ class _HarnessPageState extends ConsumerState<HarnessPage> {
                   title: const Text('Auto-Compact History'),
                   subtitle: Text(
                     harness.quotaSaverEnabled
-                        ? 'Adaptive auto-compact (256K min · up to 800K for refactors) via Flash Low'
+                        ? 'Adaptive auto-compact (256K min · up to 800K for refactors) via Low effort'
                         : 'Automatically summarizes context when usage exceeds 80%',
                   ),
                   value: harness.autoCompactEnabled,

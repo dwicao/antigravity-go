@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:math' as math;
 
+import '../models/agy_model.dart';
+
 /// Kinds of tool-execution loops caught by [HarnessLoopDetector].
 enum HarnessLoopKind {
   none,
@@ -944,14 +946,23 @@ ${pendingNote}Do NOT blindly trust prior claims. Independently inspect the works
 /// Deterministic cost/latency router that maps speed tiers, trivial prompts, and
 /// compaction turns onto lighter models and lower reasoning effort without
 /// downgrading multi-file coding or debugging tasks.
+/// Routes prompt turns cleanly across Thinking Effort tiers while strictly
+/// preserving the user's selected model (never switching to hardcoded models).
 class HarnessTurnRouter {
   const HarnessTurnRouter._();
 
-  static const String fastCompactionModelId = 'gemini-3.8-flash';
-  static const String fastCodingModelId = 'gemini-4-hydrogen';
+  static final RegExp _deepCommandRe = RegExp(
+    r'^/(plan|boost|goal|teamwork|swarm)\b',
+    caseSensitive: false,
+  );
+
+  static final RegExp _extraComplexWorkRe = RegExp(
+    r'\b(architect|architecture|audit|redesign|rewrite|migrate|migration|concurrency|race\s+condition|deadlock|memory\s+leak|security|cryptograph|end[- ]to[- ]end|full[- ]stack|multi[- ]?file|root\s+cause|comprehensive|deep\s+dive|from\s+scratch|entire\s+codebase|keseluruhan|arsitektur|migrasi|keamanan)\b',
+    caseSensitive: false,
+  );
 
   static final RegExp _complexWorkRe = RegExp(
-    r'\b(fix|bug|error|fail|crash|refactor|implement|build|create|add|edit|write|update|remove|delete|test|ci|deploy|release|debug|review|audit|architect|optimize|migrate|investigate|research|subagent|workflow|perbaiki|buat|ubah|tambah|hapus|cek)\b',
+    r'\b(fix|bug|error|fail|crash|refactor|implement|build|create|add|edit|write|update|remove|delete|test|ci|deploy|release|debug|review|optimize|investigate|research|subagent|workflow|perbaiki|buat|ubah|tambah|hapus|cek)\b',
     caseSensitive: false,
   );
 
@@ -988,12 +999,14 @@ class HarnessTurnRouter {
     if (trimmed.isEmpty || trimmed.length > 80) return false;
     if (trimmed.contains('\n')) return false;
     if (_pathOrCodeRe.hasMatch(trimmed)) return false;
-    if (_complexWorkRe.hasMatch(trimmed)) return false;
+    if (_complexWorkRe.hasMatch(trimmed) || _extraComplexWorkRe.hasMatch(trimmed)) {
+      return false;
+    }
     return true;
   }
 
   /// True for short greetings/acknowledgments (e.g. "halo", "ok", "thanks")
-  /// that do not require Gemini 4 reasoning quota.
+  /// that only need Low Thinking Effort.
   static bool isConversationalAck(String prompt) {
     final trimmed = prompt.trim();
     if (trimmed.isEmpty || trimmed.length > 40) return false;
@@ -1003,8 +1016,79 @@ class HarnessTurnRouter {
     return true;
   }
 
-  static ({String modelId, String effort}) resolveCompactionRoute() {
-    return (modelId: fastCompactionModelId, effort: 'low');
+  static int _effortRank(String effort) {
+    switch (effort.trim().toLowerCase()) {
+      case 'low':
+        return 1;
+      case 'medium':
+        return 2;
+      case 'high':
+        return 3;
+      case 'xhigh':
+        return 4;
+      case 'max':
+        return 5;
+      default:
+        return 0;
+    }
+  }
+
+  /// Resolves compaction route while strictly keeping [selectedModelId] and
+  /// dropping Thinking Effort to Low (or empty when the model ignores effort).
+  static ({String modelId, String effort}) resolveCompactionRoute({
+    required String selectedModelId,
+  }) {
+    final modelInfo = AgyModelCatalog.resolve(selectedModelId);
+    return (
+      modelId: selectedModelId,
+      effort: modelInfo.supportsEffort ? 'low' : '',
+    );
+  }
+
+  /// Classifies prompt complexity into a target Thinking Effort tier
+  /// (`low`, `medium`, `high`, `xhigh`), honoring [supportsExtraEffort].
+  static String classifyEffortForPrompt({
+    required String prompt,
+    required bool supportsExtraEffort,
+    bool hasAttachments = false,
+  }) {
+    final trimmed = prompt.trim();
+    if (trimmed.isEmpty) return 'low';
+
+    if (!hasAttachments &&
+        trimmed.startsWith('/') &&
+        !_deepCommandRe.hasMatch(trimmed)) {
+      return 'low';
+    }
+
+    if (!hasAttachments && isConversationalAck(trimmed)) {
+      return 'low';
+    }
+
+    final hasDeepSignal = _deepCommandRe.hasMatch(trimmed) ||
+        _extraComplexWorkRe.hasMatch(trimmed) ||
+        (trimmed.length >= 240 &&
+            (_complexWorkRe.hasMatch(trimmed) || _pathOrCodeRe.hasMatch(trimmed))) ||
+        (trimmed.contains('\n') &&
+            trimmed.length >= 180 &&
+            _complexWorkRe.hasMatch(trimmed) &&
+            _pathOrCodeRe.hasMatch(trimmed));
+
+    if (hasDeepSignal) {
+      return supportsExtraEffort ? 'xhigh' : 'high';
+    }
+
+    final hasComplexSignal = hasAttachments ||
+        _complexWorkRe.hasMatch(trimmed) ||
+        trimmed.length >= 160 ||
+        (_pathOrCodeRe.hasMatch(trimmed) && trimmed.length >= 40) ||
+        (trimmed.contains('\n') && trimmed.length >= 80);
+
+    if (hasComplexSignal) {
+      return 'high';
+    }
+
+    return 'medium';
   }
 
   static ({String modelId, String effort, bool skipRepoMap, bool downgraded})
@@ -1018,73 +1102,49 @@ class HarnessTurnRouter {
     bool hasAttachments = false,
   }) {
     final skipRepoMap = !hasAttachments && shouldSkipRepoMap(prompt);
+    final modelInfo = AgyModelCatalog.resolve(selectedModelId);
     final tier = speedTierName.trim().toLowerCase();
-    final lowerModel = selectedModelId.trim().toLowerCase();
+
+    if (!modelInfo.supportsEffort) {
+      return (
+        modelId: selectedModelId,
+        effort: selectedEffort,
+        skipRepoMap: skipRepoMap,
+        downgraded: false,
+      );
+    }
+
+    final normalizedSelected = selectedEffort.trim().toLowerCase();
+    final String nextEffort;
 
     if (tier == 'ultrafast') {
-      return (
-        modelId: fastCompactionModelId,
-        effort: 'low',
-        skipRepoMap: skipRepoMap,
-        downgraded: lowerModel != fastCompactionModelId || selectedEffort != 'low',
-      );
-    }
-
-    if (tier == 'fast') {
-      final isHeavyGemini = lowerModel.contains('orchestrator') ||
-          lowerModel.contains('neon') ||
-          lowerModel.contains('carbon') ||
-          lowerModel.contains('argon');
-      final nextModel = isHeavyGemini ? fastCodingModelId : selectedModelId;
-      final nextEffort = (selectedEffort == 'xhigh' ||
-              selectedEffort == 'max' ||
-              selectedEffort == 'high')
-          ? 'medium'
-          : 'low';
-      return (
-        modelId: nextModel,
-        effort: nextEffort,
-        skipRepoMap: skipRepoMap,
-        downgraded: nextModel != selectedModelId || nextEffort != selectedEffort,
-      );
-    }
-
-    if (smartRoutingEnabled && !hasAttachments && isTrivialPrompt(prompt)) {
-      final isGeminiFamily = lowerModel.contains('gemini') ||
-          lowerModel.contains('orchestrator') ||
-          lowerModel.contains('neon') ||
-          lowerModel.contains('carbon') ||
-          lowerModel.contains('argon') ||
-          lowerModel.contains('hydrogen');
-      if (quotaSaverEnabled &&
-          isGeminiFamily &&
-          isConversationalAck(prompt)) {
-        return (
-          modelId: fastCompactionModelId,
-          effort: 'low',
-          skipRepoMap: true,
-          downgraded:
-              lowerModel != fastCompactionModelId || selectedEffort != 'low',
+      nextEffort = 'low';
+    } else if (tier == 'fast') {
+      if (smartRoutingEnabled) {
+        final classified = classifyEffortForPrompt(
+          prompt: prompt,
+          supportsExtraEffort: modelInfo.supportsExtraEffort,
+          hasAttachments: hasAttachments,
         );
+        nextEffort = classified == 'low' ? 'low' : 'medium';
+      } else {
+        nextEffort = normalizedSelected == 'low' ? 'low' : 'medium';
       }
-      final isHeavyGemini = lowerModel.contains('orchestrator') ||
-          lowerModel.contains('neon') ||
-          lowerModel.contains('carbon') ||
-          lowerModel.contains('argon');
-      final nextModel = isHeavyGemini ? fastCodingModelId : selectedModelId;
-      return (
-        modelId: nextModel,
-        effort: 'low',
-        skipRepoMap: true,
-        downgraded: nextModel != selectedModelId || selectedEffort != 'low',
+    } else if (smartRoutingEnabled) {
+      nextEffort = classifyEffortForPrompt(
+        prompt: prompt,
+        supportsExtraEffort: modelInfo.supportsExtraEffort,
+        hasAttachments: hasAttachments,
       );
+    } else {
+      nextEffort = selectedEffort;
     }
 
     return (
       modelId: selectedModelId,
-      effort: selectedEffort,
+      effort: nextEffort,
       skipRepoMap: skipRepoMap,
-      downgraded: false,
+      downgraded: _effortRank(nextEffort) < _effortRank(selectedEffort),
     );
   }
 }
