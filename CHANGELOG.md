@@ -2,6 +2,14 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.51] - 2026-11-26
+
+### Fixed & Improved
+- **Long-Lived OAuth Token Keep-Alive & Cross-Device Export Persistence (`OAuthTokenManager`):**
+  - Eliminated next-day `Authentication required` (`-32000`) expirations after importing `.agycreds.json` bundles or waking from sleep by proactively refreshing `antigravity-oauth-token` via Android's native HTTPS stack (`https://oauth2.googleapis.com/token`) whenever access tokens are expired or within 15 minutes of expiry.
+  - Updated `MultiAccountVault` to refresh active and dormant accounts automatically during `exportAccount`, `importEncryptedBundle`, `switchAccount`, and periodic vault maintenance (`refreshSavedAccountsKeepAlive`), keeping exported bundles and saved multi-account slots continuously ready.
+  - Wired proactive pre-spawn token refreshes before `prewarmAcpWorker`, `startTurn`, `verifyAuth`, and `probeUsage`, added transparent single-retry self-healing on `-32000 Authentication required` in `AcpSessionManager`, added 35-minute foreground keep-alive + network-recovery refresh hooks in `AgyService` and `HomeShell` resume, and prevented `logout()` from triggering remote CLI `/logout` calls that could disturb exported sessions on other devices.
+
 ## [1.0.50] - 2026-11-26
 
 ### Performance & Reliability
