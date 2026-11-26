@@ -113,6 +113,8 @@ class _DiffReviewViewState extends ConsumerState<DiffReviewView> {
   }
 
   String _activeCwd() {
+    final detected = ref.read(workspaceDiffProvider).cwd.trim();
+    if (detected.isNotEmpty) return detected;
     final sessionWs =
         ref.read(sessionsProvider).activeSession?.workspacePath.trim() ?? '';
     if (sessionWs.isNotEmpty) return sessionWs;

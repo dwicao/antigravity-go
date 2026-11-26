@@ -1493,6 +1493,11 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         final nextSteps = current.text.isEmpty && resolvedText.trim().isNotEmpty
             ? _appendTextStep(current.steps, resolvedText)
             : current.steps;
+        final finalizedTools =
+            _finalizeTools(current.tools, failed: hasErrorResult);
+        final resolvedChangedFiles = current.changedFiles.isNotEmpty
+            ? current.changedFiles
+            : extractChangedFilesFromTools(finalizedTools);
         _replaceMessageInSession(
           session.id,
           idx,
@@ -1503,7 +1508,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
             contextTokens: resolvedUsage.contextTokens > 0
                 ? resolvedUsage.contextTokens
                 : current.contextTokens,
-            tools: _finalizeTools(current.tools, failed: hasErrorResult),
+            tools: finalizedTools,
+            changedFiles: resolvedChangedFiles,
             durationSeconds: stats.durationSec,
             tokensPerSecond: stats.tokPerSec,
             modelId: _turnModelId[assistantId] ?? current.modelId,

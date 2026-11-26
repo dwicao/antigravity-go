@@ -90,6 +90,7 @@ void main() {
       expect(tc.callId, 'tc-9');
       expect(tc.state, ToolCallState.failed);
       expect(tc.parameters['path'], 'lib/a.dart');
+      expect(tc.output, contains('@@ -1,1 +1,1 @@'));
       expect(tc.output, contains('-old'));
       expect(tc.output, contains('+new'));
 

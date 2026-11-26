@@ -1166,25 +1166,55 @@ am start -a android.intent.action.VIEW -d "${'$'}url" >/dev/null 2>&1 || echo "[
         return runCatching { readFuture.get(2, TimeUnit.SECONDS) }.getOrDefault("")
     }
 
+    private fun resolveExecutable(cmd: String): String {
+        if (cmd.contains('/')) return cmd
+        val inBin = File(binDir, cmd)
+        if (inBin.canExecute()) return inBin.absolutePath
+        if (cmd == "git") {
+            val optGit = File(runtimeDir, "opt/git/data/data/com.termux/files/usr/bin/git")
+            if (optGit.canExecute()) return optGit.absolutePath
+        }
+        return cmd
+    }
+
     private fun runCapturedArgs(
         args: List<String>,
         cwd: File,
         extraEnv: Map<String, String> = emptyMap(),
         timeoutSeconds: Long = 30,
     ): Pair<Int, String> {
-        val pb = ProcessBuilder(args)
-        pb.directory(cwd)
-        pb.environment().putAll(buildEnv(extraEnv))
-        pb.redirectErrorStream(true)
-        val proc = pb.start()
-        val readFuture = executor.submit<String> { proc.inputStream.bufferedReader().use { it.readText() } }
-        val finished = proc.waitFor(timeoutSeconds, TimeUnit.SECONDS)
-        val code = if (finished) proc.exitValue() else {
-            proc.destroyForcibly()
-            124
+        if (args.isEmpty()) return 1 to ""
+        if (!cwd.exists() || !cwd.isDirectory) return 1 to ""
+        val resolvedCmd = resolveExecutable(args.first())
+        val effectiveArgs = listOf(resolvedCmd) + args.drop(1)
+        return try {
+            val pb = ProcessBuilder(effectiveArgs)
+            pb.directory(cwd)
+            val env = buildEnv(extraEnv).toMutableMap()
+            if (args.first() == "git" && resolvedCmd.contains("/opt/git/")) {
+                val usr = File(runtimeDir, "opt/git/data/data/com.termux/files/usr")
+                val ld = env["LD_LIBRARY_PATH"].orEmpty()
+                val usrLib = File(usr, "lib").absolutePath
+                env["LD_LIBRARY_PATH"] = if (ld.isBlank()) usrLib else "$usrLib:$ld"
+                env.putIfAbsent("GIT_EXEC_PATH", File(usr, "libexec/git-core").absolutePath)
+                env.putIfAbsent("GIT_TEMPLATE_DIR", File(usr, "share/git-core/templates").absolutePath)
+                env.putIfAbsent("GIT_CONFIG_NOSYSTEM", "1")
+                env.putIfAbsent("GIT_ATTR_NOSYSTEM", "1")
+            }
+            pb.environment().putAll(env)
+            pb.redirectErrorStream(true)
+            val proc = pb.start()
+            val readFuture = executor.submit<String> { proc.inputStream.bufferedReader().use { it.readText() } }
+            val finished = proc.waitFor(timeoutSeconds, TimeUnit.SECONDS)
+            val code = if (finished) proc.exitValue() else {
+                proc.destroyForcibly()
+                124
+            }
+            val out = runCatching { readFuture.get(2, TimeUnit.SECONDS) }.getOrDefault("")
+            code to out
+        } catch (t: Throwable) {
+            127 to (t.message ?: t.toString())
         }
-        val out = runCatching { readFuture.get(2, TimeUnit.SECONDS) }.getOrDefault("")
-        return code to out
     }
 
     fun startTerminalSession(sessionId: String, cwd: String?, cols: Int = 80, rows: Int = 24) =

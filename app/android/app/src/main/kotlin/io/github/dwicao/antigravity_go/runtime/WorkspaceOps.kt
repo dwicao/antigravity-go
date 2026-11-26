@@ -29,8 +29,16 @@ internal class WorkspaceOps(
 
     fun gitDiff(cwd: String?): Map<String, String> {
         val dir = if (!cwd.isNullOrBlank()) File(cwd) else workspaceDir
+        if (!dir.exists() || !dir.isDirectory) {
+            return mapOf(
+                "status" to "",
+                "diff" to "",
+                "numstat" to "",
+                "branch" to "",
+            )
+        }
         val (insideCode, insideOut) = runCapturedArgs(
-            listOf("git", "rev-parse", "--is-inside-work-tree"),
+            gitCmd(null, "rev-parse", "--is-inside-work-tree"),
             dir,
             emptyMap(),
             15,
@@ -80,15 +88,15 @@ internal class WorkspaceOps(
             diffText = d
             numstatText = n
         } else if (hasHead) {
-            val (_, d) = runCapturedArgs(listOf("git", "diff", "HEAD"), dir, emptyMap(), 25)
-            val (_, n) = runCapturedArgs(listOf("git", "diff", "--numstat", "HEAD"), dir, emptyMap(), 25)
+            val (_, d) = runCapturedArgs(gitCmd(null, "diff", "HEAD"), dir, emptyMap(), 25)
+            val (_, n) = runCapturedArgs(gitCmd(null, "diff", "--numstat", "HEAD"), dir, emptyMap(), 25)
             diffText = d
             numstatText = n
         } else {
-            val (_, d1) = runCapturedArgs(listOf("git", "diff"), dir, emptyMap(), 25)
-            val (_, d2) = runCapturedArgs(listOf("git", "diff", "--cached"), dir, emptyMap(), 25)
-            val (_, n1) = runCapturedArgs(listOf("git", "diff", "--numstat"), dir, emptyMap(), 25)
-            val (_, n2) = runCapturedArgs(listOf("git", "diff", "--cached", "--numstat"), dir, emptyMap(), 25)
+            val (_, d1) = runCapturedArgs(gitCmd(null, "diff"), dir, emptyMap(), 25)
+            val (_, d2) = runCapturedArgs(gitCmd(null, "diff", "--cached"), dir, emptyMap(), 25)
+            val (_, n1) = runCapturedArgs(gitCmd(null, "diff", "--numstat"), dir, emptyMap(), 25)
+            val (_, n2) = runCapturedArgs(gitCmd(null, "diff", "--cached", "--numstat"), dir, emptyMap(), 25)
             diffText = listOf(d1.trim(), d2.trim()).filter { it.isNotEmpty() }.joinToString("\n")
             numstatText = listOf(n1.trim(), n2.trim()).filter { it.isNotEmpty() }.joinToString("\n")
         }
@@ -96,7 +104,7 @@ internal class WorkspaceOps(
         val branch = if (shadowDir != null) {
             "shadow-checkpoint"
         } else {
-            val (_, b) = runCapturedArgs(listOf("git", "rev-parse", "--abbrev-ref", "HEAD"), dir, emptyMap(), 15)
+            val (_, b) = runCapturedArgs(gitCmd(null, "rev-parse", "--abbrev-ref", "HEAD"), dir, emptyMap(), 15)
             b.trim()
         }
 
@@ -161,28 +169,28 @@ internal class WorkspaceOps(
     ): Map<String, Any?> {
         val dir = if (!cwd.isNullOrBlank()) File(cwd) else workspaceDir
         val safeMsg = message.trim().ifEmpty { "Update workspace changes" }
-        val (_, branchRaw) = runCapturedArgs(listOf("git", "rev-parse", "--abbrev-ref", "HEAD"), dir, emptyMap(), 30)
+        val (_, branchRaw) = runCapturedArgs(gitCmd(null, "rev-parse", "--abbrev-ref", "HEAD"), dir, emptyMap(), 30)
         val branch = branchRaw.trim()
         val out = StringBuilder()
         var commitOk = true
         if (stageAll) {
-            val (_, addOut) = runCapturedArgs(listOf("git", "add", "-A"), dir, emptyMap(), 30)
+            val (_, addOut) = runCapturedArgs(gitCmd(null, "add", "-A"), dir, emptyMap(), 30)
             if (addOut.isNotBlank()) out.appendLine(addOut.trim())
         }
-        val (commitCode, commitOut) = runCapturedArgs(listOf("git", "commit", "-m", safeMsg), dir, emptyMap(), 30)
+        val (commitCode, commitOut) = runCapturedArgs(gitCmd(null, "commit", "-m", safeMsg), dir, emptyMap(), 30)
         if (commitOut.isNotBlank()) out.appendLine(commitOut.trim())
         if (commitCode != 0) {
             commitOk = commitOut.contains("nothing to commit", ignoreCase = true)
         }
-        val (_, headRaw) = runCapturedArgs(listOf("git", "rev-parse", "--short", "HEAD"), dir, emptyMap(), 30)
+        val (_, headRaw) = runCapturedArgs(gitCmd(null, "rev-parse", "--short", "HEAD"), dir, emptyMap(), 30)
         val headHash = headRaw.trim()
-        val (_, numstat) = runCapturedArgs(listOf("git", "show", "--numstat", "--format="), dir, emptyMap(), 30)
-        val (_, nameStatus) = runCapturedArgs(listOf("git", "show", "--name-status", "--format="), dir, emptyMap(), 30)
-        val (_, commitDiffRaw) = runCapturedArgs(listOf("git", "show", "--format="), dir, emptyMap(), 30)
+        val (_, numstat) = runCapturedArgs(gitCmd(null, "show", "--numstat", "--format="), dir, emptyMap(), 30)
+        val (_, nameStatus) = runCapturedArgs(gitCmd(null, "show", "--name-status", "--format="), dir, emptyMap(), 30)
+        val (_, commitDiffRaw) = runCapturedArgs(gitCmd(null, "show", "--format="), dir, emptyMap(), 30)
         val commitDiff = commitDiffRaw.lineSequence().take(800).joinToString("\n")
         var pushOk = !push
         if (push && commitOk) {
-            val (pushCode, pushOut) = runCapturedArgs(listOf("git", "push"), dir, emptyMap(), 60)
+            val (pushCode, pushOut) = runCapturedArgs(gitCmd(null, "push"), dir, emptyMap(), 60)
             if (pushOut.isNotBlank()) out.appendLine(pushOut.trim())
             pushOk = pushCode == 0
         }
@@ -262,9 +270,9 @@ internal class WorkspaceOps(
 
     private fun gitCmd(shadowDir: File?, vararg args: String): List<String> {
         return if (shadowDir != null) {
-            listOf("git", "--git-dir=${shadowDir.absolutePath}") + args.toList()
+            listOf("git", "-c", "safe.directory=*", "--git-dir=${shadowDir.absolutePath}") + args.toList()
         } else {
-            listOf("git") + args.toList()
+            listOf("git", "-c", "safe.directory=*") + args.toList()
         }
     }
 
@@ -339,7 +347,7 @@ internal class WorkspaceOps(
             return mapOf("ok" to false, "reason" to "Workspace directory does not exist")
         }
         val (insideCode, insideOut) = runCapturedArgs(
-            listOf("git", "rev-parse", "--is-inside-work-tree"),
+            gitCmd(null, "rev-parse", "--is-inside-work-tree"),
             dir,
             emptyMap(),
             30,
@@ -352,7 +360,7 @@ internal class WorkspaceOps(
                 ?: return mapOf("ok" to false, "reason" to "Failed to initialize shadow git")
         } else {
             val (headCode, headOut) = runCapturedArgs(
-                listOf("git", "rev-parse", "--verify", "HEAD"),
+                gitCmd(null, "rev-parse", "--verify", "HEAD"),
                 dir,
                 emptyMap(),
                 30,
@@ -415,7 +423,7 @@ internal class WorkspaceOps(
         }
         val dir = if (!cwd.isNullOrBlank()) File(cwd) else workspaceDir
         val (insideCode, insideOut) = runCapturedArgs(
-            listOf("git", "rev-parse", "--is-inside-work-tree"),
+            gitCmd(null, "rev-parse", "--is-inside-work-tree"),
             dir,
             emptyMap(),
             30,
@@ -497,7 +505,7 @@ internal class WorkspaceOps(
                 }
             }
             if (shadowDir == null) {
-                runCapturedArgs(listOf("git", "reset", "--mixed", baseHead), dir, emptyMap(), 30)
+                runCapturedArgs(gitCmd(null, "reset", "--mixed", baseHead), dir, emptyMap(), 30)
             } else {
                 runCapturedArgs(gitCmd(shadowDir, "update-ref", "HEAD", cleanRef), dir, emptyMap(), 15)
             }
@@ -510,12 +518,12 @@ internal class WorkspaceOps(
         }
 
         val (resetCode, resetOut) = runCapturedArgs(
-            listOf("git", "reset", "--hard", cleanRef),
+            gitCmd(null, "reset", "--hard", cleanRef),
             dir,
             emptyMap(),
             30,
         )
-        runCapturedArgs(listOf("git", "clean", "-fd"), dir, emptyMap(), 30)
+        runCapturedArgs(gitCmd(null, "clean", "-fd"), dir, emptyMap(), 30)
         return mapOf(
             "ok" to (resetCode == 0),
             "ref" to cleanRef,
@@ -532,7 +540,7 @@ internal class WorkspaceOps(
         return try {
             tmpPatch.writeText(patchText)
             val (code, out) = runCapturedArgs(
-                listOf("git", "apply", "-R", "--unidiff-zero", tmpPatch.absolutePath),
+                gitCmd(null, "apply", "-R", "--unidiff-zero", tmpPatch.absolutePath),
                 dir,
                 emptyMap(),
                 30,

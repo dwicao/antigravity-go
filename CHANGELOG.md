@@ -2,6 +2,12 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.38] - 2026-11-26
+
+### Fixed
+- **Git Execution on Android (`gitDiff` / `gitCommitAndPush` / `createCheckpoint`):** Resolved bare `"git"` executable against `runtime/bin/git` (`opt/git` fallback) in `RuntimeController.runCapturedArgs` so `ProcessBuilder` finds bundled `git` instead of failing on Android Zygote `PATH`, and passed `-c safe.directory=*` across `WorkspaceOps` git commands to prevent dubious-ownership failures on `/sdcard` repositories.
+- **Bottom-of-Chat Mini Diff & Turn Change Extraction:** Populated `changedFiles` directly on `AgyTurnResultEvent`, expanded `ChatTurnHelpers.extractChangedFilesFromTools` (`ReplacementChunks`, `oldText`/`newText`, `old_string`/`new_string`, ACP diff outputs) and `AcpCodec` diff hunk headers, caught `PlatformException` safely in `RuntimeBridge.gitDiffDetailed`, and searched active session, project folders, runtime root, and edited-file repo roots in `WorkspaceDiffNotifier`.
+
 ## [1.0.37] - 2026-11-26
 
 ### Changed

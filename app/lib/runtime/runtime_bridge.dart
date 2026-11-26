@@ -563,6 +563,13 @@ class RuntimeBridge {
         branch: '',
         files: const <FileChangeEntry>[],
       );
+    } on PlatformException {
+      return (
+        status: '',
+        diff: '',
+        branch: '',
+        files: const <FileChangeEntry>[],
+      );
     }
   }
 

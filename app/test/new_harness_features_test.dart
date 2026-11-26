@@ -1,5 +1,6 @@
 import 'package:agy_client/agy_client.dart';
 import 'package:antigravity_go/state/chat_models.dart';
+import 'package:antigravity_go/state/chat_turn_helpers.dart';
 import 'package:antigravity_go/state/custom_providers_state.dart';
 import 'package:antigravity_go/state/device_policy_state.dart';
 import 'package:antigravity_go/state/harness_state.dart';
@@ -286,6 +287,39 @@ diff --git a/app/lib/main.dart b/app/lib/main.dart
     expect(find.text('Files Changed'), findsOneWidget);
     expect(find.text('newInit();'), findsOneWidget);
     expect(find.text('oldInit();'), findsOneWidget);
+  });
+
+  test('ChatTurnHelpers extracts changed files from ReplacementChunks and ACP diff outputs', () {
+    final extracted = ChatTurnHelpers.extractChangedFilesFromTools([
+      const ChatToolStep(
+        id: 'tc-chunks',
+        toolName: 'multi_replace_file_content',
+        state: ToolCallState.completed,
+        parameters: {
+          'TargetFile': 'app/lib/a.dart',
+          'ReplacementChunks': [
+            {
+              'TargetContent': 'oldA()',
+              'ReplacementContent': 'newA()\nsecondA()',
+            },
+          ],
+        },
+      ),
+      const ChatToolStep(
+        id: 'tc-acp-diff',
+        toolName: 'File',
+        state: ToolCallState.completed,
+        parameters: {'path': 'app/lib/b.dart'},
+        output: '--- a/app/lib/b.dart\n+++ b/app/lib/b.dart\n@@ -1,1 +1,2 @@\n-oldB\n+newB1\n+newB2',
+      ),
+    ]);
+    expect(extracted, hasLength(2));
+    expect(extracted[0].path, 'app/lib/a.dart');
+    expect(extracted[0].added, 2);
+    expect(extracted[0].removed, 1);
+    expect(extracted[1].path, 'app/lib/b.dart');
+    expect(extracted[1].added, 2);
+    expect(extracted[1].removed, 1);
   });
 }
 

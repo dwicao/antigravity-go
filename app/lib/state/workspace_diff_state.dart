@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:agy_client/agy_client.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -6,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../remote/ssh_agy_runner.dart';
 import '../runtime/runtime_bridge.dart';
 import 'chat_state.dart';
+import 'chat_turn_helpers.dart';
 import 'hosts_state.dart';
 import 'projects_state.dart';
 import 'runtime_state.dart';
@@ -31,7 +33,9 @@ class WorkspaceDiffState {
   int get totalAdded => files.fold<int>(0, (s, f) => s + f.added);
   int get totalRemoved => files.fold<int>(0, (s, f) => s + f.removed);
   bool get hasChanges =>
-      files.isNotEmpty || unifiedDiff.trim().isNotEmpty || status.trim().isNotEmpty;
+      files.isNotEmpty ||
+      unifiedDiff.trim().isNotEmpty ||
+      status.trim().isNotEmpty;
 
   WorkspaceDiffState copyWith({
     bool? loading,
@@ -90,7 +94,7 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
       },
     );
     ref.listen<int>(
-      chatProvider.select((c) => _latestChangedFilesSignature(c.messages)),
+      chatProvider.select((c) => _latestTurnSignature(c.messages)),
       (prev, next) {
         if (prev != next) {
           unawaited(refresh());
@@ -104,26 +108,77 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
     return const WorkspaceDiffState();
   }
 
-  static int _latestChangedFilesSignature(List<ChatMessage> messages) {
+  static int _latestTurnSignature(List<ChatMessage> messages) {
     for (var i = messages.length - 1; i >= 0; i--) {
       final m = messages[i];
-      if (m.changedFiles.isNotEmpty) {
-        return Object.hash(m.id, m.changedFiles.length);
+      if (m.role == ChatRole.assistant) {
+        final completedTools =
+            m.tools.where((t) => t.state == ToolCallState.completed).length;
+        return Object.hash(
+          messages.length,
+          m.id,
+          m.isStreaming,
+          m.changedFiles.length,
+          m.tools.length,
+          completedTools,
+        );
       }
     }
-    return 0;
+    return messages.length;
+  }
+
+  List<String> _candidateLocalCwds() {
+    final seen = <String>{};
+    final out = <String>[];
+    void addCandidate(String? raw) {
+      final p = raw?.trim() ?? '';
+      if (p.isEmpty) return;
+      if (seen.add(p)) out.add(p);
+    }
+
+    addCandidate(ref.read(sessionsProvider).activeSession?.workspacePath);
+    final project = ref.read(projectsProvider).activeProject;
+    addCandidate(project.primaryFolder);
+    for (final folder in project.folders) {
+      addCandidate(folder);
+    }
+    addCandidate(ref.read(runtimeProvider).status.workspaceRoot);
+
+    // Also inspect tool working directories or edited file parents from the
+    // most recent assistant turns in case files were edited outside session CWD.
+    final msgs = ref.read(chatProvider).messages;
+    for (var i = msgs.length - 1; i >= 0 && i >= msgs.length - 4; i--) {
+      final m = msgs[i];
+      for (final f in m.changedFiles) {
+        if (f.path.startsWith('/')) {
+          addCandidate(File(f.path).parent.path);
+        }
+      }
+      for (final t in m.tools) {
+        final toolCwd = t.parameters['Cwd'] ??
+            t.parameters['cwd'] ??
+            t.parameters['workdir'];
+        if (toolCwd != null) addCandidate(toolCwd.toString());
+        final rawFile = t.parameters['TargetFile'] ??
+            t.parameters['AbsolutePath'] ??
+            t.parameters['path'] ??
+            t.parameters['file_path'];
+        final fileStr = rawFile?.toString().trim() ?? '';
+        if (fileStr.startsWith('/')) {
+          addCandidate(File(fileStr).parent.path);
+        }
+      }
+    }
+
+    return out;
   }
 
   String resolveActiveCwd() {
-    final sessionWs =
-        ref.read(sessionsProvider).activeSession?.workspacePath.trim() ?? '';
-    if (sessionWs.isNotEmpty) return sessionWs;
-    final projDir = ref.read(projectsProvider).activeProject.primaryFolder.trim();
-    if (projDir.isNotEmpty) return projDir;
     final sshWs =
         ref.read(hostsProvider).activeSshHost?.defaultWorkspace.trim() ?? '';
-    if (sshWs.isNotEmpty) return sshWs;
-    return ref.read(runtimeProvider).status.workspaceRoot?.trim() ?? '';
+    final candidates = _candidateLocalCwds();
+    if (candidates.isNotEmpty) return candidates.first;
+    return sshWs;
   }
 
   List<FileChangeEntry> _latestTurnFallbackFiles() {
@@ -131,8 +186,12 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
     for (var i = msgs.length - 1; i >= 0; i--) {
       final m = msgs[i];
       if (m.role == ChatRole.user) break;
-      if (!m.isStreaming && m.changedFiles.isNotEmpty) {
+      if (m.changedFiles.isNotEmpty) {
         return m.changedFiles;
+      }
+      if (m.tools.isNotEmpty) {
+        final extracted = ChatTurnHelpers.extractChangedFilesFromTools(m.tools);
+        if (extracted.isNotEmpty) return extracted;
       }
     }
     return const [];
@@ -141,14 +200,14 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
   Future<void> refresh({bool showLoading = false}) async {
     if (!ref.mounted) return;
     final token = ++_refreshToken;
-    final cwd = resolveActiveCwd();
+    final primaryCwd = resolveActiveCwd();
     final sshHost = ref.read(hostsProvider).activeSshHost;
 
     if (showLoading) {
-      state = state.copyWith(loading: true, cwd: cwd);
+      state = state.copyWith(loading: true, cwd: primaryCwd);
     }
 
-    if (cwd.isEmpty && sshHost == null) {
+    if (primaryCwd.isEmpty && sshHost == null) {
       final fallback = _latestTurnFallbackFiles();
       if (!ref.mounted || token != _refreshToken) return;
       state = WorkspaceDiffState(
@@ -169,7 +228,7 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
             await ref.read(hostsProvider.notifier).readCredentials(sshHost.id);
         final raw = await SshAgyRunner.instance.runRemoteCommand(
           host: sshHost,
-          cwd: cwd,
+          cwd: primaryCwd,
           password: pwd,
           privateKeyPem: key,
           onTrustFirstKey: (fp) => ref
@@ -193,43 +252,81 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
           numstat: numstat,
           diff: diff,
         );
+        final fallback = _latestTurnFallbackFiles();
+        final effectiveFiles = parsed.isNotEmpty ? parsed : fallback;
         state = WorkspaceDiffState(
           loading: false,
-          cwd: cwd,
+          cwd: primaryCwd,
           branch: branch,
           status: status,
-          unifiedDiff: diff,
-          files: parsed.isEmpty && branch.isEmpty && status.isEmpty
-              ? _latestTurnFallbackFiles()
-              : parsed,
+          unifiedDiff: diff.isNotEmpty
+              ? diff
+              : effectiveFiles
+                  .map((f) => f.diff ?? '')
+                  .where((d) => d.trim().isNotEmpty)
+                  .join('\n'),
+          files: effectiveFiles,
         );
         return;
       }
 
-      final res = await RuntimeBridge.instance.gitDiffDetailed(cwd);
-      if (!ref.mounted || token != _refreshToken) return;
-      final branch = res.branch.trim();
-      final status = res.status.trim();
-      final diff = res.diff.trim();
-      final files = res.files.isEmpty && branch.isEmpty && status.isEmpty
-          ? _latestTurnFallbackFiles()
-          : res.files;
+      final candidates = _candidateLocalCwds();
+      String chosenCwd = primaryCwd;
+      String chosenBranch = '';
+      String chosenStatus = '';
+      String chosenDiff = '';
+      List<FileChangeEntry> chosenFiles = const [];
+
+      for (final candidate in candidates) {
+        final res = await RuntimeBridge.instance.gitDiffDetailed(candidate);
+        if (!ref.mounted || token != _refreshToken) return;
+        final branch = res.branch.trim();
+        final status = res.status.trim();
+        final diff = res.diff.trim();
+        if (chosenBranch.isEmpty && branch.isNotEmpty) {
+          chosenCwd = candidate;
+          chosenBranch = branch;
+        }
+        if (res.files.isNotEmpty || status.isNotEmpty || diff.isNotEmpty) {
+          chosenCwd = candidate;
+          chosenBranch = branch;
+          chosenStatus = status;
+          chosenDiff = diff;
+          chosenFiles = res.files;
+          break;
+        }
+      }
+
+      final fallback = _latestTurnFallbackFiles();
+      final effectiveFiles =
+          chosenFiles.isNotEmpty ? chosenFiles : fallback;
+      final effectiveDiff = chosenDiff.isNotEmpty
+          ? chosenDiff
+          : effectiveFiles
+              .map((f) => f.diff ?? '')
+              .where((d) => d.trim().isNotEmpty)
+              .join('\n');
+
       state = WorkspaceDiffState(
         loading: false,
-        cwd: cwd,
-        branch: branch,
-        status: status,
-        unifiedDiff: diff.isNotEmpty
-            ? diff
-            : files
-                .map((f) => f.diff ?? '')
-                .where((d) => d.trim().isNotEmpty)
-                .join('\n'),
-        files: files,
+        cwd: chosenCwd,
+        branch: chosenBranch,
+        status: chosenStatus,
+        unifiedDiff: effectiveDiff,
+        files: effectiveFiles,
       );
     } catch (_) {
       if (!ref.mounted || token != _refreshToken) return;
-      state = state.copyWith(loading: false, cwd: cwd);
+      final fallback = _latestTurnFallbackFiles();
+      state = WorkspaceDiffState(
+        loading: false,
+        cwd: primaryCwd,
+        files: fallback,
+        unifiedDiff: fallback
+            .map((f) => f.diff ?? '')
+            .where((d) => d.trim().isNotEmpty)
+            .join('\n'),
+      );
     }
   }
 

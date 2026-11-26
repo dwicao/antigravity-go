@@ -141,39 +141,111 @@ class ChatTurnHelpers {
     for (final step in tools) {
       if (step.state == ToolCallState.failed) continue;
       final nameLower = step.toolName.toLowerCase();
+      final p = step.parameters;
+      final hasEditParams = p.containsKey('Replacement') ||
+          p.containsKey('ReplacementContent') ||
+          p.containsKey('ReplacementChunks') ||
+          p.containsKey('oldText') ||
+          p.containsKey('newText') ||
+          p.containsKey('old_string') ||
+          p.containsKey('new_string') ||
+          p.containsKey('CodeContent');
+      final outStr = step.output?.trim() ?? '';
+      final hasOutputDiff =
+          outStr.contains('\n@@ ') || outStr.startsWith('--- a/');
       final isFileEdit = nameLower.contains('write') ||
           nameLower.contains('edit') ||
           nameLower.contains('replace') ||
           nameLower.contains('patch') ||
-          nameLower.contains('create_file');
+          nameLower.contains('create_file') ||
+          ((nameLower == 'file' || nameLower.startsWith('file ')) &&
+              (hasEditParams || hasOutputDiff)) ||
+          hasOutputDiff;
       if (!isFileEdit) continue;
-      final rawPath = step.parameters['TargetFile'] ??
-          step.parameters['AbsolutePath'] ??
-          step.parameters['path'] ??
-          step.parameters['file'];
-      final path = rawPath?.toString().trim() ?? '';
+
+      var path = (p['TargetFile'] ??
+                  p['AbsolutePath'] ??
+                  p['Path'] ??
+                  p['path'] ??
+                  p['file_path'] ??
+                  p['filePath'] ??
+                  p['File'] ??
+                  p['file'] ??
+                  '')
+          .toString()
+          .trim();
+      if (path.isEmpty && hasOutputDiff) {
+        final plusMatch = RegExp(
+          r'^\+\+\+\s+(?:b/)?(.+)$',
+          multiLine: true,
+        ).firstMatch(outStr);
+        final headerPath = plusMatch?.group(1)?.trim() ?? '';
+        if (headerPath.isNotEmpty && headerPath != '/dev/null') {
+          path = headerPath;
+        }
+      }
       if (path.isEmpty) continue;
 
-      final replacement = step.parameters['Replacement'] ??
-          step.parameters['ReplacementContent'] ??
-          step.parameters['CodeContent'] ??
-          step.parameters['content'];
-      final target = step.parameters['TargetContent'];
-      final repStr = replacement?.toString();
-      final tgtStr = target?.toString();
-      final added = repStr != null ? repStr.split('\n').length : 0;
-      final removed = tgtStr != null ? tgtStr.split('\n').length : 0;
-      final created = (step.parameters['Overwrite'] == false) ||
+      var added = 0;
+      var removed = 0;
+      String? diffSnippet;
+      final chunks = p['ReplacementChunks'];
+      if (chunks is List && chunks.isNotEmpty) {
+        final buf = StringBuffer();
+        for (final ch in chunks) {
+          if (ch is! Map) continue;
+          final rep = ch['ReplacementContent']?.toString();
+          final tgt = ch['TargetContent']?.toString();
+          if (rep != null && rep.isNotEmpty) added += rep.split('\n').length;
+          if (tgt != null && tgt.isNotEmpty) removed += tgt.split('\n').length;
+          final part = buildToolDiff(path, tgt, rep);
+          if (part != null) buf.writeln(part);
+        }
+        final combined = buf.toString().trimRight();
+        if (combined.isNotEmpty) diffSnippet = combined;
+      } else {
+        final replacement = p['Replacement'] ??
+            p['ReplacementContent'] ??
+            p['CodeContent'] ??
+            p['newText'] ??
+            p['new_text'] ??
+            p['new_string'] ??
+            p['newString'] ??
+            p['content'];
+        final target = p['TargetContent'] ??
+            p['oldText'] ??
+            p['old_text'] ??
+            p['old_string'] ??
+            p['oldString'];
+        final repStr = replacement?.toString();
+        final tgtStr = target?.toString();
+        added = repStr != null && repStr.isNotEmpty ? repStr.split('\n').length : 0;
+        removed = tgtStr != null && tgtStr.isNotEmpty ? tgtStr.split('\n').length : 0;
+        diffSnippet = buildToolDiff(path, tgtStr, repStr);
+      }
+
+      if (diffSnippet == null && hasOutputDiff) {
+        diffSnippet = outStr;
+        if (added == 0 && removed == 0) {
+          for (final l in outStr.split('\n')) {
+            if (l.startsWith('+') && !l.startsWith('+++')) added++;
+            if (l.startsWith('-') && !l.startsWith('---')) removed++;
+          }
+        }
+      }
+
+      final created = (p['Overwrite'] == false) ||
           nameLower.contains('create') ||
-          (nameLower.contains('write_to_file') && removed == 0);
+          ((nameLower.contains('write_to_file') ||
+                  nameLower.contains('write_file')) &&
+              removed == 0);
       final prev = byPath[path];
-      final diffSnippet = buildToolDiff(path, tgtStr, repStr) ?? prev?.diff;
       byPath[path] = FileChangeEntry(
         path: path,
         added: (prev?.added ?? 0) + added,
         removed: (prev?.removed ?? 0) + removed,
         created: prev?.created ?? created,
-        diff: diffSnippet,
+        diff: diffSnippet ?? prev?.diff,
       );
     }
     return byPath.values.toList();

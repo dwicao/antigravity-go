@@ -218,13 +218,23 @@ class AcpCodec {
         final path = m['path']?.toString() ?? '';
         final oldText = m['oldText']?.toString() ?? '';
         final newText = m['newText']?.toString() ?? '';
+        final oldLines =
+            oldText.isEmpty ? const <String>[] : oldText.split('\n');
+        final newLines =
+            newText.isEmpty ? const <String>[] : newText.split('\n');
         final sb = StringBuffer();
-        if (path.isNotEmpty) sb.writeln('--- a/$path\n+++ b/$path');
-        for (final line in oldText.split('\n')) {
-          if (oldText.isNotEmpty) sb.writeln('-$line');
+        if (path.isNotEmpty) {
+          sb.writeln('--- a/$path');
+          sb.writeln('+++ b/$path');
         }
-        for (final line in newText.split('\n')) {
-          if (newText.isNotEmpty) sb.writeln('+$line');
+        if (oldLines.isNotEmpty || newLines.isNotEmpty) {
+          sb.writeln('@@ -1,${oldLines.length} +1,${newLines.length} @@');
+          for (final line in oldLines) {
+            sb.writeln('-$line');
+          }
+          for (final line in newLines) {
+            sb.writeln('+$line');
+          }
         }
         final snippet = sb.toString().trimRight();
         if (snippet.isNotEmpty) diffParts.add(snippet);
