@@ -488,6 +488,16 @@ internal class WorkspaceOps(
             if (headCode != 0 || sha.isEmpty()) {
                 return mapOf("ok" to false, "reason" to "Repository has no commits yet")
             }
+            // Fast path: clean standard Git repo needs no index/add/write-tree work.
+            val (stCode, stOut) = runCapturedArgs(
+                gitCmd(null, "status", "--porcelain", "--untracked-files=normal"),
+                dir,
+                emptyMap(),
+                15,
+            )
+            if (stCode == 0 && stOut.isBlank()) {
+                return mapOf("ok" to true, "ref" to sha, "head" to sha, "dirty" to false, "shadow" to false)
+            }
             sha
         }
 

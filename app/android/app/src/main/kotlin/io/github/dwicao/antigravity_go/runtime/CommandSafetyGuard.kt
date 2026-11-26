@@ -11,9 +11,9 @@ import java.io.File
  */
 object CommandSafetyGuard {
 
-    const val DEFAULT_OFFLOAD_THRESHOLD_CHARS = 12_000
-    private const val HEAD_PREVIEW_CHARS = 3_000
-    private const val TAIL_PREVIEW_CHARS = 5_000
+    const val DEFAULT_OFFLOAD_THRESHOLD_CHARS = 6_000
+    private const val HEAD_PREVIEW_CHARS = 1_500
+    private const val TAIL_PREVIEW_CHARS = 2_500
 
     @Volatile
     var enabled: Boolean = true

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 
 /// Kinds of tool-execution loops caught by [HarnessLoopDetector].
 enum HarnessLoopKind {
@@ -348,10 +349,12 @@ class HarnessContextMonitor {
   const HarnessContextMonitor({
     this.warningThreshold = 0.65,
     this.compactThreshold = 0.80,
+    this.maxCompactTokens,
   });
 
   final double warningThreshold;
   final double compactThreshold;
+  final int? maxCompactTokens;
 
   /// Effective working window matching the model's context capacity
   /// (1M for Gemini 4 / 3.8 / 3 / 2.5 / Orchestrator, 200K for Claude, 160K for GPT).
@@ -413,8 +416,16 @@ class HarnessContextMonitor {
     final budget = overrideBudgetTokens ?? effectiveBudgetForModel(modelId);
     final safeBudget = budget <= 0 ? 128000 : budget;
     final ratio = (totalTokens / safeBudget).clamp(0.0, 1.0);
-    final shouldCompact = ratio >= compactThreshold;
-    final needsWarning = ratio >= warningThreshold;
+    final defaultCompactAt = (safeBudget * compactThreshold).round();
+    final compactAt = (maxCompactTokens != null && maxCompactTokens! > 0)
+        ? math.min(defaultCompactAt, maxCompactTokens!)
+        : defaultCompactAt;
+    final defaultWarnAt = (safeBudget * warningThreshold).round();
+    final warnAt = (maxCompactTokens != null && maxCompactTokens! > 0)
+        ? math.min(defaultWarnAt, (compactAt * 0.80).round())
+        : defaultWarnAt;
+    final shouldCompact = totalTokens >= compactAt;
+    final needsWarning = totalTokens >= warnAt;
 
     final statusLabel = shouldCompact
         ? 'High — compact recommended'
@@ -532,13 +543,13 @@ class HarnessContextMonitor {
     for (final t in turns) {
       final body = t.text.trim();
       final clippedBody =
-          body.length > 2400 ? '${body.substring(0, 2400)}\n…[truncated]' : body;
+          body.length > 1800 ? '${body.substring(0, 1800)}\n…[truncated]' : body;
       final sb = StringBuffer('[${t.role.toUpperCase()}]');
       if (clippedBody.isNotEmpty) {
         sb.write('\n$clippedBody');
       }
       if (t.toolSummaries.isNotEmpty) {
-        final tools = t.toolSummaries.take(8).join('; ');
+        final tools = t.toolSummaries.take(5).join('; ');
         sb.write('\n[tools: $tools]');
       }
       blocks.add(sb.toString());
@@ -837,5 +848,119 @@ ${pendingNote}Do NOT blindly trust prior claims. Independently inspect the works
 3. $verifyLine
 4. Verify `.agy-harness/feature_list.json` accuracy — if a feature marked `"passes": true` lacks test coverage or fails verification, flip it back to `"passes": false` and document the exact defect in `.agy-harness/progress.txt`.
 5. Summarize concrete PASS / FAIL verdict with exact file paths and commands run.''';
+  }
+}
+
+/// Deterministic cost/latency router that maps speed tiers, trivial prompts, and
+/// compaction turns onto lighter models and lower reasoning effort without
+/// downgrading multi-file coding or debugging tasks.
+class HarnessTurnRouter {
+  const HarnessTurnRouter._();
+
+  static const String fastCompactionModelId = 'gemini-3.8-flash';
+  static const String fastCodingModelId = 'gemini-4-hydrogen';
+
+  static final RegExp _complexWorkRe = RegExp(
+    r'\b(fix|bug|error|fail|crash|refactor|implement|build|create|add|edit|write|update|remove|delete|test|ci|deploy|release|debug|review|audit|architect|optimize|migrate|investigate|research|subagent|workflow|perbaiki|buat|ubah|tambah|hapus|cek)\b',
+    caseSensitive: false,
+  );
+
+  static final RegExp _pathOrCodeRe = RegExp(
+    r'(/[^\s]+|\\[^\s]+|`[^`]+`|\.[a-zA-Z0-9]{1,5}\b|\(\)|\{|\})',
+  );
+
+  /// Returns whether `<repo_map>` injection can be skipped to save ~1K tokens
+  /// and disk I/O on trivial conversational or built-in slash turns.
+  static bool shouldSkipRepoMap(String prompt) {
+    final trimmed = prompt.trim();
+    if (trimmed.isEmpty) return true;
+    if (trimmed.startsWith('/')) {
+      final cmd = trimmed.split(RegExp(r'\s+')).first.toLowerCase();
+      if (cmd != '/plan' &&
+          cmd != '/boost' &&
+          cmd != '/goal' &&
+          cmd != '/teamwork' &&
+          cmd != '/swarm') {
+        return true;
+      }
+    }
+    return isTrivialPrompt(trimmed);
+  }
+
+  /// True for short, non-code conversational or simple status prompts.
+  static bool isTrivialPrompt(String prompt) {
+    final trimmed = prompt.trim();
+    if (trimmed.isEmpty || trimmed.length > 80) return false;
+    if (trimmed.contains('\n')) return false;
+    if (_pathOrCodeRe.hasMatch(trimmed)) return false;
+    if (_complexWorkRe.hasMatch(trimmed)) return false;
+    return true;
+  }
+
+  static ({String modelId, String effort}) resolveCompactionRoute() {
+    return (modelId: fastCompactionModelId, effort: 'low');
+  }
+
+  static ({String modelId, String effort, bool skipRepoMap, bool downgraded})
+      routeTurn({
+    required String prompt,
+    required String selectedModelId,
+    required String selectedEffort,
+    required String speedTierName,
+    required bool smartRoutingEnabled,
+    bool hasAttachments = false,
+  }) {
+    final skipRepoMap = !hasAttachments && shouldSkipRepoMap(prompt);
+    final tier = speedTierName.trim().toLowerCase();
+    final lowerModel = selectedModelId.trim().toLowerCase();
+
+    if (tier == 'ultrafast') {
+      return (
+        modelId: fastCompactionModelId,
+        effort: 'low',
+        skipRepoMap: skipRepoMap,
+        downgraded: lowerModel != fastCompactionModelId || selectedEffort != 'low',
+      );
+    }
+
+    if (tier == 'fast') {
+      final isHeavyGemini = lowerModel.contains('orchestrator') ||
+          lowerModel.contains('neon') ||
+          lowerModel.contains('carbon') ||
+          lowerModel.contains('argon');
+      final nextModel = isHeavyGemini ? fastCodingModelId : selectedModelId;
+      final nextEffort = (selectedEffort == 'xhigh' ||
+              selectedEffort == 'max' ||
+              selectedEffort == 'high')
+          ? 'medium'
+          : 'low';
+      return (
+        modelId: nextModel,
+        effort: nextEffort,
+        skipRepoMap: skipRepoMap,
+        downgraded: nextModel != selectedModelId || nextEffort != selectedEffort,
+      );
+    }
+
+    if (smartRoutingEnabled && !hasAttachments && isTrivialPrompt(prompt)) {
+      final isHeavyGemini = lowerModel.contains('orchestrator') ||
+          lowerModel.contains('neon') ||
+          lowerModel.contains('carbon') ||
+          lowerModel.contains('argon');
+      final nextModel = isHeavyGemini ? fastCodingModelId : selectedModelId;
+      return (
+        modelId: nextModel,
+        effort: 'low',
+        skipRepoMap: true,
+        downgraded: nextModel != selectedModelId || selectedEffort != 'low',
+      );
+    }
+
+    return (
+      modelId: selectedModelId,
+      effort: selectedEffort,
+      skipRepoMap: skipRepoMap,
+      downgraded: false,
+    );
   }
 }

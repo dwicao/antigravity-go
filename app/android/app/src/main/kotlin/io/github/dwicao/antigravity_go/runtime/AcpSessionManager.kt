@@ -23,12 +23,42 @@ class AcpSessionManager(
 ) {
     private val sessions = ConcurrentHashMap<String, ActiveAcp>()
     private val liveWorkers = LinkedHashMap<String, ActiveAcp>(4, 0.75f, true)
+    private val standbyLock = Any()
+
+    @Volatile
+    private var standbyWorker: ActiveAcp? = null
     private val fsTerminalHandler = AcpFsTerminalHandler(
         executor = executor,
         log = log,
         onTasksChanged = onTasksChanged,
         outputOffloadDir = outputOffloadDir,
     )
+
+    private fun takeStandbyWorker(expectedSignature: String): ActiveAcp? {
+        synchronized(standbyLock) {
+            val w = standbyWorker ?: return null
+            if (w.process.isAlive && w.standbyReady && w.workerSignature == expectedSignature) {
+                standbyWorker = null
+                return w
+            }
+            return null
+        }
+    }
+
+    private fun closeStandbyWorker() {
+        val old: ActiveAcp?
+        synchronized(standbyLock) {
+            old = standbyWorker
+            standbyWorker = null
+        }
+        if (old != null) {
+            old.cancelled.set(true)
+            old.claimSignal.complete("__CANCELLED__")
+            old.terminals.values.forEach { t -> runCatching { t.process.destroyForcibly() } }
+            runCatching { old.writer.close() }
+            runCatching { old.process.destroyForcibly() }
+        }
+    }
 
     private fun emitTurnExitOnce(turnId: String, exitCode: Int, active: ActiveAcp? = null) {
         if (active != null && active.exitEmittedTurnIds.putIfAbsent(turnId, true) != null) {
@@ -178,6 +208,376 @@ class AcpSessionManager(
         return true
     }
 
+    fun prewarm(
+        binaryPath: String,
+        cwd: File,
+        env: Map<String, String>,
+        extraDirs: List<String>,
+        skipPermissions: Boolean,
+        agent: String? = null,
+        clientVersion: String = "1.0.45",
+        onAuthenticated: () -> Unit,
+    ) {
+        executor.submit {
+            val workerSig = buildWorkerSignature(cwd, extraDirs, skipPermissions, agent)
+            synchronized(standbyLock) {
+                val cur = standbyWorker
+                if (cur != null && cur.process.isAlive && cur.workerSignature == workerSig) {
+                    return@submit
+                }
+            }
+            if (sessions.isNotEmpty() || synchronized(liveWorkers) { liveWorkers.isNotEmpty() }) {
+                return@submit
+            }
+            closeStandbyWorker()
+            var proc: Process? = null
+            var activeRef: ActiveAcp? = null
+            try {
+                val cmd = mutableListOf(binaryPath, "acp")
+                for (dir in extraDirs) {
+                    if (dir.isNotBlank() && File(dir).exists()) {
+                        cmd.addAll(listOf("--add-dir", dir))
+                    }
+                }
+                if (!agent.isNullOrBlank()) cmd.addAll(listOf("--agent", agent))
+                if (skipPermissions) cmd.add("--dangerously-skip-permissions")
+                val pb = ProcessBuilder(cmd)
+                pb.directory(cwd)
+                pb.environment().putAll(env)
+                proc = pb.start()
+                val writer = OutputStreamWriter(proc.outputStream, Charsets.UTF_8)
+                val active = ActiveAcp(
+                    process = proc,
+                    writer = writer,
+                    env = env,
+                    defaultCwd = cwd,
+                    agent = agent,
+                    workerSignature = workerSig,
+                    promptSummary = "Standby ACP worker",
+                    currentTurnId = null,
+                )
+                activeRef = active
+                val errFuture = executor.submit {
+                    BufferedReader(InputStreamReader(proc.errorStream)).use { err ->
+                        var line: String?
+                        while (err.readLine().also { line = it } != null) {
+                            val l = line ?: continue
+                            if (l.trimStart().startsWith("ERROR: logging before google.Init:")) continue
+                            val targetTid = active.currentTurnId
+                            if (targetTid != null) {
+                                emit(mapOf("kind" to "turn_stderr", "turnId" to targetTid, "stderrLine" to l))
+                            }
+                        }
+                    }
+                }
+                val initId = active.nextId.getAndIncrement()
+                AcpConfigAndPromptHelper.sendJson(
+                    writer,
+                    JSONObject()
+                        .put("jsonrpc", "2.0")
+                        .put("id", initId)
+                        .put("method", "initialize")
+                        .put(
+                            "params",
+                            JSONObject()
+                                .put("protocolVersion", 1)
+                                .put("clientInfo", JSONObject().put("name", "antigravity-go").put("version", clientVersion))
+                                .put(
+                                    "clientCapabilities",
+                                    JSONObject()
+                                        .put("fs", JSONObject().put("readTextFile", true).put("writeTextFile", true))
+                                        .put("terminal", true)
+                                        .put("terminal-auth", true)
+                                )
+                        )
+                )
+                BufferedReader(InputStreamReader(proc.inputStream)).use { reader ->
+                    var initDone = false
+                    var line: String?
+                    while (reader.readLine().also { line = it } != null) {
+                        val raw = line?.trim() ?: continue
+                        if (!raw.startsWith("{")) continue
+                        val msg = try { JSONObject(raw) } catch (_: Throwable) { continue }
+                        val msgId = msg.opt("id")
+                        if (!initDone && msgId is Number && msgId.toInt() == initId) {
+                            if (msg.has("error")) return@submit
+                            initDone = true
+                            onAuthenticated()
+                            active.standbyReady = true
+                            synchronized(standbyLock) {
+                                if (standbyWorker == null && !active.cancelled.get()) {
+                                    standbyWorker = active
+                                } else {
+                                    active.claimSignal.complete("__CANCELLED__")
+                                }
+                            }
+                            val claimedTid = runCatching { active.claimSignal.get(120, TimeUnit.SECONDS) }.getOrNull()
+                            if (claimedTurnCancelled(claimedTid, active)) {
+                                return@submit
+                            }
+                            break
+                        }
+                    }
+                    if (!initDone || active.currentTurnId == null) return@submit
+                    runPostInitReadLoop(
+                        active = active,
+                        proc = proc,
+                        writer = writer,
+                        reader = reader,
+                        errFuture = errFuture,
+                        cwd = cwd,
+                        existingSessionId = null,
+                        skipPermissions = skipPermissions,
+                    )
+                }
+            } catch (_: Throwable) {
+            } finally {
+                synchronized(standbyLock) {
+                    if (standbyWorker === activeRef) standbyWorker = null
+                }
+                val tid = activeRef?.currentTurnId
+                if (tid != null) {
+                    sessions.remove(tid)
+                }
+                val sid = activeRef?.sessionId
+                if (sid != null && activeRef != null) {
+                    synchronized(liveWorkers) {
+                        if (liveWorkers[sid] === activeRef) liveWorkers.remove(sid)
+                    }
+                }
+                activeRef?.terminals?.values?.forEach { term ->
+                    runCatching { term.process.destroyForcibly() }
+                }
+                onTasksChanged()
+                runCatching { activeRef?.writer?.close() }
+                runCatching { proc?.destroy() }
+            }
+        }
+    }
+
+    private fun runPostInitReadLoop(
+        active: ActiveAcp,
+        proc: Process,
+        writer: OutputStreamWriter,
+        reader: BufferedReader,
+        errFuture: java.util.concurrent.Future<*>,
+        cwd: File,
+        existingSessionId: String?,
+        skipPermissions: Boolean,
+    ) {
+        var acpSessionId: String? = null
+        var triedLoadFallback = false
+        var triedNewFallback = false
+        var line: String?
+        while (reader.readLine().also { line = it } != null) {
+            val raw = line?.trim() ?: continue
+            if (!raw.startsWith("{")) continue
+
+            val msg = try {
+                JSONObject(raw)
+            } catch (_: Throwable) {
+                continue
+            }
+
+            val msgId = msg.opt("id")
+            val method = msg.optString("method", "")
+
+            if (msgId is Number && msgId.toInt() == active.newSessionReqId) {
+                if (msg.has("error") && !existingSessionId.isNullOrBlank() && !triedLoadFallback) {
+                    triedLoadFallback = true
+                    val errObj = msg.optJSONObject("error")
+                    val errCode = errObj?.optInt("code", 0) ?: 0
+                    val nextId = active.nextId.getAndIncrement()
+                    active.newSessionReqId = nextId
+                    val fallbackMethod = if (errCode == -32601) "session/load" else "session/new"
+                    val fallbackParams = if (fallbackMethod == "session/load") {
+                        JSONObject()
+                            .put("sessionId", existingSessionId)
+                            .put("cwd", cwd.absolutePath)
+                    } else {
+                        JSONObject()
+                            .put("cwd", cwd.absolutePath)
+                            .put("mcpServers", AcpConfigAndPromptHelper.buildMcpServersArray())
+                    }
+                    AcpConfigAndPromptHelper.sendJson(
+                        writer,
+                        JSONObject()
+                            .put("jsonrpc", "2.0")
+                            .put("id", nextId)
+                            .put("method", fallbackMethod)
+                            .put("params", fallbackParams)
+                    )
+                    continue
+                }
+                if (msg.has("error") && triedLoadFallback && !triedNewFallback && acpSessionId == null) {
+                    triedNewFallback = true
+                    val nextId = active.nextId.getAndIncrement()
+                    active.newSessionReqId = nextId
+                    AcpConfigAndPromptHelper.sendJson(
+                        writer,
+                        JSONObject()
+                            .put("jsonrpc", "2.0")
+                            .put("id", nextId)
+                            .put("method", "session/new")
+                            .put(
+                                "params",
+                                JSONObject()
+                                    .put("cwd", cwd.absolutePath)
+                                    .put("mcpServers", AcpConfigAndPromptHelper.buildMcpServersArray())
+                            )
+                    )
+                    continue
+                }
+                val res = msg.optJSONObject("result")
+                acpSessionId = res?.optString("sessionId")
+                    ?.takeIf { it.isNotBlank() } ?: if (res != null) existingSessionId else null
+
+                val activeTid = active.currentTurnId
+                if (activeTid != null) {
+                    emit(
+                        mapOf(
+                            "kind" to "turn_acp_line",
+                            "turnId" to activeTid,
+                            "stdoutLine" to raw,
+                        )
+                    )
+                }
+
+                if (acpSessionId != null) {
+                    active.sessionId = acpSessionId
+                    active.pendingConfigReqIds.clear()
+                    AcpConfigAndPromptHelper.queueConfigOptions(
+                        active = active,
+                        writer = writer,
+                        sessionId = acpSessionId,
+                        modelId = active.pendingModelId,
+                        effort = active.pendingEffort,
+                        modeCli = active.pendingModeCli,
+                        skipPermissions = skipPermissions,
+                    )
+
+                    if (active.pendingConfigReqIds.isEmpty()) {
+                        val nextPid = active.nextId.getAndIncrement()
+                        active.promptReqId = nextPid
+                        active.promptSent = true
+                        val pText = active.pendingPromptText ?: ""
+                        val pAtt = active.pendingPromptAttachments
+                        active.pendingPromptText = null
+                        active.pendingPromptAttachments = emptyList()
+                        AcpConfigAndPromptHelper.sendPromptRpc(
+                            writer = writer,
+                            reqId = nextPid,
+                            sessionId = acpSessionId,
+                            prompt = pText,
+                            attachments = pAtt,
+                        )
+                    }
+                } else {
+                    break
+                }
+                continue
+            }
+
+            val configMsgId = when (msgId) {
+                is Number -> msgId.toInt()
+                is String -> msgId.toIntOrNull()
+                else -> null
+            }
+            if (configMsgId != null && active.pendingConfigReqIds.remove(configMsgId)) {
+                val activeSid = active.sessionId
+                if (active.pendingConfigReqIds.isEmpty() && !active.promptSent && activeSid != null) {
+                    val nextPid = active.nextId.getAndIncrement()
+                    active.promptReqId = nextPid
+                    active.promptSent = true
+                    val pText = active.pendingPromptText ?: ""
+                    val pAtt = active.pendingPromptAttachments
+                    active.pendingPromptText = null
+                    active.pendingPromptAttachments = emptyList()
+                    AcpConfigAndPromptHelper.sendPromptRpc(
+                        writer = writer,
+                        reqId = nextPid,
+                        sessionId = activeSid,
+                        prompt = pText,
+                        attachments = pAtt,
+                    )
+                }
+                continue
+            }
+
+            if (method == "fs/read_text_file" && msgId != null) {
+                fsTerminalHandler.handleReadTextFile(active, writer, msgId, msg.optJSONObject("params"))
+                continue
+            }
+            if (method == "fs/write_text_file" && msgId != null) {
+                fsTerminalHandler.handleWriteTextFile(active, writer, msgId, msg.optJSONObject("params"))
+                continue
+            }
+            if (method.startsWith("terminal/") && msgId != null) {
+                fsTerminalHandler.handleTerminalRpc(active, method, msgId, msg.optJSONObject("params"))
+                continue
+            }
+
+            val activeTid = active.currentTurnId
+            if (activeTid == null) {
+                if (method == "session/update" || method == "session/request_permission") {
+                    emit(
+                        mapOf(
+                            "kind" to "acp_wakeup",
+                            "sessionId" to (active.sessionId ?: ""),
+                            "stdoutLine" to raw,
+                        )
+                    )
+                }
+                continue
+            }
+
+            if (!shouldForwardAcpNotification(method, active.promptSent)) {
+                continue
+            }
+
+            emit(
+                mapOf(
+                    "kind" to "turn_acp_line",
+                    "turnId" to activeTid,
+                    "stdoutLine" to raw,
+                )
+            )
+
+            val numericMsgId = when (msgId) {
+                is Number -> msgId.toInt()
+                is String -> msgId.toIntOrNull()
+                else -> null
+            }
+            if (numericMsgId != null && numericMsgId == active.promptReqId) {
+                sessions.remove(activeTid)
+                active.currentTurnId = null
+                active.promptReqId = -1
+                emitTurnExitOnce(activeTid, 0, active)
+                val sid = active.sessionId
+                if (sid != null && proc.isAlive && !active.cancelled.get()) {
+                    putLiveWorker(sid, active)
+                    onTasksChanged()
+                    continue
+                }
+                break
+            }
+        }
+
+        val danglingTurnId = active.currentTurnId
+        if (danglingTurnId != null && !active.cancelled.get()) {
+            runCatching { errFuture.get(2, TimeUnit.SECONDS) }
+            val exitCode = if (proc.waitFor(2, TimeUnit.SECONDS)) proc.exitValue() else {
+                proc.destroyForcibly()
+                1
+            }
+            emitTurnExitOnce(danglingTurnId, exitCode, active)
+        }
+    }
+
+    private fun claimedTurnCancelled(claimedTid: String?, active: ActiveAcp): Boolean {
+        return claimedTid.isNullOrBlank() || claimedTid == "__CANCELLED__" || active.cancelled.get()
+    }
+
     fun startTurn(
         turnId: String,
         binaryPath: String,
@@ -254,6 +654,49 @@ class AcpSessionManager(
                 }
             }
 
+            val standby = if (existingSessionId.isNullOrBlank()) takeStandbyWorker(workerSig) else null
+            if (standby != null && standby.process.isAlive) {
+                try {
+                    standby.promptSummary = summarizeCommand(prompt, maxLen = 64)
+                    standby.cancelled.set(false)
+                    standby.currentTurnId = turnId
+                    standby.pendingConfigReqIds.clear()
+                    standby.promptReqId = -1
+                    standby.promptSent = false
+                    standby.pendingPromptText = prompt
+                    standby.pendingPromptAttachments = attachments
+                    standby.pendingModelId = modelId
+                    standby.pendingEffort = effort
+                    standby.pendingModeCli = modeCli
+                    val newId = standby.nextId.getAndIncrement()
+                    standby.newSessionReqId = newId
+                    sessions[turnId] = standby
+                    onTasksChanged()
+                    standby.claimSignal.complete(turnId)
+                    AcpConfigAndPromptHelper.sendJson(
+                        standby.writer,
+                        JSONObject()
+                            .put("jsonrpc", "2.0")
+                            .put("id", newId)
+                            .put("method", "session/new")
+                            .put(
+                                "params",
+                                JSONObject()
+                                    .put("cwd", cwd.absolutePath)
+                                    .put("mcpServers", AcpConfigAndPromptHelper.buildMcpServersArray())
+                            )
+                    )
+                    return@submit
+                } catch (t: Throwable) {
+                    log("Standby ACP worker failed, falling back to fresh spawn: ${t.message}")
+                    sessions.remove(turnId)
+                    standby.currentTurnId = null
+                    standby.cancelled.set(true)
+                    standby.claimSignal.complete("__CANCELLED__")
+                    runCatching { standby.process.destroyForcibly() }
+                }
+            }
+
             var proc: Process? = null
             var activeRef: ActiveAcp? = null
             try {
@@ -285,6 +728,11 @@ class AcpSessionManager(
                     workerSignature = workerSig,
                     promptSummary = summarizeCommand(prompt, maxLen = 64),
                     currentTurnId = turnId,
+                    pendingPromptText = prompt,
+                    pendingPromptAttachments = attachments,
+                    pendingModelId = modelId,
+                    pendingEffort = effort,
+                    pendingModeCli = modeCli,
                 )
                 activeRef = active
                 sessions[turnId] = active
@@ -345,26 +793,18 @@ class AcpSessionManager(
                         )
                 )
 
-                var acpSessionId: String? = null
-                var newSessionReqId = -1
-                var triedLoadFallback = false
-                var triedNewFallback = false
-
                 BufferedReader(InputStreamReader(proc.inputStream)).use { reader ->
+                    var initDone = false
                     var line: String?
                     while (reader.readLine().also { line = it } != null) {
                         val raw = line?.trim() ?: continue
                         if (!raw.startsWith("{")) continue
-
                         val msg = try {
                             JSONObject(raw)
                         } catch (_: Throwable) {
                             continue
                         }
-
                         val msgId = msg.opt("id")
-                        val method = msg.optString("method", "")
-
                         if (msgId is Number && msgId.toInt() == initId) {
                             if (msg.has("error")) {
                                 emit(
@@ -374,16 +814,18 @@ class AcpSessionManager(
                                         "stdoutLine" to raw,
                                     )
                                 )
-                                break
+                                return@submit
                             }
+                            initDone = true
                             onAuthenticated()
-                            newSessionReqId = active.nextId.getAndIncrement()
+                            val nextNewId = active.nextId.getAndIncrement()
+                            active.newSessionReqId = nextNewId
                             if (!existingSessionId.isNullOrBlank()) {
                                 AcpConfigAndPromptHelper.sendJson(
                                     writer,
                                     JSONObject()
                                         .put("jsonrpc", "2.0")
-                                        .put("id", newSessionReqId)
+                                        .put("id", nextNewId)
                                         .put("method", "session/resume")
                                         .put(
                                             "params",
@@ -397,7 +839,7 @@ class AcpSessionManager(
                                     writer,
                                     JSONObject()
                                         .put("jsonrpc", "2.0")
-                                        .put("id", newSessionReqId)
+                                        .put("id", nextNewId)
                                         .put("method", "session/new")
                                         .put(
                                             "params",
@@ -406,198 +848,22 @@ class AcpSessionManager(
                                                 .put("mcpServers", AcpConfigAndPromptHelper.buildMcpServersArray())
                                         )
                                 )
-                            }
-                            continue
-                        }
-
-                        if (msgId is Number && msgId.toInt() == newSessionReqId) {
-                            if (msg.has("error") && !existingSessionId.isNullOrBlank() && !triedLoadFallback) {
-                                triedLoadFallback = true
-                                val errObj = msg.optJSONObject("error")
-                                val errCode = errObj?.optInt("code", 0) ?: 0
-                                newSessionReqId = active.nextId.getAndIncrement()
-                                val fallbackMethod = if (errCode == -32601) "session/load" else "session/new"
-                                val fallbackParams = if (fallbackMethod == "session/load") {
-                                    JSONObject()
-                                        .put("sessionId", existingSessionId)
-                                        .put("cwd", cwd.absolutePath)
-                                } else {
-                                    JSONObject()
-                                        .put("cwd", cwd.absolutePath)
-                                        .put("mcpServers", AcpConfigAndPromptHelper.buildMcpServersArray())
-                                }
-                                AcpConfigAndPromptHelper.sendJson(
-                                    writer,
-                                    JSONObject()
-                                        .put("jsonrpc", "2.0")
-                                        .put("id", newSessionReqId)
-                                        .put("method", fallbackMethod)
-                                        .put("params", fallbackParams)
-                                )
-                                continue
-                            }
-                            if (msg.has("error") && triedLoadFallback && !triedNewFallback && acpSessionId == null) {
-                                triedNewFallback = true
-                                newSessionReqId = active.nextId.getAndIncrement()
-                                AcpConfigAndPromptHelper.sendJson(
-                                    writer,
-                                    JSONObject()
-                                        .put("jsonrpc", "2.0")
-                                        .put("id", newSessionReqId)
-                                        .put("method", "session/new")
-                                        .put(
-                                            "params",
-                                            JSONObject()
-                                                .put("cwd", cwd.absolutePath)
-                                                .put("mcpServers", AcpConfigAndPromptHelper.buildMcpServersArray())
-                                        )
-                                )
-                                continue
-                            }
-                            val res = msg.optJSONObject("result")
-                            acpSessionId = res?.optString("sessionId")
-                                ?.takeIf { it.isNotBlank() } ?: if (res != null) existingSessionId else null
-
-                            val activeTid = active.currentTurnId
-                            if (activeTid != null) {
-                                emit(
-                                    mapOf(
-                                        "kind" to "turn_acp_line",
-                                        "turnId" to activeTid,
-                                        "stdoutLine" to raw,
-                                    )
-                                )
-                            }
-
-                            if (acpSessionId != null) {
-                                active.sessionId = acpSessionId
-                                active.pendingConfigReqIds.clear()
-                                active.pendingPromptText = prompt
-                                active.pendingPromptAttachments = attachments
-                                AcpConfigAndPromptHelper.queueConfigOptions(
-                                    active = active,
-                                    writer = writer,
-                                    sessionId = acpSessionId,
-                                    modelId = modelId,
-                                    effort = effort,
-                                    modeCli = modeCli,
-                                    skipPermissions = skipPermissions,
-                                )
-
-                                if (active.pendingConfigReqIds.isEmpty()) {
-                                    val nextPid = active.nextId.getAndIncrement()
-                                    active.promptReqId = nextPid
-                                    active.promptSent = true
-                                    active.pendingPromptText = null
-                                    active.pendingPromptAttachments = emptyList()
-                                    AcpConfigAndPromptHelper.sendPromptRpc(
-                                        writer = writer,
-                                        reqId = nextPid,
-                                        sessionId = acpSessionId,
-                                        prompt = prompt,
-                                        attachments = attachments,
-                                    )
-                                }
-                            } else {
-                                break
-                            }
-                            continue
-                        }
-
-                        val configMsgId = when (msgId) {
-                            is Number -> msgId.toInt()
-                            is String -> msgId.toIntOrNull()
-                            else -> null
-                        }
-                        if (configMsgId != null && active.pendingConfigReqIds.remove(configMsgId)) {
-                            val activeSid = active.sessionId
-                            if (active.pendingConfigReqIds.isEmpty() && !active.promptSent && activeSid != null) {
-                                val nextPid = active.nextId.getAndIncrement()
-                                active.promptReqId = nextPid
-                                active.promptSent = true
-                                val pText = active.pendingPromptText ?: prompt
-                                val pAtt = active.pendingPromptAttachments
-                                active.pendingPromptText = null
-                                active.pendingPromptAttachments = emptyList()
-                                AcpConfigAndPromptHelper.sendPromptRpc(
-                                    writer = writer,
-                                    reqId = nextPid,
-                                    sessionId = activeSid,
-                                    prompt = pText,
-                                    attachments = pAtt,
-                                )
-                            }
-                            continue
-                        }
-
-                        if (method == "fs/read_text_file" && msgId != null) {
-                            fsTerminalHandler.handleReadTextFile(active, writer, msgId, msg.optJSONObject("params"))
-                            continue
-                        }
-                        if (method == "fs/write_text_file" && msgId != null) {
-                            fsTerminalHandler.handleWriteTextFile(active, writer, msgId, msg.optJSONObject("params"))
-                            continue
-                        }
-                        if (method.startsWith("terminal/") && msgId != null) {
-                            fsTerminalHandler.handleTerminalRpc(active, method, msgId, msg.optJSONObject("params"))
-                            continue
-                        }
-
-                        val activeTid = active.currentTurnId
-                        if (activeTid == null) {
-                            if (method == "session/update" || method == "session/request_permission") {
-                                emit(
-                                    mapOf(
-                                        "kind" to "acp_wakeup",
-                                        "sessionId" to (active.sessionId ?: ""),
-                                        "stdoutLine" to raw,
-                                    )
-                                )
-                            }
-                            continue
-                        }
-
-                        if (!shouldForwardAcpNotification(method, active.promptSent)) {
-                            continue
-                        }
-
-                        emit(
-                            mapOf(
-                                "kind" to "turn_acp_line",
-                                "turnId" to activeTid,
-                                "stdoutLine" to raw,
-                            )
-                        )
-
-                        val numericMsgId = when (msgId) {
-                            is Number -> msgId.toInt()
-                            is String -> msgId.toIntOrNull()
-                            else -> null
-                        }
-                        if (numericMsgId != null && numericMsgId == active.promptReqId) {
-                            sessions.remove(activeTid)
-                            active.currentTurnId = null
-                            active.promptReqId = -1
-                            emitTurnExitOnce(activeTid, 0, active)
-                            val sid = active.sessionId
-                            if (sid != null && proc.isAlive && !active.cancelled.get()) {
-                                putLiveWorker(sid, active)
-                                onTasksChanged()
-                                continue
                             }
                             break
                         }
                     }
-                }
-
-                val danglingTurnId = active.currentTurnId
-                if (danglingTurnId != null && !active.cancelled.get()) {
-                    runCatching { errFuture.get(2, TimeUnit.SECONDS) }
-                    val exitCode = if (proc.waitFor(2, TimeUnit.SECONDS)) proc.exitValue() else {
-                        proc.destroyForcibly()
-                        1
+                    if (initDone) {
+                        runPostInitReadLoop(
+                            active = active,
+                            proc = proc,
+                            writer = writer,
+                            reader = reader,
+                            errFuture = errFuture,
+                            cwd = cwd,
+                            existingSessionId = existingSessionId,
+                            skipPermissions = skipPermissions,
+                        )
                     }
-                    emitTurnExitOnce(danglingTurnId, exitCode, active)
                 }
             } catch (t: Throwable) {
                 val activeTid = activeRef?.currentTurnId
@@ -686,6 +952,7 @@ class AcpSessionManager(
     }
 
     fun forceStopAll(): Int {
+        closeStandbyWorker()
         val keys = sessions.keys.toList()
         var count = 0
         for (turnId in keys) {
@@ -706,6 +973,7 @@ class AcpSessionManager(
     }
 
     fun closeAllLiveWorkers(notifyTasks: Boolean = true): Int {
+        closeStandbyWorker()
         val workersToStop = synchronized(liveWorkers) {
             val list = liveWorkers.values.toList()
             liveWorkers.clear()

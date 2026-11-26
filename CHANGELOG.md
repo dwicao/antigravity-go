@@ -2,6 +2,19 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.46] - 2026-11-26
+
+### Added & Optimized (Better, Cheaper & Faster Harness)
+- **Quota Saver & Smart Effort Routing (`HarnessTurnRouter`):**
+  - Wired `InferenceSpeedTier` (`Regular` / `Fast` / `Ultrafast`) and **Smart Effort Routing** (`smartRoutingEnabled`) so short conversational/status turns automatically use lighter models (`gemini-4-hydrogen` / `gemini-3.8-flash`) and `low` reasoning effort while keeping flagship models intact for multi-file coding and debugging.
+  - Added **Quota Saver Mode** (`quotaSaverEnabled`, enabled by default): caps auto-compaction at **160K tokens** on 1M-context models instead of waiting until 800K, routes `/compact` turns to `gemini-3.8-flash` (`low` effort), skips duplicate `<agents_instructions>` Turn-1 prompt injection on native `agy` (which already loads `GEMINI.md`/`AGENTS.md`), and skips `<repo_map>` on trivial/slash turns.
+  - Added **Coding Minimal MCP** mode on `PhoneMcpServer` (`phone_notify` + `phone_subagent_notify` only instead of all 16 UI/hardware/Shizuku schemas) and truncated oversized MCP tree/dump payloads >8 KB.
+  - Added **Auto-Pivot Stuck Loops** (`autoPivotLoopEnabled`), tightened `CommandSafetyGuard` offload threshold to **6 KB** (`1.5 KB` head + `2.5 KB` tail), and added pagination bounds (`24 KB` / `320` lines) to unbounded ACP `fs/read_text_file` calls.
+- **Latency & Speed Optimizations:**
+  - **Standby ACP Pre-Warming & Delta Config RPCs:** `AcpSessionManager` pre-warms an initialized standby `agy acp` worker when the runtime becomes ready, and `AcpConfigAndPromptHelper.queueConfigOptions` skips unchanged `session/set_config_option` RPCs on warm worker reuse.
+  - **Non-Blocking Pre-Turn Checkpoints & Clean Git Fast-Path:** `ChatNotifier` now dispatches `createCheckpoint` asynchronously in parallel with prompt startup (and skips it in read-only `plan` mode), while `WorkspaceOps.createCheckpoint` uses a single `git status --porcelain` fast-path on clean repos.
+  - **Memoized Disk I/O, Cached Repo Map & Deterministic Auto-Verify:** Memoized `GEMINI.md`, `mcp_config.json`, and `settings.json` writes in `CustomizationsOps`, deduplicated `/sdcard` vs `/storage/emulated/0` in `--add-dir`, added a 60s TTL cache + background pre-warming to `RepoMapBuilder`, and ran `autoVerifyEnabled` locally in shell without burning an LLM turn when tests pass.
+
 ## [1.0.45] - 2026-11-26
 
 ### Fixed

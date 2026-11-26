@@ -262,6 +262,16 @@ internal class AcpFsTerminalHandler(
                 val from = (startLine - 1).coerceIn(0, lines.size)
                 val to = if (limit > 0) (from + limit).coerceAtMost(lines.size) else lines.size
                 lines.subList(from, to).joinToString("\n")
+            } else if (rawText.length > 24_000) {
+                val lines = rawText.lines()
+                if (lines.size > 320) {
+                    val head = lines.take(220).joinToString("\n")
+                    val tail = lines.takeLast(60).joinToString("\n")
+                    val omitted = lines.size - 280
+                    "$head\n\n... [TRUNCATED $omitted middle lines (${lines.size} lines / ${rawText.length} chars total) — re-call fs/read_text_file with line & limit to inspect specific sections] ...\n\n$tail"
+                } else {
+                    rawText.take(16_000) + "\n\n... [TRUNCATED ${rawText.length - 20_000} middle chars] ...\n\n" + rawText.takeLast(4_000)
+                }
             } else {
                 rawText
             }

@@ -763,6 +763,58 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     return (durationSec: durationSec, tokPerSec: tokPerSec);
   }
 
+  void _attachCheckpointAsync({
+    required String sessionId,
+    required String userMsgId,
+    required int streamToken,
+    required Future<Map<String, Object?>> Function() createFn,
+  }) {
+    unawaited(() async {
+      try {
+        final cp = await createFn();
+        if (!ref.mounted || _sessionTurnTokens[sessionId] != streamToken) return;
+        final refHash = cp['ref']?.toString() ?? '';
+        if (cp['ok'] == true && refHash.isNotEmpty) {
+          final currentMsgs = _messagesForSession(sessionId);
+          final uIdx = currentMsgs.indexWhere((m) => m.id == userMsgId);
+          if (uIdx >= 0) {
+            final updated = [...currentMsgs];
+            updated[uIdx] = updated[uIdx].copyWith(checkpointRef: refHash);
+            _updateSessionMessages(sessionId, updated);
+            unawaited(_persistMessages(sessionId, updated));
+          }
+        }
+      } catch (_) {}
+    }());
+  }
+
+  Future<void> _runDeterministicAutoVerify({
+    required String sessionId,
+    required String command,
+    required String cwd,
+  }) async {
+    try {
+      final raw = await RuntimeBridge.instance.runShellCommand(
+        command: '$command; echo "__AGY_VERIFY_EXIT=\$?__"',
+        cwd: cwd.isEmpty ? null : cwd,
+      );
+      if (!ref.mounted || _loadedSessionId != sessionId) return;
+      final match = RegExp(r'__AGY_VERIFY_EXIT=(\d+)__').firstMatch(raw);
+      final code = int.tryParse(match?.group(1) ?? '');
+      final cleaned = raw.replaceAll(RegExp(r'__AGY_VERIFY_EXIT=\d+__'), '').trim();
+      if (code == 0) {
+        await appendSystemFeedback('**Auto-Verify Passed** (`$command`)');
+      } else if (code != null) {
+        final tail = cleaned.length > 600
+            ? cleaned.substring(cleaned.length - 600)
+            : cleaned;
+        await appendSystemFeedback(
+          '**Auto-Verify Failed (exit $code)** (`$command`)\n```\n$tail\n```',
+        );
+      }
+    } catch (_) {}
+  }
+
   Future<void> sendPrompt(
     String rawText, {
     List<String> attachments = const [],
@@ -809,9 +861,25 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     if (!ref.mounted) return;
 
     final settings = ref.read(settingsProvider);
+    final harness = ref.read(harnessProvider);
     final activeCustom = ref.read(activeCustomProviderProvider);
-    final activeModelId = activeCustom?.modelId ?? settings.selectedModelId;
-    final activeEffort = activeCustom != null ? '' : settings.reasoningEffort;
+    final turnRoute = activeCustom == null
+        ? HarnessTurnRouter.routeTurn(
+            prompt: prompt,
+            selectedModelId: settings.selectedModelId,
+            selectedEffort: settings.reasoningEffort,
+            speedTierName: settings.speedTier.name,
+            smartRoutingEnabled: harness.smartRoutingEnabled,
+            hasAttachments: attachments.isNotEmpty,
+          )
+        : (
+            modelId: activeCustom.modelId,
+            effort: '',
+            skipRepoMap: false,
+            downgraded: false,
+          );
+    final activeModelId = turnRoute.modelId;
+    final activeEffort = turnRoute.effort;
     final hosts = ref.read(hostsProvider);
     final sshHost = hosts.activeSshHost;
     final textAttachments =
@@ -969,8 +1037,11 @@ class ChatNotifier extends Notifier<ChatThreadState> {
 
     final isNewRemoteSession = session.remoteConversationId == null ||
         session.remoteConversationId!.isEmpty;
+    // Native `agy` already reads GEMINI.md / AGENTS.md from disk; only inject
+    // `<agents_instructions>` when Quota Saver is off or on `/v1` OpenAI providers.
     final agentsContext = (!runtime.status.safeMode &&
             activeCustom == null &&
+            !harness.quotaSaverEnabled &&
             isNewRemoteSession)
         ? AgentCustomizationHelper.buildAgentsContextBlock(customizations)
         : '';
@@ -979,7 +1050,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         activeCustom == null &&
         sshHost == null &&
         isNewRemoteSession &&
-        ref.read(harnessProvider).repoMapEnabled &&
+        harness.repoMapEnabled &&
+        !turnRoute.skipRepoMap &&
         effectiveWorkspace.isNotEmpty) {
       try {
         repoMapContext = await RepoMapBuilder.buildFromDirectory(
@@ -1041,35 +1113,24 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           sshPwd = creds.$1;
           sshKey = creds.$2;
         }
-        if (ref.read(harnessProvider).autoCheckpointEnabled &&
+        if (harness.autoCheckpointEnabled &&
             (sshHost != null || runtime.status.isReady)) {
-          try {
-            final cp = sshHost != null
-                ? await SshAgyRunner.instance.createCheckpoint(
+          _attachCheckpointAsync(
+            sessionId: session.id,
+            userMsgId: userMsgId,
+            streamToken: streamToken,
+            createFn: () => sshHost != null
+                ? SshAgyRunner.instance.createCheckpoint(
                     host: sshHost,
                     cwd: effectiveWorkspace,
                     password: sshPwd,
                     privateKeyPem: sshKey,
                     onTrustFirstKey: saveFp,
                   )
-                : await RuntimeBridge.instance.createCheckpoint(
+                : RuntimeBridge.instance.createCheckpoint(
                     cwd: effectiveWorkspace.isEmpty ? null : effectiveWorkspace,
-                  );
-            if (!ref.mounted || _sessionTurnTokens[session.id] != streamToken) {
-              return;
-            }
-            final refHash = cp['ref']?.toString() ?? '';
-            if (cp['ok'] == true && refHash.isNotEmpty) {
-              final currentMsgs = _messagesForSession(session.id);
-              final uIdx = currentMsgs.indexWhere((m) => m.id == userMsgId);
-              if (uIdx >= 0) {
-                final updated = [...currentMsgs];
-                updated[uIdx] = updated[uIdx].copyWith(checkpointRef: refHash);
-                _updateSessionMessages(session.id, updated);
-                unawaited(_persistMessages(session.id, updated));
-              }
-            }
-          } catch (_) {}
+                  ),
+          );
         }
         final historySlice = prevCompactIdx >= 0
             ? priorMsgs.skip(prevCompactIdx + (carryCompactContext ? 1 : 0))
@@ -1111,8 +1172,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
             if (perms.allFilesAccess) '/sdcard',
           ],
           conversationId: session.remoteConversationId,
-          modelId: settings.selectedModelId,
-          effortCliValue: settings.reasoningEffort,
+          modelId: activeModelId,
+          effortCliValue: activeEffort,
           mode: effectiveMode,
           dangerouslySkipPermissions: skipPerms,
           allowNonWorkspaceAccess: allowNonWorkspace,
@@ -1141,31 +1202,20 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           Future<void> saveFp(String fp) => ref
               .read(hostsProvider.notifier)
               .saveHostFingerprint(sshHost.id, fp);
-          if (ref.read(harnessProvider).autoCheckpointEnabled) {
-            try {
-              final cp = await SshAgyRunner.instance.createCheckpoint(
+          if (harness.autoCheckpointEnabled &&
+              effectiveMode != AgyExecutionMode.plan) {
+            _attachCheckpointAsync(
+              sessionId: session.id,
+              userMsgId: userMsgId,
+              streamToken: streamToken,
+              createFn: () => SshAgyRunner.instance.createCheckpoint(
                 host: sshHost,
                 cwd: effectiveWorkspace,
                 password: pwd,
                 privateKeyPem: key,
                 onTrustFirstKey: saveFp,
-              );
-              if (!ref.mounted ||
-                  _sessionTurnTokens[session.id] != streamToken) {
-                return;
-              }
-              final refHash = cp['ref']?.toString() ?? '';
-              if (cp['ok'] == true && refHash.isNotEmpty) {
-                final currentMsgs = _messagesForSession(session.id);
-                final uIdx = currentMsgs.indexWhere((m) => m.id == userMsgId);
-                if (uIdx >= 0) {
-                  final updated = [...currentMsgs];
-                  updated[uIdx] = updated[uIdx].copyWith(checkpointRef: refHash);
-                  _updateSessionMessages(session.id, updated);
-                  unawaited(_persistMessages(session.id, updated));
-                }
-              }
-            } catch (_) {}
+              ),
+            );
           }
           stream = SshAgyRunner.instance.runPrompt(
             host: sshHost,
@@ -1185,27 +1235,16 @@ class ChatNotifier extends Notifier<ChatThreadState> {
             );
             return;
           }
-          if (ref.read(harnessProvider).autoCheckpointEnabled) {
-            try {
-              final cp = await RuntimeBridge.instance.createCheckpoint(
+          if (harness.autoCheckpointEnabled &&
+              effectiveMode != AgyExecutionMode.plan) {
+            _attachCheckpointAsync(
+              sessionId: session.id,
+              userMsgId: userMsgId,
+              streamToken: streamToken,
+              createFn: () => RuntimeBridge.instance.createCheckpoint(
                 cwd: effectiveWorkspace.isEmpty ? null : effectiveWorkspace,
-              );
-              if (!ref.mounted ||
-                  _sessionTurnTokens[session.id] != streamToken) {
-                return;
-              }
-              final refHash = cp['ref']?.toString() ?? '';
-              if (cp['ok'] == true && refHash.isNotEmpty) {
-                final currentMsgs = _messagesForSession(session.id);
-                final uIdx = currentMsgs.indexWhere((m) => m.id == userMsgId);
-                if (uIdx >= 0) {
-                  final updated = [...currentMsgs];
-                  updated[uIdx] = updated[uIdx].copyWith(checkpointRef: refHash);
-                  _updateSessionMessages(session.id, updated);
-                  unawaited(_persistMessages(session.id, updated));
-                }
-              }
-            } catch (_) {}
+              ),
+            );
           }
           localRequest = request;
           stream = RuntimeBridge.instance.runPrompt(
@@ -1480,6 +1519,9 @@ class ChatNotifier extends Notifier<ChatThreadState> {
             _sessionLoopWarnings[session.id] = loopHit;
             if (_loadedSessionId == session.id) {
               state = state.copyWith(loopWarning: loopHit);
+              if (ref.read(harnessProvider).autoPivotLoopEnabled) {
+                Future.microtask(breakLoopAndPivot);
+              }
             }
           }
         }
@@ -1837,6 +1879,9 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       final fallbackCwd = session.workspacePath.isNotEmpty
           ? session.workspacePath
           : ref.read(projectsProvider).activeProject.primaryFolder;
+      if (completedMsg != null && completedMsg.changedFiles.isNotEmpty) {
+        RepoMapBuilder.invalidateCache(fallbackCwd);
+      }
       final pushCwd = extractGitPushCwd(
         completedMsg?.tools ?? const [],
         fallbackCwd: fallbackCwd,
@@ -1848,6 +1893,31 @@ class ChatNotifier extends Notifier<ChatThreadState> {
                 sessionId: session.id,
               ),
         );
+      }
+      final harnessSnap = ref.read(harnessProvider);
+      final verifyCmd = harnessSnap.effectiveVerifyCommand?.trim() ?? '';
+      if (hadLocalRequest &&
+          isViewingSession &&
+          harnessSnap.autoVerifyEnabled &&
+          verifyCmd.isNotEmpty &&
+          completedMsg != null &&
+          !completedMsg.isCompactionSummary &&
+          completedMsg.changedFiles.isNotEmpty) {
+        final alreadyRan = completedMsg.tools.any((t) {
+          final cmd =
+              (t.parameters['CommandLine'] ?? t.parameters['command'] ?? '')
+                  .toString();
+          return cmd.contains(verifyCmd);
+        });
+        if (!alreadyRan) {
+          unawaited(
+            _runDeterministicAutoVerify(
+              sessionId: session.id,
+              command: verifyCmd,
+              cwd: fallbackCwd,
+            ),
+          );
+        }
       }
     }
 
@@ -2369,9 +2439,25 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     if (!ref.mounted) return (ok: false, message: 'Cancelled');
 
     final settings = ref.read(settingsProvider);
+    final harness = ref.read(harnessProvider);
     final activeCustom = ref.read(activeCustomProviderProvider);
-    final activeModelId = activeCustom?.modelId ?? settings.selectedModelId;
-    final activeEffort = activeCustom != null ? '' : settings.reasoningEffort;
+    final turnRoute = activeCustom == null
+        ? HarnessTurnRouter.routeTurn(
+            prompt: prompt,
+            selectedModelId: settings.selectedModelId,
+            selectedEffort: settings.reasoningEffort,
+            speedTierName: settings.speedTier.name,
+            smartRoutingEnabled: harness.smartRoutingEnabled,
+            hasAttachments: attachments.isNotEmpty,
+          )
+        : (
+            modelId: activeCustom.modelId,
+            effort: '',
+            skipRepoMap: false,
+            downgraded: false,
+          );
+    final activeModelId = turnRoute.modelId;
+    final activeEffort = turnRoute.effort;
 
     if (activeCustom == null && sshHost == null && !runtime.status.isReady) {
       final fallback = HarnessContextMonitor.buildFallbackCompactionSummary(
@@ -2483,6 +2569,10 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         return (ok: false, message: 'Cancelled');
       }
 
+      final compactRoute =
+          (sshHost == null && ref.read(harnessProvider).quotaSaverEnabled)
+              ? HarnessTurnRouter.resolveCompactionRoute()
+              : null;
       final request = AgyPromptRequest(
         prompt: compactPrompt,
         workspacePath: effectiveWorkspace,
@@ -2492,8 +2582,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           if (perms.allFilesAccess) '/sdcard',
         ],
         conversationId: null,
-        modelId: settings.selectedModelId,
-        effortCliValue: settings.reasoningEffort,
+        modelId: compactRoute?.modelId ?? settings.selectedModelId,
+        effortCliValue: compactRoute?.effort ?? settings.reasoningEffort,
         mode: sshHost != null
             ? AgyExecutionMode.plan
             : AgyExecutionMode.plan.androidSafe,

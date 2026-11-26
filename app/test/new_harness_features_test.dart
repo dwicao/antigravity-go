@@ -641,6 +641,25 @@ diff --git a/app/lib/main.dart b/app/lib/main.dart
     expect(find.text('Ctrl+Z'), findsOneWidget);
     expect(find.text('Esc'), findsOneWidget);
   });
+
+  test('HarnessState exposes Quota Saver, Smart Routing, and Auto-Pivot defaults and toggles', () async {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final initial = container.read(harnessProvider);
+    expect(initial.quotaSaverEnabled, isTrue);
+    expect(initial.smartRoutingEnabled, isTrue);
+    expect(initial.autoPivotLoopEnabled, isTrue);
+
+    await container.read(harnessProvider.notifier).setQuotaSaver(false);
+    await container.read(harnessProvider.notifier).setSmartRouting(false);
+    await container.read(harnessProvider.notifier).setAutoPivotLoop(false);
+
+    final updated = container.read(harnessProvider);
+    expect(updated.quotaSaverEnabled, isFalse);
+    expect(updated.smartRoutingEnabled, isFalse);
+    expect(updated.autoPivotLoopEnabled, isFalse);
+  });
 }
 
 class _FakeWorkspaceDiffNotifier extends WorkspaceDiffNotifier {

@@ -261,4 +261,67 @@ void main() {
       );
     });
   });
+
+  group('HarnessTurnRouter & quota-capped monitor', () {
+    test('routes ultrafast, fast, trivial prompts, and compaction cleanly', () {
+      final compactRoute = HarnessTurnRouter.resolveCompactionRoute();
+      expect(compactRoute.modelId, HarnessTurnRouter.fastCompactionModelId);
+      expect(compactRoute.effort, 'low');
+
+      final ultrafast = HarnessTurnRouter.routeTurn(
+        prompt: 'Implement full OAuth login across 4 files',
+        selectedModelId: 'Orchestrator (Neon)',
+        selectedEffort: 'high',
+        speedTierName: 'ultrafast',
+        smartRoutingEnabled: true,
+      );
+      expect(ultrafast.modelId, 'gemini-3.8-flash');
+      expect(ultrafast.effort, 'low');
+
+      final fast = HarnessTurnRouter.routeTurn(
+        prompt: 'Refactor lib/state/chat_state.dart cleanly',
+        selectedModelId: 'gemini-4-neon',
+        selectedEffort: 'xhigh',
+        speedTierName: 'fast',
+        smartRoutingEnabled: true,
+      );
+      expect(fast.modelId, 'gemini-4-hydrogen');
+      expect(fast.effort, 'medium');
+      expect(fast.skipRepoMap, isFalse);
+
+      final trivial = HarnessTurnRouter.routeTurn(
+        prompt: 'halo apa kabar',
+        selectedModelId: 'Orchestrator (Neon)',
+        selectedEffort: 'high',
+        speedTierName: 'regular',
+        smartRoutingEnabled: true,
+      );
+      expect(trivial.modelId, 'gemini-4-hydrogen');
+      expect(trivial.effort, 'low');
+      expect(trivial.skipRepoMap, isTrue);
+
+      final heavy = HarnessTurnRouter.routeTurn(
+        prompt: 'Fix race condition in app/lib/state/chat_state.dart and add unit tests',
+        selectedModelId: 'gemini-4-neon',
+        selectedEffort: 'high',
+        speedTierName: 'regular',
+        smartRoutingEnabled: true,
+      );
+      expect(heavy.modelId, 'gemini-4-neon');
+      expect(heavy.effort, 'high');
+      expect(heavy.skipRepoMap, isFalse);
+    });
+
+    test('caps auto-compact threshold at maxCompactTokens on 1M context models', () {
+      const monitor = HarnessContextMonitor(maxCompactTokens: 160000);
+      final big = List<String>.filled(650000, 'a').join();
+      final snap = monitor.evaluate(
+        messageTexts: [big],
+        modelId: 'gemini-4-neon',
+      );
+      expect(snap.budgetTokens, 1000000);
+      expect(snap.usedTokens, greaterThan(160000));
+      expect(snap.shouldCompact, isTrue);
+    });
+  });
 }

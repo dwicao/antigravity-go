@@ -73,4 +73,17 @@ class PhoneMcpServerTest {
         }!!
         assertTrue(blockedResp.getJSONObject("result").getBoolean("isError"))
     }
+
+    @Test
+    fun minimalCodingModeReducesToolSchemasToNotifyOnly() {
+        val listReq = JSONObject()
+            .put("jsonrpc", "2.0")
+            .put("id", 3)
+            .put("method", "tools/list")
+        val minResp = PhoneMcpServer.dispatchJsonRpc(listReq, minimalCodingOnly = true) { _, _ -> JSONObject() }!!
+        val tools = minResp.getJSONObject("result").getJSONArray("tools")
+        assertEquals(2, tools.length())
+        assertEquals("phone_notify", tools.getJSONObject(0).getString("name"))
+        assertEquals("phone_subagent_notify", tools.getJSONObject(1).getString("name"))
+    }
 }

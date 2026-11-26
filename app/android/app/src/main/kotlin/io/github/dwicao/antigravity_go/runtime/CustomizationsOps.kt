@@ -19,6 +19,15 @@ class CustomizationsOps(
 ) {
     private val mcpConfigFile: File get() = File(homeDir, ".gemini/config/mcp_config.json")
 
+    @Volatile
+    private var lastSyncedGeminiAllowStorage: Boolean? = null
+
+    @Volatile
+    private var lastSyncedMcpKey: String? = null
+
+    @Volatile
+    private var lastWrittenSettingsSig: String? = null
+
     data class SkillFrontmatterMeta(
         val name: String,
         val description: String,
@@ -68,10 +77,16 @@ class CustomizationsOps(
     fun syncManagedGeminiMd(allowStorage: Boolean) {
         try {
             val geminiMd = File(homeDir, ".gemini/GEMINI.md")
+            if (lastSyncedGeminiAllowStorage == allowStorage && geminiMd.exists()) {
+                return
+            }
             val marker = "<!-- antigravity-go:managed"
             if (geminiMd.exists()) {
                 val existing = geminiMd.readText()
-                if (!existing.startsWith(marker)) return
+                if (!existing.startsWith(marker)) {
+                    lastSyncedGeminiAllowStorage = allowStorage
+                    return
+                }
             }
             geminiMd.parentFile?.mkdirs()
             val storageSection = if (allowStorage) {
@@ -94,6 +109,7 @@ class CustomizationsOps(
             if (!geminiMd.exists() || geminiMd.readText() != managedContent) {
                 geminiMd.writeText(managedContent)
             }
+            lastSyncedGeminiAllowStorage = allowStorage
         } catch (_: Throwable) {}
     }
 
@@ -112,6 +128,8 @@ class CustomizationsOps(
     }
 
     fun writeSettings(patch: Map<String, Any?>) {
+        val sig = patch.entries.sortedBy { it.key }.joinToString("|") { "${it.key}=${it.value}" }
+        if (lastWrittenSettingsSig == sig && settingsFile.exists()) return
         settingsFile.parentFile?.mkdirs()
         val obj = if (settingsFile.exists()) {
             try {
@@ -122,14 +140,25 @@ class CustomizationsOps(
         } else {
             JSONObject()
         }
+        var changed = !settingsFile.exists()
         for ((k, v) in patch) {
             if (v == null) {
-                obj.remove(k)
+                if (obj.has(k)) {
+                    obj.remove(k)
+                    changed = true
+                }
             } else {
-                obj.put(k, JSONObject.wrap(v))
+                val wrapped = JSONObject.wrap(v)
+                if (obj.opt(k)?.toString() != wrapped?.toString()) {
+                    obj.put(k, wrapped)
+                    changed = true
+                }
             }
         }
-        atomicWriteText(settingsFile, obj.toString(2))
+        if (changed) {
+            atomicWriteText(settingsFile, obj.toString(2))
+        }
+        lastWrittenSettingsSig = sig
     }
 
     /**
@@ -139,6 +168,8 @@ class CustomizationsOps(
     fun syncPhoneMcpRegistration() {
         try {
             val endpoint = PhoneControlCoordinator.currentMcpEndpoint()
+            val epKey = if (endpoint != null) "${endpoint.url}|${endpoint.authToken}" else "off"
+            if (lastSyncedMcpKey == epKey && mcpConfigFile.exists()) return
             val root = if (mcpConfigFile.exists()) {
                 runCatching { JSONObject(mcpConfigFile.readText()) }.getOrElse { JSONObject() }
             } else {
@@ -161,6 +192,7 @@ class CustomizationsOps(
             }
             root.put("mcpServers", servers)
             atomicWriteText(mcpConfigFile, root.toString(2))
+            lastSyncedMcpKey = epKey
         } catch (_: Throwable) {}
     }
 

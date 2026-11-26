@@ -259,10 +259,49 @@ class _HarnessPageState extends ConsumerState<HarnessPage> {
                 const Divider(height: 1),
                 SwitchListTile.adaptive(
                   dense: true,
+                  secondary: const Icon(Icons.bolt_rounded, size: 20),
+                  title: const Text('Auto-Pivot Stuck Loops'),
+                  subtitle: const Text(
+                    'Stops repeated failures automatically & injects a pivot prompt',
+                  ),
+                  value: harness.autoPivotLoopEnabled,
+                  onChanged: harness.loopBreakerEnabled
+                      ? (v) => ref
+                          .read(harnessProvider.notifier)
+                          .setAutoPivotLoop(v)
+                      : null,
+                ),
+                const Divider(height: 1),
+                SwitchListTile.adaptive(
+                  dense: true,
+                  secondary: const Icon(Icons.savings_outlined, size: 20),
+                  title: const Text('Quota Saver Mode'),
+                  subtitle: const Text(
+                    'Caps auto-compact at 160K, uses Flash for /compact & minimal MCP tools',
+                  ),
+                  value: harness.quotaSaverEnabled,
+                  onChanged: (v) =>
+                      ref.read(harnessProvider.notifier).setQuotaSaver(v),
+                ),
+                const Divider(height: 1),
+                SwitchListTile.adaptive(
+                  dense: true,
+                  secondary: const Icon(Icons.alt_route_rounded, size: 20),
+                  title: const Text('Smart Effort Routing'),
+                  subtitle: const Text(
+                    'Routes short Q&A/status turns to faster Hydrogen + Low effort',
+                  ),
+                  value: harness.smartRoutingEnabled,
+                  onChanged: (v) =>
+                      ref.read(harnessProvider.notifier).setSmartRouting(v),
+                ),
+                const Divider(height: 1),
+                SwitchListTile.adaptive(
+                  dense: true,
                   secondary: const Icon(Icons.gpp_good_outlined, size: 20),
                   title: const Text('Command & Path Safety Guard'),
                   subtitle: const Text(
-                    'Blocks catastrophic deletes, raw disk writes & credential overwrites (outputs >12KB offloaded)',
+                    'Blocks catastrophic deletes, raw disk writes & credential overwrites (outputs >6KB offloaded)',
                   ),
                   value: harness.guardrailsEnabled,
                   onChanged: (v) =>
@@ -274,7 +313,7 @@ class _HarnessPageState extends ConsumerState<HarnessPage> {
                   secondary: const Icon(Icons.history_rounded, size: 20),
                   title: const Text('Pre-Turn Git Checkpoints'),
                   subtitle: const Text(
-                    'Captures lightweight stash snapshots for deterministic /rewind',
+                    'Captures lightweight stash snapshots asynchronously for /rewind',
                   ),
                   value: harness.autoCheckpointEnabled,
                   onChanged: (v) =>
@@ -286,7 +325,7 @@ class _HarnessPageState extends ConsumerState<HarnessPage> {
                   secondary: const Icon(Icons.fact_check_outlined, size: 20),
                   title: const Text('Auto-Verify After Turn'),
                   subtitle: const Text(
-                    'Appends verification-gate instructions after feature work',
+                    'Runs verification gate locally after code edits (zero LLM tokens on pass)',
                   ),
                   value: harness.autoVerifyEnabled,
                   onChanged: (v) =>
@@ -297,8 +336,10 @@ class _HarnessPageState extends ConsumerState<HarnessPage> {
                   dense: true,
                   secondary: const Icon(Icons.compress_rounded, size: 20),
                   title: const Text('Auto-Compact History'),
-                  subtitle: const Text(
-                    'Automatically summarizes context when usage exceeds 80%',
+                  subtitle: Text(
+                    harness.quotaSaverEnabled
+                        ? 'Summarizes context automatically at 160K tokens (Flash Low)'
+                        : 'Automatically summarizes context when usage exceeds 80%',
                   ),
                   value: harness.autoCompactEnabled,
                   onChanged: (v) =>

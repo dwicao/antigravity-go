@@ -42,6 +42,9 @@ object PhoneControlCoordinator {
     var safetyStrict: Boolean = true
 
     @Volatile
+    var minimalCodingMcp: Boolean = true
+
+    @Volatile
     private var appContext: Context? = null
 
     @Volatile
@@ -53,6 +56,7 @@ object PhoneControlCoordinator {
     val mcpServer = PhoneMcpServer(
         isStrictMode = { safetyStrict },
         contextProvider = { appContext },
+        minimalToolsProvider = { minimalCodingMcp },
         onActionLogged = { action, target, allowed, reason ->
             recordAction(action, target, allowed, reason)
             actionListener?.invoke(action, target, allowed, reason)

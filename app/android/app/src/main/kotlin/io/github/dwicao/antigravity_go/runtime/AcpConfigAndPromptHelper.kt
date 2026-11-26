@@ -7,6 +7,7 @@ import java.io.File
 import java.io.OutputStreamWriter
 import java.util.Base64
 import java.util.Collections
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -32,9 +33,18 @@ internal data class ActiveAcp(
     @Volatile var sessionId: String? = null,
     @Volatile var currentTurnId: String? = null,
     @Volatile var promptReqId: Int = -1,
+    @Volatile var newSessionReqId: Int = -1,
     @Volatile var promptSent: Boolean = false,
     @Volatile var pendingPromptText: String? = null,
     @Volatile var pendingPromptAttachments: List<String> = emptyList(),
+    @Volatile var lastModelId: String? = null,
+    @Volatile var lastEffort: String? = null,
+    @Volatile var lastModeCli: String? = null,
+    @Volatile var pendingModelId: String? = null,
+    @Volatile var pendingEffort: String? = null,
+    @Volatile var pendingModeCli: String? = null,
+    @Volatile var standbyReady: Boolean = false,
+    val claimSignal: CompletableFuture<String> = CompletableFuture(),
     val pendingConfigReqIds: MutableSet<Int> = Collections.synchronizedSet(mutableSetOf()),
     val cancelled: AtomicBoolean = AtomicBoolean(false),
     val exitEmittedTurnIds: ConcurrentHashMap<String, Boolean> = ConcurrentHashMap(),
@@ -83,7 +93,8 @@ internal object AcpConfigAndPromptHelper {
         modeCli: String?,
         skipPermissions: Boolean,
     ) {
-        if (!modelId.isNullOrBlank()) {
+        if (!modelId.isNullOrBlank() && modelId != active.lastModelId) {
+            active.lastModelId = modelId
             val cfgId = active.nextId.getAndIncrement()
             active.pendingConfigReqIds.add(cfgId)
             sendJson(
@@ -101,7 +112,11 @@ internal object AcpConfigAndPromptHelper {
                     )
             )
         }
-        if (!effort.isNullOrBlank() && !(modelId?.lowercase()?.contains("orchestrator") == true)) {
+        val effectiveEffort = effort?.takeIf {
+            it.isNotBlank() && !(modelId?.lowercase()?.contains("orchestrator") == true)
+        }
+        if (effectiveEffort != null && effectiveEffort != active.lastEffort) {
+            active.lastEffort = effectiveEffort
             val cfgId = active.nextId.getAndIncrement()
             active.pendingConfigReqIds.add(cfgId)
             sendJson(
@@ -112,10 +127,10 @@ internal object AcpConfigAndPromptHelper {
                     .put("method", "session/set_config_option")
                     .put(
                         "params",
-                            JSONObject()
+                        JSONObject()
                             .put("sessionId", sessionId)
                             .put("configId", "effort")
-                            .put("value", effort)
+                            .put("value", effectiveEffort)
                     )
             )
         }
@@ -123,7 +138,8 @@ internal object AcpConfigAndPromptHelper {
             null, "", "auto" -> if (skipPermissions) null else "default"
             else -> modeCli
         }
-        if (!safeModeCli.isNullOrBlank()) {
+        if (!safeModeCli.isNullOrBlank() && safeModeCli != active.lastModeCli) {
+            active.lastModeCli = safeModeCli
             val cfgId = active.nextId.getAndIncrement()
             active.pendingConfigReqIds.add(cfgId)
             sendJson(

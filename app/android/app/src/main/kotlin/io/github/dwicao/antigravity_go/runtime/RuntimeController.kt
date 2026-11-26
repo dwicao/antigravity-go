@@ -1295,17 +1295,50 @@ am start -a android.intent.action.VIEW -d "${'$'}url" >/dev/null 2>&1 || echo "[
 
     private fun defaultExtraDirs(requested: List<String>): List<String> {
         val out = LinkedHashSet<String>()
-        for (d in requested) if (d.isNotBlank()) out.add(d)
+        val seenCanonical = HashSet<String>()
+        fun addUnique(raw: String) {
+            val trimmed = raw.trim()
+            if (trimmed.isEmpty()) return
+            val canonical = runCatching { File(trimmed).canonicalPath }.getOrDefault(trimmed)
+            if (seenCanonical.add(canonical)) {
+                out.add(trimmed)
+            }
+        }
+        for (d in requested) addUnique(d)
         if (hasStorageAccess()) {
             val ext = Environment.getExternalStorageDirectory()?.absolutePath ?: "/storage/emulated/0"
-            out.add(ext)
-            out.add("/sdcard")
+            addUnique(ext)
+            addUnique("/sdcard")
         }
         return out.toList()
     }
 
     fun setGuardrailsEnabled(enabled: Boolean) {
         CommandSafetyGuard.enabled = enabled
+    }
+
+    fun setPhoneMcpMinimalMode(minimal: Boolean) {
+        PhoneControlCoordinator.minimalCodingMcp = minimal
+    }
+
+    fun prewarmAcpWorker(cwd: String? = null) {
+        if (!binaryFile.exists() || !binaryFile.canExecute()) return
+        val dir = if (!cwd.isNullOrBlank() && File(cwd).isDirectory) File(cwd) else workspaceDir
+        if (!dir.exists()) runCatching { dir.mkdirs() }
+        acpManager.prewarm(
+            binaryPath = binaryFile.absolutePath,
+            cwd = dir,
+            env = buildEnv(),
+            extraDirs = defaultExtraDirs(emptyList()),
+            skipPermissions = true,
+            clientVersion = appVersionName(),
+            onAuthenticated = {
+                if (!authMarkerFile.exists()) {
+                    writeAuthMarker(true)
+                    emit(mapOf("kind" to "auth_completed"))
+                }
+            },
+        )
     }
 
     private fun appVersionName(): String = runCatching {

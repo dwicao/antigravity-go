@@ -17,10 +17,13 @@ import 'settings_state.dart';
 class HarnessState {
   const HarnessState({
     this.loopBreakerEnabled = true,
+    this.autoPivotLoopEnabled = true,
     this.autoCheckpointEnabled = true,
     this.autoVerifyEnabled = false,
     this.guardrailsEnabled = true,
     this.autoCompactEnabled = true,
+    this.quotaSaverEnabled = true,
+    this.smartRoutingEnabled = true,
     this.repoMapEnabled = true,
     this.initialized = false,
     this.loading = false,
@@ -36,10 +39,13 @@ class HarnessState {
   });
 
   final bool loopBreakerEnabled;
+  final bool autoPivotLoopEnabled;
   final bool autoCheckpointEnabled;
   final bool autoVerifyEnabled;
   final bool guardrailsEnabled;
   final bool autoCompactEnabled;
+  final bool quotaSaverEnabled;
+  final bool smartRoutingEnabled;
   final bool repoMapEnabled;
   final bool initialized;
   final bool loading;
@@ -74,10 +80,13 @@ class HarnessState {
 
   HarnessState copyWith({
     bool? loopBreakerEnabled,
+    bool? autoPivotLoopEnabled,
     bool? autoCheckpointEnabled,
     bool? autoVerifyEnabled,
     bool? guardrailsEnabled,
     bool? autoCompactEnabled,
+    bool? quotaSaverEnabled,
+    bool? smartRoutingEnabled,
     bool? repoMapEnabled,
     bool? initialized,
     bool? loading,
@@ -93,11 +102,14 @@ class HarnessState {
   }) {
     return HarnessState(
       loopBreakerEnabled: loopBreakerEnabled ?? this.loopBreakerEnabled,
+      autoPivotLoopEnabled: autoPivotLoopEnabled ?? this.autoPivotLoopEnabled,
       autoCheckpointEnabled:
           autoCheckpointEnabled ?? this.autoCheckpointEnabled,
       autoVerifyEnabled: autoVerifyEnabled ?? this.autoVerifyEnabled,
       guardrailsEnabled: guardrailsEnabled ?? this.guardrailsEnabled,
       autoCompactEnabled: autoCompactEnabled ?? this.autoCompactEnabled,
+      quotaSaverEnabled: quotaSaverEnabled ?? this.quotaSaverEnabled,
+      smartRoutingEnabled: smartRoutingEnabled ?? this.smartRoutingEnabled,
       repoMapEnabled: repoMapEnabled ?? this.repoMapEnabled,
       initialized: initialized ?? this.initialized,
       loading: loading ?? this.loading,
@@ -123,6 +135,8 @@ final contextBudgetProvider = Provider<HarnessContextSnapshot>((ref) {
   final messages = ref.watch(chatProvider.select((s) => s.messages));
   final selectedModelId =
       ref.watch(settingsProvider.select((s) => s.selectedModelId));
+  final quotaSaver =
+      ref.watch(harnessProvider.select((h) => h.quotaSaverEnabled));
   final activeCustom = ref.watch(activeCustomProviderProvider);
   final lastCompactIdx = messages.lastIndexWhere((m) => m.isCompactionSummary);
   final activeMessages =
@@ -139,7 +153,9 @@ final contextBudgetProvider = Provider<HarnessContextSnapshot>((ref) {
               threadModelId == selectedModelId))
       ? activeCustom.contextWindowTokens
       : null;
-  const monitor = HarnessContextMonitor();
+  final monitor = HarnessContextMonitor(
+    maxCompactTokens: quotaSaver ? 160000 : null,
+  );
   final estimated = monitor.evaluate(
     // Historical completed turns' internal thoughts are excluded from
     // subsequent API prompt windows; only include thoughts while streaming.
@@ -208,8 +224,16 @@ final contextBudgetProvider = Provider<HarnessContextSnapshot>((ref) {
     if (combinedTokens > estimated.usedTokens) {
       final budget = estimated.budgetTokens;
       final ratio = (combinedTokens / budget).clamp(0.0, 1.0);
-      final shouldCompact = ratio >= monitor.compactThreshold;
-      final needsWarning = ratio >= monitor.warningThreshold;
+      final defaultCompactAt = (budget * monitor.compactThreshold).round();
+      final compactAt = quotaSaver
+          ? math.min(defaultCompactAt, 160000)
+          : defaultCompactAt;
+      final defaultWarnAt = (budget * monitor.warningThreshold).round();
+      final warnAt = quotaSaver
+          ? math.min(defaultWarnAt, (compactAt * 0.80).round())
+          : defaultWarnAt;
+      final shouldCompact = combinedTokens >= compactAt;
+      final needsWarning = combinedTokens >= warnAt;
       return HarnessContextSnapshot(
         usedTokens: combinedTokens,
         budgetTokens: budget,
@@ -231,16 +255,43 @@ final contextBudgetProvider = Provider<HarnessContextSnapshot>((ref) {
 
 class HarnessNotifier extends Notifier<HarnessState> {
   static const _kLoopBreaker = 'agy_harness_loop_breaker';
+  static const _kAutoPivotLoop = 'agy_harness_auto_pivot_loop';
   static const _kAutoCheckpoint = 'agy_harness_auto_checkpoint';
   static const _kAutoVerify = 'agy_harness_auto_verify';
   static const _kGuardrails = 'agy_harness_guardrails';
   static const _kAutoCompact = 'agy_harness_auto_compact';
+  static const _kQuotaSaver = 'agy_harness_quota_saver';
+  static const _kSmartRouting = 'agy_harness_smart_routing';
   static const _kRepoMap = 'agy_harness_repo_map';
   static const _kHooksJson = 'agy_harness_lifecycle_hooks';
   static const _kCustomVerify = 'agy_harness_custom_verify';
 
   @override
   HarnessState build() {
+    ref.listen<bool>(
+      runtimeProvider.select((r) => r.status.isReady),
+      (prev, next) {
+        if (next && prev != true) {
+          final cwd = _activeWorkspace();
+          unawaited(
+            RuntimeBridge.instance.prewarmAcpWorker(
+              cwd: cwd.isEmpty ? null : cwd,
+            ),
+          );
+          if (state.repoMapEnabled && cwd.isNotEmpty) {
+            unawaited(refreshRepoMap(maxTokens: 1000));
+          }
+        }
+      },
+    );
+    ref.listen<String>(
+      projectsProvider.select((p) => p.activeProject.primaryFolder),
+      (prev, next) {
+        if (prev != next && next.isNotEmpty && state.repoMapEnabled) {
+          unawaited(refreshRepoMap(maxTokens: 1000));
+        }
+      },
+    );
     unawaited(_loadPrefs());
     return const HarnessState();
   }
@@ -259,20 +310,25 @@ class HarnessNotifier extends Notifier<HarnessState> {
       final prefs = await SharedPreferences.getInstance();
       if (!ref.mounted) return;
       final guardrails = prefs.getBool(_kGuardrails) ?? true;
+      final quotaSaver = prefs.getBool(_kQuotaSaver) ?? true;
       final hooksRaw = prefs.getString(_kHooksJson) ?? '';
       final hooks = LifecycleHooksConfig.decodeJson(hooksRaw);
       state = state.copyWith(
         loopBreakerEnabled: prefs.getBool(_kLoopBreaker) ?? true,
+        autoPivotLoopEnabled: prefs.getBool(_kAutoPivotLoop) ?? true,
         autoCheckpointEnabled: prefs.getBool(_kAutoCheckpoint) ?? true,
         autoVerifyEnabled: prefs.getBool(_kAutoVerify) ?? false,
         guardrailsEnabled: guardrails,
         autoCompactEnabled: prefs.getBool(_kAutoCompact) ?? true,
+        quotaSaverEnabled: quotaSaver,
+        smartRoutingEnabled: prefs.getBool(_kSmartRouting) ?? true,
         repoMapEnabled: prefs.getBool(_kRepoMap) ?? true,
         customVerifyCommand: prefs.getString(_kCustomVerify),
         hooksConfig: hooks,
       );
       unawaited(RuntimeBridge.instance.setGuardrailsEnabled(guardrails));
       unawaited(RuntimeBridge.instance.setLifecycleHooks(hooks.encodeJson()));
+      unawaited(RuntimeBridge.instance.setPhoneMcpMinimalMode(quotaSaver));
     } catch (_) {}
   }
 
@@ -280,6 +336,12 @@ class HarnessNotifier extends Notifier<HarnessState> {
     state = state.copyWith(loopBreakerEnabled: value);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kLoopBreaker, value);
+  }
+
+  Future<void> setAutoPivotLoop(bool value) async {
+    state = state.copyWith(autoPivotLoopEnabled: value);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kAutoPivotLoop, value);
   }
 
   Future<void> setAutoCheckpoint(bool value) async {
@@ -305,6 +367,19 @@ class HarnessNotifier extends Notifier<HarnessState> {
     state = state.copyWith(autoCompactEnabled: value);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kAutoCompact, value);
+  }
+
+  Future<void> setQuotaSaver(bool value) async {
+    state = state.copyWith(quotaSaverEnabled: value);
+    unawaited(RuntimeBridge.instance.setPhoneMcpMinimalMode(value));
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kQuotaSaver, value);
+  }
+
+  Future<void> setSmartRouting(bool value) async {
+    state = state.copyWith(smartRoutingEnabled: value);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kSmartRouting, value);
   }
 
   Future<void> setRepoMapEnabled(bool value) async {

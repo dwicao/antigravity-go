@@ -312,12 +312,32 @@ class RepoMapBuilder {
     return buf.toString();
   }
 
+  static const Duration _cacheTtl = Duration(seconds: 60);
+  static final Map<String, ({String map, DateTime fetchedAt})> _dirCache = {};
+
+  static void invalidateCache([String? rootPath]) {
+    if (rootPath == null || rootPath.isEmpty) {
+      _dirCache.clear();
+    } else {
+      _dirCache.removeWhere((k, _) => k.startsWith('$rootPath|'));
+    }
+  }
+
   /// Scans [rootPath] and builds a compact `<repo_map>` string.
   static Future<String> buildFromDirectory(
     String rootPath, {
     int maxTokens = 1600,
     int maxFiles = 120,
+    bool useCache = true,
   }) async {
+    final cacheKey = '$rootPath|$maxTokens|$maxFiles';
+    if (useCache) {
+      final cached = _dirCache[cacheKey];
+      if (cached != null &&
+          DateTime.now().difference(cached.fetchedAt) < _cacheTtl) {
+        return cached.map;
+      }
+    }
     final root = Directory(rootPath);
     if (!await root.exists()) return '';
 
@@ -362,10 +382,17 @@ class RepoMapBuilder {
       } catch (_) {}
     }
 
-    return renderRepoMap(
+    final rendered = renderRepoMap(
       summaries,
       maxTokens: maxTokens,
       rootLabel: root.path.split(Platform.pathSeparator).last,
     );
+    if (useCache) {
+      if (_dirCache.length >= 16) {
+        _dirCache.remove(_dirCache.keys.first);
+      }
+      _dirCache[cacheKey] = (map: rendered, fetchedAt: DateTime.now());
+    }
+    return rendered;
   }
 }

@@ -19,6 +19,7 @@ import java.util.concurrent.Executors
 class PhoneMcpServer(
     private val isStrictMode: () -> Boolean,
     private val contextProvider: () -> android.content.Context? = { null },
+    private val minimalToolsProvider: () -> Boolean = { false },
     private val onActionLogged: (action: String, target: String, allowed: Boolean, reason: String) -> Unit,
 ) {
     private val executor = Executors.newCachedThreadPool()
@@ -186,7 +187,10 @@ class PhoneMcpServer(
             // MCP Streamable HTTP JSON-RPC 2.0 endpoint
             if (payload.has("jsonrpc") || payload.has("method")) {
                 val sidHeaders = mcpSessionId?.let { mapOf("Mcp-Session-Id" to it) } ?: emptyMap()
-                val rpcResp = dispatchJsonRpc(payload) { action, paramsObj ->
+                val rpcResp = dispatchJsonRpc(
+                    req = payload,
+                    minimalCodingOnly = minimalToolsProvider(),
+                ) { action, paramsObj ->
                     executeAction(action, paramsObj)
                 }
                 if (rpcResp == null) {
@@ -434,7 +438,7 @@ class PhoneMcpServer(
     }
 
     companion object {
-        fun toolDefinitions(): JSONArray {
+        fun toolDefinitions(minimalCodingOnly: Boolean = false): JSONArray {
             val screenTool = JSONObject()
                 .put("name", "phone_screen_tree")
                 .put(
@@ -697,6 +701,12 @@ class PhoneMcpServer(
                         .put("required", JSONArray().put("action")),
                 )
 
+            if (minimalCodingOnly) {
+                return JSONArray()
+                    .put(notifyTool)
+                    .put(subagentNotifyTool)
+            }
+
             return JSONArray()
                 .put(screenTool)
                 .put(tapTool)
@@ -721,6 +731,7 @@ class PhoneMcpServer(
          */
         fun dispatchJsonRpc(
             req: JSONObject,
+            minimalCodingOnly: Boolean = false,
             executeAction: (action: String, args: JSONObject) -> JSONObject,
         ): JSONObject? {
             val id = req.opt("id")
@@ -767,7 +778,7 @@ class PhoneMcpServer(
                 "tools/list" -> JSONObject()
                     .put("jsonrpc", "2.0")
                     .put("id", id)
-                    .put("result", JSONObject().put("tools", toolDefinitions()))
+                    .put("result", JSONObject().put("tools", toolDefinitions(minimalCodingOnly)))
 
                 "tools/call" -> {
                     val toolName = params.optString("name", "")
@@ -805,9 +816,15 @@ class PhoneMcpServer(
                         val actionResp = executeAction(action, args)
                         val allowed = actionResp.optBoolean("allowed", false)
                         val isError = !allowed || actionResp.has("error")
-                        val text = when {
+                        val rawText = when {
                             action == "screen" && allowed -> actionResp.optString("tree", "")
                             else -> actionResp.toString(2)
+                        }
+                        val text = if (rawText.length > 8_000) {
+                            val omitted = rawText.length - 6_500
+                            "${rawText.take(4_500)}\n\n...[MCP RESPONSE TRUNCATED: $omitted middle chars omitted for token budget]...\n\n${rawText.takeLast(2_000)}"
+                        } else {
+                            rawText
                         }
                         JSONObject()
                             .put("jsonrpc", "2.0")

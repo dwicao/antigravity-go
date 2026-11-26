@@ -78,6 +78,28 @@ class RuntimeBridge {
     }
   }
 
+  Future<void> setPhoneMcpMinimalMode(bool minimal) async {
+    try {
+      await _method.invokeMethod<void>(
+        'setPhoneMcpMinimalMode',
+        {'minimal': minimal},
+      );
+    } on MissingPluginException {
+      // No-op in headless widget tests.
+    }
+  }
+
+  Future<void> prewarmAcpWorker({String? cwd}) async {
+    try {
+      await _method.invokeMethod<void>(
+        'prewarmAcpWorker',
+        {'cwd': ?cwd},
+      );
+    } on MissingPluginException {
+      // No-op in headless widget tests.
+    }
+  }
+
   Future<List<String>> getLogs() async {
     try {
       final raw = await _method.invokeMethod<List<Object?>>('logs');

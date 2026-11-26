@@ -97,6 +97,17 @@ class RuntimePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChann
                 ctrl.setGuardrailsEnabled(call.argument<Boolean>("enabled") ?: true)
                 result.success(null)
             }
+            "setPhoneMcpMinimalMode" -> {
+                ctrl.setPhoneMcpMinimalMode(call.argument<Boolean>("minimal") ?: true)
+                result.success(null)
+            }
+            "prewarmAcpWorker" -> {
+                val cwd = call.argument<String>("cwd")
+                runAsync(result) {
+                    ctrl.prewarmAcpWorker(cwd)
+                    null
+                }
+            }
             "setLifecycleHooks" -> {
                 ctrl.setLifecycleHooks(call.argument<String>("hooksJson") ?: "[]")
                 result.success(null)
