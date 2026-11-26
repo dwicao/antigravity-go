@@ -2,6 +2,14 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.45] - 2026-11-26
+
+### Fixed
+- **Prevent Diff Count Inflation & Stale Post-Commit/Compaction Session Changes:**
+  - Added `UnifiedLineDiff` (prefix/suffix trimming + Myers O(ND) diff + 3-line unified context hunks) in `agy_client` so `AcpCodec` emits minimal hunks instead of dumping entire files as `-old` + `+new` lines inside `diffPreview`, and shared the same algorithm with `ChatTurnHelpers` (removing the `m*n <= 40000` full-file fallback).
+  - Updated `ChatTurnHelpers.extractChangedFilesFromTools` so `outStr` never overwrites accurate `Target`/`Replacement` edits, while still preferring `outStr` when tool parameters lack `oldText` (e.g. `write_to_file` `Overwrite: true`).
+  - Added `ChatTurnHelpers.extractUncommittedFilesFromTools` and updated `WorkspaceDiffNotifier` to stop walking backwards across `isCompactionSummary` boundaries or successful shell `git commit` commands, and to filter out `chatFiles` already confirmed clean by real Git repositories (normalizing `/storage/emulated/0/` and `/sdcard/`).
+
 ## [1.0.44] - 2026-11-26
 
 ### Added

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:agy_client/agy_client.dart';
 import 'package:test/test.dart';
 
@@ -141,6 +143,44 @@ void main() {
       );
       expect(prompt, contains('"type":"image"'));
       expect(prompt, contains('"mimeType":"image/png"'));
+    });
+
+    test('computes minimal unified diff hunks for full-file ACP diff blocks', () {
+      final codec = AcpCodec();
+      final oldLines = List<String>.generate(400, (i) => 'line_$i');
+      final newLines = [...oldLines];
+      newLines[200] = 'line_200_updated';
+      newLines.insert(201, 'line_201_inserted');
+      final payload = jsonEncode({
+        'jsonrpc': '2.0',
+        'method': 'session/update',
+        'params': {
+          'sessionId': 's1',
+          'update': {
+            'sessionUpdate': 'tool_call_update',
+            'toolCallId': 'tc-large',
+            'title': 'Edit large file',
+            'status': 'completed',
+            'content': [
+              {
+                'type': 'diff',
+                'path': 'lib/large.dart',
+                'oldText': oldLines.join('\n'),
+                'newText': newLines.join('\n'),
+              },
+            ],
+          },
+        },
+      });
+
+      final evt = codec.parseNotificationOrRequest(payload)! as AgyToolCallEvent;
+      final outLines = evt.output!.split('\n');
+      expect(outLines.where((l) => l.startsWith('+') && !l.startsWith('+++')), hasLength(2));
+      expect(outLines.where((l) => l.startsWith('-') && !l.startsWith('---')), hasLength(1));
+      expect(outLines.length, lessThan(20));
+      expect(evt.output, contains('-line_200'));
+      expect(evt.output, contains('+line_200_updated'));
+      expect(evt.output, contains('+line_201_inserted'));
     });
   });
 }

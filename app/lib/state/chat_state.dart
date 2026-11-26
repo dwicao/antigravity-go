@@ -2063,6 +2063,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
   Future<void> appendSystemFeedback(
     String text, {
     List<FileChangeEntry> changedFiles = const [],
+    bool isCompactionSummary = false,
+    List<ChatToolStep> tools = const [],
   }) async {
     var session = ref.read(sessionsProvider).activeSession;
     session ??= await ref.read(sessionsProvider.notifier).createSession();
@@ -2073,6 +2075,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       createdAt: DateTime.now(),
       completedAt: DateTime.now(),
       changedFiles: changedFiles,
+      isCompactionSummary: isCompactionSummary,
+      tools: tools,
     );
     final updated = [..._messagesForSession(session.id), msg];
     _updateSessionMessages(session.id, updated);

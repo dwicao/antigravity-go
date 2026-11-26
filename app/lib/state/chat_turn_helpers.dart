@@ -108,84 +108,13 @@ class ChatTurnHelpers {
     String? oldText,
     String? newText,
   ) {
-    final oldLines = oldText == null || oldText.isEmpty
-        ? const <String>[]
-        : oldText.split('\n');
-    final newLines = newText == null || newText.isEmpty
-        ? const <String>[]
-        : newText.split('\n');
-    if (oldLines.isEmpty && newLines.isEmpty) {
-      return (diff: '', added: 0, removed: 0);
-    }
-
-    final ops = <String>[];
-    var added = 0;
-    var removed = 0;
-
-    if (oldLines.isEmpty) {
-      for (final l in newLines) {
-        ops.add('+$l');
-        added++;
-      }
-    } else if (newLines.isEmpty) {
-      for (final l in oldLines) {
-        ops.add('-$l');
-        removed++;
-      }
-    } else if (oldLines.length * newLines.length <= 40000) {
-      // Myers/LCS diff so unchanged context lines aren't double-counted as + and -.
-      final m = oldLines.length;
-      final n = newLines.length;
-      final dp = List.generate(m + 1, (_) => List<int>.filled(n + 1, 0));
-      for (var i = m - 1; i >= 0; i--) {
-        for (var j = n - 1; j >= 0; j--) {
-          if (oldLines[i] == newLines[j]) {
-            dp[i][j] = dp[i + 1][j + 1] + 1;
-          } else {
-            dp[i][j] = dp[i + 1][j] >= dp[i][j + 1] ? dp[i + 1][j] : dp[i][j + 1];
-          }
-        }
-      }
-      var i = 0;
-      var j = 0;
-      while (i < m || j < n) {
-        if (i < m && j < n && oldLines[i] == newLines[j]) {
-          ops.add(' ${oldLines[i]}');
-          i++;
-          j++;
-        } else if (i < m && (j == n || dp[i + 1][j] >= dp[i][j + 1])) {
-          ops.add('-${oldLines[i]}');
-          removed++;
-          i++;
-        } else {
-          ops.add('+${newLines[j]}');
-          added++;
-          j++;
-        }
-      }
-    } else {
-      for (final l in oldLines) {
-        ops.add('-$l');
-        removed++;
-      }
-      for (final l in newLines) {
-        ops.add('+$l');
-        added++;
-      }
-    }
-
-    final buf = StringBuffer()
-      ..writeln('--- a/$path')
-      ..writeln('+++ b/$path')
-      ..writeln('@@ -1,${oldLines.length} +1,${newLines.length} @@');
-    const maxOps = 160;
-    for (final op in ops.take(maxOps)) {
-      buf.writeln(op);
-    }
-    if (ops.length > maxOps) {
-      buf.writeln(' ... (${ops.length - maxOps} more)');
-    }
-    return (diff: buf.toString().trimRight(), added: added, removed: removed);
+    final res = UnifiedLineDiff.compute(
+      path: path,
+      oldText: oldText,
+      newText: newText,
+      maxBodyLines: 160,
+    );
+    return (diff: res.diff, added: res.added, removed: res.removed);
   }
 
   static String? buildToolDiff(
@@ -210,29 +139,105 @@ class ChatTurnHelpers {
     return (added: added, removed: removed);
   }
 
+  static bool _isFileEditTool(ChatToolStep step) {
+    final nameLower = step.toolName.toLowerCase();
+    final p = step.parameters;
+    final hasEditParams = p.containsKey('Replacement') ||
+        p.containsKey('ReplacementContent') ||
+        p.containsKey('ReplacementChunks') ||
+        p.containsKey('oldText') ||
+        p.containsKey('newText') ||
+        p.containsKey('old_string') ||
+        p.containsKey('new_string') ||
+        p.containsKey('oldContent') ||
+        p.containsKey('newContent') ||
+        p.containsKey('old_content') ||
+        p.containsKey('new_content') ||
+        p.containsKey('originalContent') ||
+        p.containsKey('CodeContent') ||
+        p.containsKey('diff') ||
+        p.containsKey('patch');
+    final isDeleteTool = nameLower.contains('delete_file') ||
+        nameLower.contains('remove_file') ||
+        nameLower.contains('unlink') ||
+        nameLower == 'delete' ||
+        p['Deleted'] == true ||
+        p['deleted'] == true;
+    final outStr = step.output?.trim() ?? '';
+    final hasOutputDiff = outStr.contains('\n@@ ') ||
+        outStr.startsWith('--- a/') ||
+        outStr.startsWith('@@ ');
+    return nameLower.contains('write') ||
+        nameLower.contains('edit') ||
+        nameLower.contains('replace') ||
+        nameLower.contains('patch') ||
+        nameLower.contains('create_file') ||
+        isDeleteTool ||
+        ((nameLower == 'file' || nameLower.startsWith('file ')) &&
+            (hasEditParams || hasOutputDiff)) ||
+        hasOutputDiff;
+  }
+
+  static bool hasSuccessfulGitCommit(ChatToolStep step) {
+    if (step.state != ToolCallState.completed ||
+        (step.error != null && step.error!.trim().isNotEmpty)) {
+      return false;
+    }
+    final cmd = (step.parameters['CommandLine'] ??
+            step.parameters['command'] ??
+            step.parameters['cmd'] ??
+            step.toolName)
+        .toString();
+    final lower = cmd.toLowerCase();
+    if (!lower.contains('git') ||
+        !lower.contains('commit') ||
+        lower.contains('--dry-run') ||
+        lower.contains('--help')) {
+      return false;
+    }
+    final hasCommitCmd = RegExp(
+      r'(?:^|[;&|\s])git(?:\s+-[^\s]+(?:\s+[^\s]+)?)*\s+commit\b',
+      caseSensitive: false,
+    ).hasMatch(cmd);
+    if (!hasCommitCmd) return false;
+    final outLower = (step.output ?? '').toLowerCase();
+    if (outLower.contains('command exited with code ') &&
+        !outLower.contains('command exited with code 0')) {
+      return false;
+    }
+    if (outLower.contains('fatal:')) return false;
+    return true;
+  }
+
+  /// Extracts changed files from [tools], discarding any file edits that
+  /// happened before the last successful `git commit` shell command in the turn.
+  static ({bool committed, List<FileChangeEntry> files})
+      extractUncommittedFilesFromTools(List<ChatToolStep> tools) {
+    var lastCommitIdx = -1;
+    for (var i = 0; i < tools.length; i++) {
+      if (hasSuccessfulGitCommit(tools[i])) {
+        lastCommitIdx = i;
+      }
+    }
+    if (lastCommitIdx < 0) {
+      return (committed: false, files: extractChangedFilesFromTools(tools));
+    }
+    final postCommitTools = tools.sublist(lastCommitIdx + 1);
+    return (
+      committed: true,
+      files: extractChangedFilesFromTools(postCommitTools),
+    );
+  }
+
   static List<FileChangeEntry> extractChangedFilesFromTools(
     List<ChatToolStep> tools,
   ) {
     final byPath = <String, FileChangeEntry>{};
     for (final step in tools) {
       if (step.state == ToolCallState.failed) continue;
+      if (!_isFileEditTool(step)) continue;
       final nameLower = step.toolName.toLowerCase();
       final p = step.parameters;
-      final hasEditParams = p.containsKey('Replacement') ||
-          p.containsKey('ReplacementContent') ||
-          p.containsKey('ReplacementChunks') ||
-          p.containsKey('oldText') ||
-          p.containsKey('newText') ||
-          p.containsKey('old_string') ||
-          p.containsKey('new_string') ||
-          p.containsKey('oldContent') ||
-          p.containsKey('newContent') ||
-          p.containsKey('old_content') ||
-          p.containsKey('new_content') ||
-          p.containsKey('originalContent') ||
-          p.containsKey('CodeContent') ||
-          p.containsKey('diff') ||
-          p.containsKey('patch');
       final isDeleteTool = nameLower.contains('delete_file') ||
           nameLower.contains('remove_file') ||
           nameLower.contains('unlink') ||
@@ -243,16 +248,6 @@ class ChatTurnHelpers {
       final hasOutputDiff = outStr.contains('\n@@ ') ||
           outStr.startsWith('--- a/') ||
           outStr.startsWith('@@ ');
-      final isFileEdit = nameLower.contains('write') ||
-          nameLower.contains('edit') ||
-          nameLower.contains('replace') ||
-          nameLower.contains('patch') ||
-          nameLower.contains('create_file') ||
-          isDeleteTool ||
-          ((nameLower == 'file' || nameLower.startsWith('file ')) &&
-              (hasEditParams || hasOutputDiff)) ||
-          hasOutputDiff;
-      if (!isFileEdit) continue;
 
       var path = (p['TargetFile'] ??
                   p['AbsolutePath'] ??
@@ -279,9 +274,11 @@ class ChatTurnHelpers {
 
       var added = 0;
       var removed = 0;
+      var hadTargetText = false;
       String? diffSnippet;
       final chunks = p['ReplacementChunks'];
       if (chunks is List && chunks.isNotEmpty) {
+        hadTargetText = true;
         final buf = StringBuffer();
         for (final ch in chunks) {
           if (ch is! Map) continue;
@@ -320,11 +317,13 @@ class ChatTurnHelpers {
         final repStr = replacement?.toString();
         final tgtStr = target?.toString();
         if (tgtStr != null || repStr != null) {
+          hadTargetText = tgtStr != null;
           final res = _buildDiffWithStats(path, tgtStr, repStr);
           added = res.added;
           removed = res.removed;
           diffSnippet = res.diff.isEmpty ? null : res.diff;
         } else if (rawPatch is String && rawPatch.trim().isNotEmpty) {
+          hadTargetText = true;
           diffSnippet = rawPatch.trimRight();
           final counts = _countPatchLines(diffSnippet);
           added = counts.added;
@@ -334,14 +333,9 @@ class ChatTurnHelpers {
 
       if (hasOutputDiff) {
         final outCounts = _countPatchLines(outStr);
-        if (diffSnippet == null || (added == 0 && removed == 0)) {
-          diffSnippet = outStr.startsWith('@@ ')
-              ? '--- a/$path\n+++ b/$path\n$outStr'
-              : outStr;
-          added = outCounts.added;
-          removed = outCounts.removed;
-        } else if (outCounts.removed > removed) {
-          // Prefer richer ACP diffPreview when tool parameters lacked oldText.
+        if (diffSnippet == null ||
+            (added == 0 && removed == 0) ||
+            (!hadTargetText && (outCounts.added > 0 || outCounts.removed > 0))) {
           diffSnippet = outStr.startsWith('@@ ')
               ? '--- a/$path\n+++ b/$path\n$outStr'
               : outStr;

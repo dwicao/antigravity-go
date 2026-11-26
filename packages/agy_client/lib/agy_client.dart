@@ -14,6 +14,7 @@ export 'src/models/openai_provider_config.dart';
 export 'src/models/permission_preset.dart';
 export 'src/models/project_info.dart';
 export 'src/models/session_info.dart';
+export 'src/models/unified_line_diff.dart';
 export 'src/models/usage_quota.dart';
 export 'src/mcp/mcp_http_client.dart';
 export 'src/protocol/acp_codec.dart';

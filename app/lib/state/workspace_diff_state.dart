@@ -213,7 +213,14 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
   void _applyInstantChatResultMerge() {
     final sid = ref.read(sessionsProvider).activeSessionId ?? _currentSessionId;
     final chatFiles = _sessionChatResultFiles(sessionId: sid);
-    if (chatFiles.isEmpty) return;
+    if (chatFiles.isEmpty) {
+      if (state.branch.isEmpty &&
+          state.status.isEmpty &&
+          state.files.isNotEmpty) {
+        state = state.copyWith(files: const [], unifiedDiff: '');
+      }
+      return;
+    }
     final merged = _mergeGitAndChatFiles(state.files, chatFiles);
     if (merged.length != state.files.length) {
       state = state.copyWith(
@@ -403,6 +410,49 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
     return ref.read(runtimeProvider).status.workspaceRoot?.trim() ?? '';
   }
 
+  static String _canonicalStoragePath(String normPath) {
+    if (normPath == '/storage/emulated/0') return '/sdcard';
+    if (normPath.startsWith('/storage/emulated/0/')) {
+      return '/sdcard/${normPath.substring('/storage/emulated/0/'.length)}';
+    }
+    return normPath;
+  }
+
+  static bool _isPathInsideRepo(String filePath, String repoCwd) {
+    final nf = _canonicalStoragePath(_normalizePath(filePath));
+    final nr = _canonicalStoragePath(_normalizePath(repoCwd));
+    if (nf.isEmpty || nr.isEmpty) return false;
+    return nf == nr || nf.startsWith('$nr/');
+  }
+
+  static List<FileChangeEntry> filterChatFilesAgainstCheckedRepos(
+    List<FileChangeEntry> chatFiles,
+    List<({String cwd, String branch, List<FileChangeEntry> files})> checkedRepos,
+    String primaryCwd,
+  ) {
+    if (chatFiles.isEmpty || checkedRepos.isEmpty) return chatFiles;
+    final realRepos = checkedRepos
+        .where((r) => r.branch.isNotEmpty && r.branch != 'shadow-checkpoint')
+        .toList();
+    if (realRepos.isEmpty) return chatFiles;
+    return chatFiles.where((cf) {
+      final normPath = _normalizePath(cf.path);
+      final isRelative = !normPath.startsWith('/');
+      for (final repo in realRepos) {
+        final covers = isRelative
+            ? repo.cwd == primaryCwd
+            : _isPathInsideRepo(normPath, repo.cwd);
+        if (!covers) continue;
+        final presentInGit =
+            repo.files.any((gf) => _pathsReferToSameFile(gf.path, normPath));
+        if (!presentInGit) {
+          return false;
+        }
+      }
+      return true;
+    }).toList(growable: false);
+  }
+
   List<FileChangeEntry> _sessionChatResultFiles({String? sessionId}) {
     final chat = ref.read(chatProvider);
     final sid =
@@ -419,16 +469,29 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
     for (var i = msgs.length - 1; i >= 0; i--) {
       final m = msgs[i];
       if (m.role != ChatRole.assistant) continue;
-      if (m.text.startsWith('**Committed')) break;
-      final turnEntries = m.changedFiles.isNotEmpty
-          ? m.changedFiles
-          : ChatTurnHelpers.extractChangedFilesFromTools(m.tools);
+      if (m.isCompactionSummary || m.text.startsWith('**Committed')) break;
+      final List<FileChangeEntry> turnEntries;
+      var stopAfterTurn = false;
+      if (m.tools.isNotEmpty) {
+        final uncommitted =
+            ChatTurnHelpers.extractUncommittedFilesFromTools(m.tools);
+        if (uncommitted.committed) {
+          stopAfterTurn = true;
+          turnEntries = uncommitted.files;
+        } else {
+          turnEntries = m.changedFiles.isNotEmpty
+              ? m.changedFiles
+              : uncommitted.files;
+        }
+      } else {
+        turnEntries = m.changedFiles;
+      }
       for (final f in turnEntries) {
         final norm = _normalizePath(f.path);
         if (norm.isEmpty || committed.contains(norm)) continue;
         byPath.putIfAbsent(norm, () => f);
       }
-      if (byPath.isNotEmpty) break;
+      if (stopAfterTurn || byPath.isNotEmpty) break;
     }
     return byPath.values.toList(growable: false);
   }
@@ -542,6 +605,11 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
       chosenStatus = primaryRes.status.trimRight();
       chosenDiff = primaryRes.diff.trim();
       chosenFiles = primaryRes.files;
+      final checkedRepos =
+          <({String cwd, String branch, List<FileChangeEntry> files})>[
+        if (primaryCwd.isNotEmpty)
+          (cwd: primaryCwd, branch: chosenBranch, files: chosenFiles),
+      ];
 
       final primaryHasChanges =
           chosenFiles.isNotEmpty || chosenStatus.isNotEmpty || chosenDiff.isNotEmpty;
@@ -573,6 +641,9 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
             final branch = item.res.branch.trim();
             final status = item.res.status.trimRight();
             final diff = item.res.diff.trim();
+            checkedRepos.add(
+              (cwd: item.cwd, branch: branch, files: item.res.files),
+            );
             if (chosenBranch.isEmpty && branch.isNotEmpty) {
               chosenCwd = item.cwd;
               chosenBranch = branch;
@@ -602,8 +673,14 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
         }
       }
 
-      final effectiveFiles = _mergeGitAndChatFiles(chosenFiles, latestChatFiles);
-      final extraChatDiffs = latestChatFiles
+      final effectiveChatFiles = filterChatFilesAgainstCheckedRepos(
+        latestChatFiles,
+        checkedRepos,
+        primaryCwd,
+      );
+      final effectiveFiles =
+          _mergeGitAndChatFiles(chosenFiles, effectiveChatFiles);
+      final extraChatDiffs = effectiveChatFiles
           .where(
             (cf) =>
                 !chosenFiles.any((gf) => _pathsReferToSameFile(gf.path, cf.path)),

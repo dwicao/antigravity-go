@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import '../models/chat_event.dart';
+import '../models/unified_line_diff.dart';
 import '../models/usage_quota.dart';
 
 /// JSON-RPC 2.0 codec for Antigravity CLI's Agent Client Protocol (`agy acp`).
@@ -218,26 +219,14 @@ class AcpCodec {
         final path = m['path']?.toString() ?? '';
         final oldText = m['oldText']?.toString() ?? '';
         final newText = m['newText']?.toString() ?? '';
-        final oldLines =
-            oldText.isEmpty ? const <String>[] : oldText.split('\n');
-        final newLines =
-            newText.isEmpty ? const <String>[] : newText.split('\n');
-        final sb = StringBuffer();
-        if (path.isNotEmpty) {
-          sb.writeln('--- a/$path');
-          sb.writeln('+++ b/$path');
+        final computed = UnifiedLineDiff.compute(
+          path: path,
+          oldText: oldText,
+          newText: newText,
+        );
+        if (computed.diff.isNotEmpty) {
+          diffParts.add(computed.diff);
         }
-        if (oldLines.isNotEmpty || newLines.isNotEmpty) {
-          sb.writeln('@@ -1,${oldLines.length} +1,${newLines.length} @@');
-          for (final line in oldLines) {
-            sb.writeln('-$line');
-          }
-          for (final line in newLines) {
-            sb.writeln('+$line');
-          }
-        }
-        final snippet = sb.toString().trimRight();
-        if (snippet.isNotEmpty) diffParts.add(snippet);
       } else if (type == 'content') {
         final txt = _extractContentText(m['content']);
         if (txt.isNotEmpty) outParts.add(txt);

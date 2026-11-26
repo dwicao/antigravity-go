@@ -450,6 +450,122 @@ diff --git a/app/lib/main.dart b/app/lib/main.dart
     expect(extracted[1].deleted, isTrue);
   });
 
+  test('ChatTurnHelpers ignores full-file output dumps when Target/Replacement exist and respects shell git commit', () {
+    final fullOld = List<String>.generate(300, (i) => 'row_$i').join('\n');
+    final fullNew = List<String>.generate(300, (i) => i == 10 ? 'row_10_edit' : 'row_$i').join('\n');
+    final inflatedDump = [
+      '--- a/app/lib/big.dart',
+      '+++ b/app/lib/big.dart',
+      '@@ -1,300 +1,300 @@',
+      ...fullOld.split('\n').map((l) => '-$l'),
+      ...fullNew.split('\n').map((l) => '+$l'),
+    ].join('\n');
+
+    final extracted = ChatTurnHelpers.extractChangedFilesFromTools([
+      ChatToolStep(
+        id: 'tc-targeted',
+        toolName: 'edit_file',
+        state: ToolCallState.completed,
+        parameters: const {
+          'Path': 'app/lib/big.dart',
+          'Target': 'row_10',
+          'Replacement': 'row_10_edit',
+        },
+        output: inflatedDump,
+      ),
+    ]);
+    expect(extracted, hasLength(1));
+    expect(extracted[0].added, 1);
+    expect(extracted[0].removed, 1);
+
+    final preAndPostCommit = ChatTurnHelpers.extractUncommittedFilesFromTools([
+      const ChatToolStep(
+        id: 'e1',
+        toolName: 'edit_file',
+        state: ToolCallState.completed,
+        parameters: {
+          'Path': 'app/lib/committed.dart',
+          'Target': 'a',
+          'Replacement': 'b',
+        },
+      ),
+      const ChatToolStep(
+        id: 'c1',
+        toolName: 'run_command',
+        state: ToolCallState.completed,
+        parameters: {'CommandLine': 'git add -A && git commit -m "ship"'},
+        output: 'Command exited with code 0.',
+      ),
+      const ChatToolStep(
+        id: 'e2',
+        toolName: 'edit_file',
+        state: ToolCallState.completed,
+        parameters: {
+          'Path': 'app/lib/after_commit.dart',
+          'Target': 'x',
+          'Replacement': 'y',
+        },
+      ),
+    ]);
+    expect(preAndPostCommit.committed, isTrue);
+    expect(preAndPostCommit.files.map((f) => f.path), ['app/lib/after_commit.dart']);
+  });
+
+  test('WorkspaceDiffNotifier stops at compaction/git-commit and filters clean real git repos', () async {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final sessions = container.read(sessionsProvider.notifier);
+    final s = await sessions.createSession(title: 'Clean After Commit');
+    sessions.selectSession(s.id);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    await container.read(chatProvider.notifier).appendSystemFeedback(
+      'Edited and committed',
+      changedFiles: const [
+        FileChangeEntry(path: 'app/lib/old_turn.dart', added: 500, removed: 490),
+      ],
+      tools: const [
+        ChatToolStep(
+          id: 't-commit',
+          toolName: 'run_command',
+          state: ToolCallState.completed,
+          parameters: {'CommandLine': 'git add -A && git commit -m "done"'},
+        ),
+      ],
+    );
+    await container.read(chatProvider.notifier).appendSystemFeedback(
+      'Compacted context',
+      isCompactionSummary: true,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(container.read(workspaceDiffProvider).files, isEmpty);
+
+    final filtered = WorkspaceDiffNotifier.filterChatFilesAgainstCheckedRepos(
+      const [
+        FileChangeEntry(
+          path: '/storage/emulated/0/Projects/antigravity-go/app/lib/a.dart',
+          added: 10,
+          removed: 5,
+        ),
+        FileChangeEntry(
+          path: '/sdcard/Projects/other_non_git/b.dart',
+          added: 2,
+          removed: 1,
+        ),
+      ],
+      const [
+        (
+          cwd: '/sdcard/Projects/antigravity-go',
+          branch: 'main',
+          files: <FileChangeEntry>[],
+        ),
+      ],
+      '/sdcard/Projects/antigravity-go',
+    );
+    expect(filtered.map((f) => f.path), ['/sdcard/Projects/other_non_git/b.dart']);
+  });
+
   testWidgets('RuntimeEvent parses comment/subagentId, Composer supports IME paste & Terminal exposes extra keys', (tester) async {
     final evt = RuntimeEvent.fromMap({
       'kind': 'notification_permission_action',
