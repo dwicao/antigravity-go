@@ -10,6 +10,11 @@ on:
         description: "Release tag (defaults to v<pubspec version>)"
         required: false
         type: string
+      include_x64:
+        description: "Also build x64 APK (defaults to false for faster builds)"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -147,8 +152,14 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-      - name: Build signed release APKs (arm64 + x64)
-        run: bash tooling/build-apk.sh -f all --release
+      - name: Build signed release APKs
+        run: |
+          flavor="arm64"
+          if [[ "${{ inputs.include_x64 }}" == "true" ]]; then
+            flavor="all"
+          fi
+          echo "Building release APK flavor: $flavor"
+          bash tooling/build-apk.sh -f "$flavor" --release
 
       - name: Clean temporary signing files
         if: always()
@@ -160,11 +171,18 @@ jobs:
         run: |
           sdk="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
           apksigner="$(ls -1d "$sdk"/build-tools/*/apksigner | sort -V | tail -n 1)"
-          for flavor in arm64 x64; do
-            apk="app/build/app/outputs/flutter-apk/app-${flavor}-release.apk"
+          found_apk=false
+          for apk in app/build/app/outputs/flutter-apk/app-*-release.apk; do
+            [[ -f "$apk" ]] || continue
+            found_apk=true
+            echo "Verifying signature of $apk..."
             "$apksigner" verify -v --min-sdk-version 26 --print-certs "$apk"
             "$apksigner" verify --print-certs "$apk" | grep -qi "a40da80a59d170caa950cf15c18c454d47a39b26989d8b640ecd745ba71bf5dc"
           done
+          if [[ "$found_apk" != "true" ]]; then
+            echo "Error: No release APK found in app/build/app/outputs/flutter-apk!" >&2
+            exit 1
+          fi
           python3 tooling/release_assets.py
 
       - name: Upload workflow artifact

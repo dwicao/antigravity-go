@@ -55,4 +55,4 @@ Inspired by [dsh-Go](https://github.com/ccch1mneyyy/dsh-Go) and powered by the o
 
 ## Build & Release
 
-Release APKs (`arm64` and `x64`) are built and signed with the AOSP release/testkey in GitHub Actions (`.github/workflows/release-apk.yml`) and published to [GitHub Releases](https://github.com/dwicao/antigravity-go/releases).
+Release APKs (`arm64` by default, optional `x64`) are built and signed with the AOSP release/testkey in GitHub Actions (`.github/workflows/release-apk.yml`) and published to [GitHub Releases](https://github.com/dwicao/antigravity-go/releases).
