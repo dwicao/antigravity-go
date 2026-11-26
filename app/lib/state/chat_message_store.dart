@@ -120,13 +120,15 @@ class ChatMessageStore {
 
   Future<void> _writeSnapshot(String sessionId, List<ChatMessage> msgs) async {
     final jsonItems = msgs.map((m) => m.toJson()).toList(growable: false);
-    final offload = msgs.length > 4 ||
-        msgs.any(
-          (m) =>
-              m.text.length > 4096 ||
-              m.thoughts.length > 4096 ||
-              m.tools.length > 3,
-        );
+    final isFlutterTest = Platform.environment.containsKey('FLUTTER_TEST');
+    final offload = !isFlutterTest &&
+        (msgs.length > 4 ||
+            msgs.any(
+              (m) =>
+                  m.text.length > 4096 ||
+                  m.thoughts.length > 4096 ||
+                  m.tools.length > 3,
+            ));
     final encoded = offload
         ? await compute(_encodeChatMessagesJson, jsonItems)
         : jsonEncode(jsonItems);

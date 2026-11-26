@@ -5,6 +5,7 @@ import 'package:antigravity_go/state/chat_turn_helpers.dart';
 import 'package:antigravity_go/state/custom_providers_state.dart';
 import 'package:antigravity_go/state/device_policy_state.dart';
 import 'package:antigravity_go/state/harness_state.dart';
+import 'package:antigravity_go/state/runtime_state.dart';
 import 'package:antigravity_go/state/sessions_state.dart';
 import 'package:antigravity_go/state/settings_state.dart';
 import 'package:antigravity_go/state/share_inbox_state.dart';
@@ -809,17 +810,33 @@ diff --git a/app/lib/main.dart b/app/lib/main.dart
   });
 
   testWidgets('ChatScreen does not show mini-diff banner above composer, keeping ChangeCard only after completed chat result', (tester) async {
-    final container = ProviderContainer();
+    final container = ProviderContainer(
+      overrides: [
+        sessionsProvider.overrideWith(
+          () => _FakeSessionsNotifier(const SessionsState(activeSessionId: 's-nobanner')),
+        ),
+        runtimeProvider.overrideWith(
+          () => _FakeRuntimeNotifier(const RuntimeUiState()),
+        ),
+      ],
+    );
     addTearDown(container.dispose);
 
-    final sessions = container.read(sessionsProvider.notifier);
-    final s = await sessions.createSession(title: 'No Mini Banner');
-    sessions.selectSession(s.id);
-    await Future<void>.delayed(const Duration(milliseconds: 20));
-
     final chatNotifier = container.read(chatProvider.notifier);
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          theme: _theme(),
+          home: const Scaffold(body: ChatScreen()),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 20));
+
     chatNotifier.seedStreamingTurnForTest(
-      sessionId: s.id,
+      sessionId: 's-nobanner',
       turnId: 'turn-nobanner',
       messages: [
         ChatMessage(
@@ -840,23 +857,13 @@ diff --git a/app/lib/main.dart b/app/lib/main.dart
         ),
       ],
     );
-
-    await tester.pumpWidget(
-      UncontrolledProviderScope(
-        container: container,
-        child: MaterialApp(
-          theme: _theme(),
-          home: const Scaffold(body: ChatScreen()),
-        ),
-      ),
-    );
     await tester.pump();
 
     expect(find.byType(WorkspaceChangesBanner), findsNothing);
     // ChangeCard is hidden while message is streaming.
     expect(find.textContaining('View Diff'), findsNothing);
 
-    await chatNotifier.stopStreaming(sessionId: s.id);
+    await chatNotifier.stopStreaming(sessionId: 's-nobanner');
     await tester.pump();
     // After chat result completes, ChangeCard appears below the reply, and no banner above input.
     expect(find.byType(WorkspaceChangesBanner), findsNothing);
@@ -865,6 +872,24 @@ diff --git a/app/lib/main.dart b/app/lib/main.dart
     await tester.pumpWidget(const SizedBox());
     await tester.pump(const Duration(milliseconds: 500));
   });
+}
+
+class _FakeSessionsNotifier extends SessionsNotifier {
+  _FakeSessionsNotifier(this._initial);
+
+  final SessionsState _initial;
+
+  @override
+  SessionsState build() => _initial;
+}
+
+class _FakeRuntimeNotifier extends RuntimeNotifier {
+  _FakeRuntimeNotifier(this._initial);
+
+  final RuntimeUiState _initial;
+
+  @override
+  RuntimeUiState build() => _initial;
 }
 
 class _FakeWorkspaceDiffNotifier extends WorkspaceDiffNotifier {
