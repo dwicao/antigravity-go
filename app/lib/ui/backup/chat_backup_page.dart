@@ -9,7 +9,6 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../state/chat_backup_service.dart';
-import '../../state/chat_message_store.dart';
 import '../../state/chat_state.dart';
 import '../../state/draft_store.dart';
 import '../../state/projects_state.dart';
@@ -273,17 +272,14 @@ class _ChatBackupPageState extends ConsumerState<ChatBackupPage> {
   Future<void> _pickAndRestoreFile() async {
     if (_busy) return;
     try {
-      final picked = await FilePicker.pickFiles(
-        type: FileType.any,
-        withData: true,
-      );
+      final picked = await FilePicker.pickFiles(type: FileType.any);
       if (picked.isEmpty) return;
       final file = picked.first;
-      Uint8List? bytes = file.bytes;
-      if (bytes == null && file.path != null) {
-        bytes = await File(file.path!).readAsBytes();
-      }
-      if (bytes == null || bytes.isEmpty) {
+      final path = file.path;
+      final Uint8List bytes = (path != null && path.isNotEmpty)
+          ? await File(path).readAsBytes()
+          : await file.readAsBytes();
+      if (bytes.isEmpty) {
         _showSnack('Selected file could not be read.');
         return;
       }

@@ -5,7 +5,6 @@ import 'package:antigravity_go/state/chat_backup_service.dart';
 import 'package:antigravity_go/state/chat_message_store.dart';
 import 'package:antigravity_go/state/chat_models.dart';
 import 'package:antigravity_go/state/draft_store.dart';
-import 'package:antigravity_go/state/projects_state.dart';
 import 'package:antigravity_go/state/session_export_helper.dart';
 import 'package:antigravity_go/state/sessions_state.dart';
 import 'package:antigravity_go/ui/backup/chat_backup_page.dart';
@@ -189,7 +188,9 @@ void main() {
     final appliedMerge = await service.prepareAndPersistRestore(
       bundle: bundle,
       existingSessions: [localOld],
-      existingProjects: const [AgyProject(id: 'default', name: 'Default')],
+      existingProjects: const [
+        AgyProject(id: 'default', name: 'Default', folders: []),
+      ],
       mode: ChatRestoreConflictMode.mergeKeepNewer,
     );
     expect(appliedMerge.summary.restoredTotal, 2);

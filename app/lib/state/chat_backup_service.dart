@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:agy_client/agy_client.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -71,7 +72,7 @@ class ChatBackupEntry {
     return {
       'session': maskedSession.toJson(),
       'messages': messages.map((m) => m.toJson()).toList(growable: false),
-      if (maskedDraft != null) 'draftText': maskedDraft,
+      'draftText': ?maskedDraft,
       if (maskedDraft != null && draftUpdatedAt != null)
         'draftUpdatedAt': draftUpdatedAt!.toIso8601String(),
     };
