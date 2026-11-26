@@ -44,7 +44,7 @@ object HeadlessBrowserHelper {
     private const val DEFAULT_EVAL_TIMEOUT_MS = 10_000L
     private const val MAX_CONSOLE_LOGS = 200
 
-    private val mainHandler = Handler(Looper.getMainLooper())
+    private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
     private val opLock = Any()
     private val consoleLock = Any()
     private val consoleBuffer = ArrayDeque<JSONObject>()
@@ -78,7 +78,7 @@ object HeadlessBrowserHelper {
 
     fun isHttpOrHttpsUrl(raw: String?): Boolean {
         if (raw.isNullOrBlank()) return false
-        val uri = runCatching { Uri.parse(raw.trim()) }.getOrNull() ?: return false
+        val uri = runCatching { java.net.URI(raw.trim()) }.getOrNull() ?: return false
         val scheme = uri.scheme?.lowercase(Locale.ROOT).orEmpty()
         return (scheme == "http" || scheme == "https") && !uri.host.isNullOrBlank()
     }

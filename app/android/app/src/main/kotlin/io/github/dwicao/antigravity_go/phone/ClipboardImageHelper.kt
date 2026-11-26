@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicReference
  */
 object ClipboardImageHelper {
     const val MAX_IMAGE_BYTES = 12 * 1024 * 1024 // 12 MiB
-    private val mainHandler = Handler(Looper.getMainLooper())
+    private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
 
     data class ClipboardImageRef(val uri: Uri, val mime: String)
 
