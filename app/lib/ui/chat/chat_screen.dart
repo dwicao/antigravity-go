@@ -327,7 +327,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       }
 
       final keyCtx = _turnKeys[targetId]?.currentContext;
-      if (keyCtx != null && mounted && myToken == _turnJumpToken) {
+      if (keyCtx != null &&
+          keyCtx.mounted &&
+          mounted &&
+          myToken == _turnJumpToken) {
         await Scrollable.ensureVisible(
           keyCtx,
           duration: const Duration(milliseconds: 200),
