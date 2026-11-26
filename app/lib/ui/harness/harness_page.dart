@@ -291,7 +291,7 @@ class _HarnessPageState extends ConsumerState<HarnessPage> {
                   secondary: const Icon(Icons.alt_route_rounded, size: 20),
                   title: const Text('Smart Effort Routing'),
                   subtitle: const Text(
-                    'Adapts Thinking Effort (Low–Extra) to prompt complexity while keeping your selected model',
+                    'Adapts Thinking Effort (Low–Max) to prompt complexity while keeping your selected model',
                   ),
                   value: harness.smartRoutingEnabled,
                   onChanged: (v) =>
@@ -313,7 +313,7 @@ class _HarnessPageState extends ConsumerState<HarnessPage> {
                       Text(
                         switch (settings.speedTier) {
                           InferenceSpeedTier.regular =>
-                            'Regular: Keeps your selected model & adapts Thinking Effort (Low–Extra) to complexity',
+                            'Regular: Keeps your selected model & adapts Thinking Effort (Low–Max) to complexity',
                           InferenceSpeedTier.fast =>
                             'Fast: Keeps your selected model & caps Thinking Effort at Medium (Low on simple prompts)',
                           InferenceSpeedTier.ultrafast =>

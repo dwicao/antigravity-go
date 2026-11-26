@@ -381,7 +381,7 @@ void main() {
       );
     });
 
-    test('adapts thinking effort across low/medium/high/extra while obeying selected model',
+    test('adapts thinking effort across low/medium/high/extra/max while obeying selected model',
         () {
       final ack = HarnessTurnRouter.routeTurn(
         prompt: 'ok siap makasih',
@@ -421,7 +421,19 @@ void main() {
       expect(complexFix.skipRepoMap, isFalse);
       expect(complexFix.downgraded, isFalse);
 
-      final deepAudit = HarnessTurnRouter.routeTurn(
+      final deepDesign = HarnessTurnRouter.routeTurn(
+        prompt: 'Redesign multi-file auth architecture end-to-end',
+        selectedModelId: 'gemini-4-hydrogen',
+        selectedEffort: 'medium',
+        speedTierName: 'regular',
+        smartRoutingEnabled: true,
+        quotaSaverEnabled: true,
+      );
+      expect(deepDesign.modelId, 'gemini-4-hydrogen');
+      expect(deepDesign.effort, 'xhigh');
+      expect(deepDesign.downgraded, isFalse);
+
+      final maxAudit = HarnessTurnRouter.routeTurn(
         prompt:
             'Audit the entire codebase for security leaks and redesign multi-file auth architecture end-to-end',
         selectedModelId: 'gemini-4-hydrogen',
@@ -430,19 +442,48 @@ void main() {
         smartRoutingEnabled: true,
         quotaSaverEnabled: true,
       );
-      expect(deepAudit.modelId, 'gemini-4-hydrogen');
-      expect(deepAudit.effort, 'xhigh');
-      expect(deepAudit.downgraded, isFalse);
+      expect(maxAudit.modelId, 'gemini-4-hydrogen');
+      expect(maxAudit.effort, 'max');
+      expect(maxAudit.downgraded, isFalse);
 
-      final cappedModel = HarnessTurnRouter.routeTurn(
+      final claudeMax = HarnessTurnRouter.routeTurn(
+        prompt: '/boost refactor auth state across modules',
+        selectedModelId: 'claude-opus-5-5-medium',
+        selectedEffort: 'medium',
+        speedTierName: 'regular',
+        smartRoutingEnabled: true,
+      );
+      expect(claudeMax.modelId, 'claude-opus-5-5-medium');
+      expect(claudeMax.effort, 'max');
+
+      final carbonExtraFallback = HarnessTurnRouter.routeTurn(
         prompt: '/plan migrate state management across modules',
         selectedModelId: 'gemini-4-carbon',
         selectedEffort: 'medium',
         speedTierName: 'regular',
         smartRoutingEnabled: true,
       );
-      expect(cappedModel.modelId, 'gemini-4-carbon');
-      expect(cappedModel.effort, 'high');
+      expect(carbonExtraFallback.modelId, 'gemini-4-carbon');
+      expect(carbonExtraFallback.effort, 'high');
+
+      final flashCappedHigh = HarnessTurnRouter.routeTurn(
+        prompt: 'Audit the entire codebase from scratch',
+        selectedModelId: 'gemini-3.8-flash',
+        selectedEffort: 'medium',
+        speedTierName: 'regular',
+        smartRoutingEnabled: true,
+      );
+      expect(flashCappedHigh.modelId, 'gemini-3.8-flash');
+      expect(flashCappedHigh.effort, 'high');
+
+      expect(
+        AgyModelCatalog.resolve('claude-opus-5-5-medium').availableEfforts,
+        contains(ReasoningEffort.max),
+      );
+      expect(
+        AgyModelCatalog.resolve('gemini-4-carbon').availableEfforts,
+        contains(ReasoningEffort.max),
+      );
 
       final manualOnly = HarnessTurnRouter.routeTurn(
         prompt: 'ok siap makasih',

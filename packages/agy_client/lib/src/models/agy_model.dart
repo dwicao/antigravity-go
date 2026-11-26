@@ -46,6 +46,7 @@ class AgyModelInfo {
     required this.quotaGroup,
     required this.description,
     this.supportsExtraEffort = false,
+    this.supportsMaxEffort = false,
     this.supportsEffort = true,
     this.contextWindow = '512K',
     this.isDefault = false,
@@ -58,6 +59,7 @@ class AgyModelInfo {
   final QuotaGroup quotaGroup;
   final String description;
   final bool supportsExtraEffort;
+  final bool supportsMaxEffort;
   final bool supportsEffort;
   final String contextWindow;
   final bool isDefault;
@@ -65,19 +67,12 @@ class AgyModelInfo {
 
   List<ReasoningEffort> get availableEfforts {
     if (!supportsEffort) return const [];
-    if (supportsExtraEffort) {
-      return const [
-        ReasoningEffort.low,
-        ReasoningEffort.medium,
-        ReasoningEffort.high,
-        ReasoningEffort.extra,
-        ReasoningEffort.max,
-      ];
-    }
-    return const [
+    return [
       ReasoningEffort.low,
       ReasoningEffort.medium,
       ReasoningEffort.high,
+      if (supportsExtraEffort) ReasoningEffort.extra,
+      if (supportsMaxEffort || supportsExtraEffort) ReasoningEffort.max,
     ];
   }
 }
@@ -123,8 +118,9 @@ class AgyModelCatalog {
       displayName: 'Gemini 4 Neon',
       provider: 'Google DeepMind',
       quotaGroup: QuotaGroup.gemini,
-      description: 'Frontier reasoning model for architecture & multi-step coding (Low / Medium / High / XHigh)',
+      description: 'Frontier reasoning model for architecture & multi-step coding (Low / Medium / High / XHigh / Max)',
       supportsExtraEffort: true,
+      supportsMaxEffort: true,
       contextWindow: '1M',
       requiresPaidPlan: true,
     ),
@@ -133,7 +129,8 @@ class AgyModelCatalog {
       displayName: 'Gemini 4 Carbon',
       provider: 'Google DeepMind',
       quotaGroup: QuotaGroup.gemini,
-      description: 'Deep reasoning model sharing the Gemini Models quota (Low / Medium / High)',
+      description: 'Deep reasoning model sharing the Gemini Models quota (Low / Medium / High / Max)',
+      supportsMaxEffort: true,
       contextWindow: '1M',
       requiresPaidPlan: true,
     ),
@@ -142,7 +139,8 @@ class AgyModelCatalog {
       displayName: 'Gemini 4 Argon',
       provider: 'Google DeepMind',
       quotaGroup: QuotaGroup.gemini,
-      description: 'High-precision Gemini 4 Argon model merged into Gemini Models quota (Low / Medium / High)',
+      description: 'High-precision Gemini 4 Argon model merged into Gemini Models quota (Low / Medium / High / Max)',
+      supportsMaxEffort: true,
       contextWindow: '1M',
       requiresPaidPlan: true,
     ),
@@ -151,8 +149,9 @@ class AgyModelCatalog {
       displayName: 'Gemini 4 Hydrogen',
       provider: 'Google DeepMind',
       quotaGroup: QuotaGroup.gemini,
-      description: 'Fast everyday coding, refactoring, and execution model (Low / Medium / High / XHigh)',
+      description: 'Fast everyday coding, refactoring, and execution model (Low / Medium / High / XHigh / Max)',
       supportsExtraEffort: true,
+      supportsMaxEffort: true,
       contextWindow: '1M',
       requiresPaidPlan: true,
     ),
@@ -169,7 +168,8 @@ class AgyModelCatalog {
       displayName: 'Claude Opus 5.5',
       provider: 'Anthropic',
       quotaGroup: QuotaGroup.claudeAndGpt,
-      description: 'Partner frontier model sharing the Claude and GPT models quota pool',
+      description: 'Partner frontier model sharing the Claude and GPT models quota pool (Low / Medium / High / Max)',
+      supportsMaxEffort: true,
       requiresPaidPlan: true,
     ),
     AgyModelInfo(
@@ -177,7 +177,8 @@ class AgyModelCatalog {
       displayName: 'Claude Sonnet 5.5',
       provider: 'Anthropic',
       quotaGroup: QuotaGroup.claudeAndGpt,
-      description: 'Balanced partner coding model sharing the Claude and GPT models pool',
+      description: 'Balanced partner coding model sharing the Claude and GPT models pool (Low / Medium / High / Max)',
+      supportsMaxEffort: true,
       requiresPaidPlan: true,
     ),
     AgyModelInfo(
@@ -206,6 +207,7 @@ class AgyModelCatalog {
                 quotaGroup: m.quotaGroup,
                 description: m.description,
                 supportsExtraEffort: m.supportsExtraEffort,
+                supportsMaxEffort: m.supportsMaxEffort,
                 supportsEffort: m.supportsEffort,
                 contextWindow: m.contextWindow,
                 isDefault: m.isDefault,
@@ -224,6 +226,15 @@ class AgyModelCatalog {
         : normalized.contains('claude')
             ? '200K'
             : '160K';
+    final inferredExtra = normalized.contains('neon') ||
+        normalized.contains('hydrogen') ||
+        normalized.contains('xhigh');
+    final inferredMax = inferredExtra ||
+        normalized.contains('claude') ||
+        normalized.contains('carbon') ||
+        normalized.contains('argon') ||
+        normalized.contains('gemini-4') ||
+        normalized.contains('max');
     return AgyModelInfo(
       id: modelId,
       displayName: (displayName != null && displayName.trim().isNotEmpty)
@@ -232,8 +243,8 @@ class AgyModelCatalog {
       provider: inferProvider(modelId),
       quotaGroup: inferQuotaGroup(modelId),
       description: 'Discovered model from active Antigravity account',
-      supportsExtraEffort:
-          normalized.contains('neon') || normalized.contains('hydrogen'),
+      supportsExtraEffort: inferredExtra,
+      supportsMaxEffort: inferredMax,
       contextWindow: inferredContext,
     );
   }

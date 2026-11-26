@@ -951,13 +951,23 @@ ${pendingNote}Do NOT blindly trust prior claims. Independently inspect the works
 class HarnessTurnRouter {
   const HarnessTurnRouter._();
 
+  static final RegExp _maxCommandRe = RegExp(
+    r'^/(boost|goal|teamwork|swarm)\b',
+    caseSensitive: false,
+  );
+
   static final RegExp _deepCommandRe = RegExp(
     r'^/(plan|boost|goal|teamwork|swarm)\b',
     caseSensitive: false,
   );
 
+  static final RegExp _maxComplexWorkRe = RegExp(
+    r'\b(entire\s+codebase|keseluruhan|from\s+scratch|zero[- ]downtime|comprehensive|distributed\s+transaction|formal\s+verif|production\s+outage|critical\s+security)\b',
+    caseSensitive: false,
+  );
+
   static final RegExp _extraComplexWorkRe = RegExp(
-    r'\b(architect|architecture|audit|redesign|rewrite|migrate|migration|concurrency|race\s+condition|deadlock|memory\s+leak|security|cryptograph|end[- ]to[- ]end|full[- ]stack|multi[- ]?file|root\s+cause|comprehensive|deep\s+dive|from\s+scratch|entire\s+codebase|keseluruhan|arsitektur|migrasi|keamanan)\b',
+    r'\b(architect|architecture|audit|redesign|rewrite|migrate|migration|concurrency|race\s+condition|deadlock|memory\s+leak|security|cryptograph|end[- ]to[- ]end|full[- ]stack|multi[- ]?file|root\s+cause|deep\s+dive|arsitektur|migrasi|keamanan)\b',
     caseSensitive: false,
   );
 
@@ -999,7 +1009,9 @@ class HarnessTurnRouter {
     if (trimmed.isEmpty || trimmed.length > 80) return false;
     if (trimmed.contains('\n')) return false;
     if (_pathOrCodeRe.hasMatch(trimmed)) return false;
-    if (_complexWorkRe.hasMatch(trimmed) || _extraComplexWorkRe.hasMatch(trimmed)) {
+    if (_complexWorkRe.hasMatch(trimmed) ||
+        _extraComplexWorkRe.hasMatch(trimmed) ||
+        _maxComplexWorkRe.hasMatch(trimmed)) {
       return false;
     }
     return true;
@@ -1046,10 +1058,11 @@ class HarnessTurnRouter {
   }
 
   /// Classifies prompt complexity into a target Thinking Effort tier
-  /// (`low`, `medium`, `high`, `xhigh`), honoring [supportsExtraEffort].
+  /// (`low`, `medium`, `high`, `xhigh`, `max`), honoring model capabilities.
   static String classifyEffortForPrompt({
     required String prompt,
     required bool supportsExtraEffort,
+    bool supportsMaxEffort = false,
     bool hasAttachments = false,
   }) {
     final trimmed = prompt.trim();
@@ -1063,6 +1076,20 @@ class HarnessTurnRouter {
 
     if (!hasAttachments && isConversationalAck(trimmed)) {
       return 'low';
+    }
+
+    final hasMaxSignal = _maxCommandRe.hasMatch(trimmed) ||
+        _maxComplexWorkRe.hasMatch(trimmed) ||
+        (hasAttachments && _extraComplexWorkRe.hasMatch(trimmed)) ||
+        (trimmed.length >= 450 &&
+            (trimmed.contains('\n') || hasAttachments) &&
+            (_extraComplexWorkRe.hasMatch(trimmed) ||
+                _complexWorkRe.hasMatch(trimmed)));
+
+    if (hasMaxSignal) {
+      if (supportsMaxEffort) return 'max';
+      if (supportsExtraEffort) return 'xhigh';
+      return 'high';
     }
 
     final hasDeepSignal = _deepCommandRe.hasMatch(trimmed) ||
@@ -1124,6 +1151,8 @@ class HarnessTurnRouter {
         final classified = classifyEffortForPrompt(
           prompt: prompt,
           supportsExtraEffort: modelInfo.supportsExtraEffort,
+          supportsMaxEffort:
+              modelInfo.supportsMaxEffort || modelInfo.supportsExtraEffort,
           hasAttachments: hasAttachments,
         );
         nextEffort = classified == 'low' ? 'low' : 'medium';
@@ -1134,6 +1163,8 @@ class HarnessTurnRouter {
       nextEffort = classifyEffortForPrompt(
         prompt: prompt,
         supportsExtraEffort: modelInfo.supportsExtraEffort,
+        supportsMaxEffort:
+            modelInfo.supportsMaxEffort || modelInfo.supportsExtraEffort,
         hasAttachments: hasAttachments,
       );
     } else {
