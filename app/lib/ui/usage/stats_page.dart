@@ -270,11 +270,15 @@ class _StatsPageState extends ConsumerState<StatsPage> {
                           color: theme.colorScheme.primary,
                         ),
                         const SizedBox(width: 6),
-                        Text(
-                          'Token & Cost Breakdown',
-                          style: theme.textTheme.titleSmall?.copyWith(
-                            fontSize: 13.5,
-                            fontWeight: FontWeight.w700,
+                        Expanded(
+                          child: Text(
+                            'Token & Cost Breakdown',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.titleSmall?.copyWith(
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
                         ),
                       ],
@@ -508,11 +512,15 @@ class _StatsPageState extends ConsumerState<StatsPage> {
                           color: theme.colorScheme.primary,
                         ),
                         const SizedBox(width: 6),
-                        Text(
-                          'Workspace & Account Data',
-                          style: theme.textTheme.titleSmall?.copyWith(
-                            fontSize: 13.5,
-                            fontWeight: FontWeight.w700,
+                        Expanded(
+                          child: Text(
+                            'Workspace & Account Data',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.titleSmall?.copyWith(
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
                         ),
                       ],
@@ -722,21 +730,31 @@ class _BreakdownRow extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           Expanded(
+            flex: 3,
             child: Text(
               label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: theme.textTheme.bodySmall?.copyWith(
                 fontWeight: FontWeight.w500,
               ),
             ),
           ),
-          Text(
-            detail,
-            style: theme.textTheme.labelSmall?.copyWith(
-              fontSize: 11,
-              color: theme.colorScheme.onSurfaceVariant,
+          const SizedBox(width: 6),
+          Flexible(
+            flex: 2,
+            child: Text(
+              detail,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.end,
+              style: theme.textTheme.labelSmall?.copyWith(
+                fontSize: 11,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
           ),
-          const SizedBox(width: 10),
+          const SizedBox(width: 8),
           Text(
             value,
             style: theme.textTheme.labelMedium?.copyWith(
