@@ -2,6 +2,17 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.49] - 2026-11-26
+
+### Improved
+- **Smooth UI Responsiveness on Large Edits & High-Volume `Read` Turns:**
+  - Coalesced rapid `AgyToolCallEvent` bursts (`48ms` window) and compact-hashed large parameters in `ChatNotifier` so high-frequency `Read` and multi-file edit events no longer rebuild the chat screen on every delta or run `jsonEncode` on raw file contents on the UI thread.
+  - Debounced mid-turn persistence (`2s`) in `ChatNotifier` and added sequential per-session write queuing + background isolate `jsonEncode` (`compute`) in `ChatMessageStore` to prevent main-thread serialization freezes and `.tmp` file races.
+  - Bounded `UnifiedLineDiff` Myers DP depth (`n + m <= 3000`, `maxD = 400`), passed `maxBodyLines: 240` in `AcpCodec` (skipping identical `oldText == newText` blocks), fast-pathed `ChatTurnHelpers.isFileEditTool` for read/search tools, bounded `MilestoneStackCard` collapsed preview regex masking, and virtualized large `ChangeCard` diff sheets with `ListView.builder`.
+- **Clean Post-Result Mini Diff-View & Faster `arm64`-Only Releases:**
+  - Removed the live mini-diff banner above the composer in `ChatScreen` so changed files appear cleanly via `ChangeCard` only after each assistant response finishes, while hardening `WorkspaceOps.gitDiff` (`statusOk`, `512KB` diff cap) and `WorkspaceDiffNotifier` refresh serialization.
+  - Updated `.github/workflows/release-apk.yml` to build signed `arm64` release APKs by default (keeping `x64` optional via `include_x64` dispatch input) for faster release builds.
+
 ## [1.0.48] - 2026-11-26
 
 ### Improved
