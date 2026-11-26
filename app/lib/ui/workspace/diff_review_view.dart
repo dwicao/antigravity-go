@@ -129,7 +129,7 @@ class _DiffReviewViewState extends ConsumerState<DiffReviewView> {
     if (!mounted) return;
     setState(() => _loading = true);
     try {
-      await ref.read(workspaceDiffProvider.notifier).refresh();
+      await ref.read(workspaceDiffProvider.notifier).refresh(force: true);
       if (!mounted) return;
       final live = ref.read(workspaceDiffProvider);
       final useInitial =

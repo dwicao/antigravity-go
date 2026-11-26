@@ -4,6 +4,7 @@ import 'package:antigravity_go/state/chat_turn_helpers.dart';
 import 'package:antigravity_go/state/custom_providers_state.dart';
 import 'package:antigravity_go/state/device_policy_state.dart';
 import 'package:antigravity_go/state/harness_state.dart';
+import 'package:antigravity_go/state/sessions_state.dart';
 import 'package:antigravity_go/state/settings_state.dart';
 import 'package:antigravity_go/state/share_inbox_state.dart';
 import 'package:antigravity_go/state/side_panel_state.dart';
@@ -321,6 +322,22 @@ diff --git a/app/lib/main.dart b/app/lib/main.dart
     expect(extracted[1].added, 2);
     expect(extracted[1].removed, 1);
   });
+
+  test('WorkspaceDiffNotifier switches cached session diff state without retaining stale files', () async {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final sessions = container.read(sessionsProvider.notifier);
+    final s1 = await sessions.createSession(title: 'Chat A');
+    final s2 = await sessions.createSession(title: 'Chat B');
+
+    sessions.selectSession(s1.id);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(container.read(workspaceDiffProvider).files, isEmpty);
+
+    sessions.selectSession(s2.id);
+    expect(container.read(workspaceDiffProvider).loading, isFalse);
+  });
 }
 
 class _FakeWorkspaceDiffNotifier extends WorkspaceDiffNotifier {
@@ -332,5 +349,5 @@ class _FakeWorkspaceDiffNotifier extends WorkspaceDiffNotifier {
   WorkspaceDiffState build() => _initial;
 
   @override
-  Future<void> refresh({bool showLoading = false}) async {}
+  Future<void> refresh({bool showLoading = false, bool force = false}) async {}
 }

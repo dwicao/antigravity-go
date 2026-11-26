@@ -62,34 +62,70 @@ final workspaceDiffProvider =
 );
 
 /// Tracks live uncommitted workspace changes (standard Git, Shadow Git, SSH, or
-/// latest assistant turn fallback) so both the bottom-of-chat mini-view and the
-/// standalone [DiffReviewPage] stay synchronized.
+/// latest assistant turn fallback) with per-session & per-CWD caching so
+/// switching chats updates the bottom-of-chat mini-view instantaneously.
 class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
+  static const Duration _cwdCacheTtl = Duration(milliseconds: 1200);
+  static const int _maxCacheEntries = 24;
+
   int _refreshToken = 0;
+  bool _scheduledCoalesced = false;
+  bool _pendingForce = false;
+  String? _currentSessionId;
+  final Map<String, WorkspaceDiffState> _sessionCache = {};
+  final Map<String, ({WorkspaceDiffState state, DateTime fetchedAt})> _cwdCache =
+      {};
 
   @override
   WorkspaceDiffState build() {
+    _currentSessionId = ref.read(sessionsProvider).activeSessionId;
+
+    ref.listen<String?>(
+      sessionsProvider.select((s) => s.activeSessionId),
+      (prev, next) {
+        if (prev != next) {
+          _onSessionSwitch(prev, next);
+        }
+      },
+    );
     ref.listen<String>(
       sessionsProvider.select((s) => s.activeSession?.workspacePath ?? ''),
-      (_, _) => unawaited(refresh()),
+      (prev, next) {
+        if (prev != next) _scheduleRefresh();
+      },
+    );
+    ref.listen<String?>(
+      chatProvider.select((c) => c.loadedSessionId),
+      (prev, next) {
+        if (prev != next) {
+          _applyInstantSessionSnapshot(next);
+          _scheduleRefresh();
+        }
+      },
     );
     ref.listen<String>(
       projectsProvider.select((p) => p.activeProject.primaryFolder),
-      (_, _) => unawaited(refresh()),
+      (prev, next) {
+        if (prev != next) _scheduleRefresh();
+      },
     );
     ref.listen<String?>(
       hostsProvider.select((h) => h.activeSshHost?.id),
-      (_, _) => unawaited(refresh()),
+      (prev, next) {
+        if (prev != next) _scheduleRefresh(force: true);
+      },
     );
     ref.listen<String?>(
       runtimeProvider.select((r) => r.status.workspaceRoot),
-      (_, _) => unawaited(refresh()),
+      (prev, next) {
+        if (prev != next) _scheduleRefresh();
+      },
     );
     ref.listen<bool>(
       chatProvider.select((c) => c.isStreaming),
       (prev, next) {
         if (prev == true && next == false) {
-          unawaited(refresh());
+          _scheduleRefresh(force: true);
         }
       },
     );
@@ -97,15 +133,83 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
       chatProvider.select((c) => _latestTurnSignature(c.messages)),
       (prev, next) {
         if (prev != next) {
-          unawaited(refresh());
+          _scheduleRefresh(force: true);
         }
       },
     );
 
-    Future.microtask(() {
-      if (ref.mounted) unawaited(refresh());
-    });
+    _scheduleRefresh();
     return const WorkspaceDiffState();
+  }
+
+  void _onSessionSwitch(String? prevId, String? nextId) {
+    if (prevId != null && prevId.isNotEmpty) {
+      _putSessionCache(prevId, state);
+    }
+    _currentSessionId = nextId;
+    _applyInstantSessionSnapshot(nextId);
+    _scheduleRefresh();
+  }
+
+  void _applyInstantSessionSnapshot(String? sessionId) {
+    final primaryCwd = resolveActiveCwd();
+    final cachedSession =
+        sessionId != null ? _sessionCache[sessionId] : null;
+    if (cachedSession != null &&
+        (primaryCwd.isEmpty ||
+            cachedSession.cwd.isEmpty ||
+            cachedSession.cwd == primaryCwd)) {
+      state = cachedSession.copyWith(loading: false);
+      return;
+    }
+
+    final cachedCwd = primaryCwd.isNotEmpty ? _cwdCache[primaryCwd]?.state : null;
+    if (cachedCwd != null) {
+      state = cachedCwd.copyWith(loading: false);
+      return;
+    }
+
+    // Never keep stale files from the previous chat while refreshing.
+    final fallback = _latestTurnFallbackFiles();
+    state = WorkspaceDiffState(
+      loading: false,
+      cwd: primaryCwd,
+      files: fallback,
+      unifiedDiff: _joinFileDiffs(fallback),
+    );
+  }
+
+  void _scheduleRefresh({bool force = false}) {
+    if (force) _pendingForce = true;
+    if (_scheduledCoalesced) return;
+    _scheduledCoalesced = true;
+    Future.microtask(() {
+      _scheduledCoalesced = false;
+      final shouldForce = _pendingForce;
+      _pendingForce = false;
+      if (ref.mounted) {
+        unawaited(refresh(force: shouldForce));
+      }
+    });
+  }
+
+  void _putSessionCache(String sessionId, WorkspaceDiffState value) {
+    if (_sessionCache.length >= _maxCacheEntries &&
+        !_sessionCache.containsKey(sessionId)) {
+      _sessionCache.remove(_sessionCache.keys.first);
+    }
+    _sessionCache[sessionId] = value.copyWith(loading: false);
+  }
+
+  void _putCwdCache(String cwd, WorkspaceDiffState value) {
+    if (cwd.isEmpty) return;
+    if (_cwdCache.length >= _maxCacheEntries && !_cwdCache.containsKey(cwd)) {
+      _cwdCache.remove(_cwdCache.keys.first);
+    }
+    _cwdCache[cwd] = (
+      state: value.copyWith(loading: false),
+      fetchedAt: DateTime.now(),
+    );
   }
 
   static int _latestTurnSignature(List<ChatMessage> messages) {
@@ -127,7 +231,41 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
     return messages.length;
   }
 
-  List<String> _candidateLocalCwds() {
+  List<String> _recentToolCwds() {
+    final seen = <String>{};
+    final out = <String>[];
+    void addPath(String? raw) {
+      final p = raw?.trim() ?? '';
+      if (p.isNotEmpty && seen.add(p)) out.add(p);
+    }
+
+    final msgs = ref.read(chatProvider).messages;
+    for (var i = msgs.length - 1; i >= 0 && i >= msgs.length - 4; i--) {
+      final m = msgs[i];
+      for (final f in m.changedFiles) {
+        if (f.path.startsWith('/')) {
+          addPath(File(f.path).parent.path);
+        }
+      }
+      for (final t in m.tools) {
+        final toolCwd = t.parameters['Cwd'] ??
+            t.parameters['cwd'] ??
+            t.parameters['workdir'];
+        if (toolCwd != null) addPath(toolCwd.toString());
+        final rawFile = t.parameters['TargetFile'] ??
+            t.parameters['AbsolutePath'] ??
+            t.parameters['path'] ??
+            t.parameters['file_path'];
+        final fileStr = rawFile?.toString().trim() ?? '';
+        if (fileStr.startsWith('/')) {
+          addPath(File(fileStr).parent.path);
+        }
+      }
+    }
+    return out;
+  }
+
+  List<String> _fallbackProjectCwds() {
     final seen = <String>{};
     final out = <String>[];
     void addCandidate(String? raw) {
@@ -136,49 +274,25 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
       if (seen.add(p)) out.add(p);
     }
 
-    addCandidate(ref.read(sessionsProvider).activeSession?.workspacePath);
     final project = ref.read(projectsProvider).activeProject;
     addCandidate(project.primaryFolder);
     for (final folder in project.folders) {
       addCandidate(folder);
     }
     addCandidate(ref.read(runtimeProvider).status.workspaceRoot);
-
-    // Also inspect tool working directories or edited file parents from the
-    // most recent assistant turns in case files were edited outside session CWD.
-    final msgs = ref.read(chatProvider).messages;
-    for (var i = msgs.length - 1; i >= 0 && i >= msgs.length - 4; i--) {
-      final m = msgs[i];
-      for (final f in m.changedFiles) {
-        if (f.path.startsWith('/')) {
-          addCandidate(File(f.path).parent.path);
-        }
-      }
-      for (final t in m.tools) {
-        final toolCwd = t.parameters['Cwd'] ??
-            t.parameters['cwd'] ??
-            t.parameters['workdir'];
-        if (toolCwd != null) addCandidate(toolCwd.toString());
-        final rawFile = t.parameters['TargetFile'] ??
-            t.parameters['AbsolutePath'] ??
-            t.parameters['path'] ??
-            t.parameters['file_path'];
-        final fileStr = rawFile?.toString().trim() ?? '';
-        if (fileStr.startsWith('/')) {
-          addCandidate(File(fileStr).parent.path);
-        }
-      }
-    }
-
     return out;
   }
 
   String resolveActiveCwd() {
+    final sessionWs =
+        ref.read(sessionsProvider).activeSession?.workspacePath.trim() ?? '';
+    if (sessionWs.isNotEmpty) return sessionWs;
+    final projDir = ref.read(projectsProvider).activeProject.primaryFolder.trim();
+    if (projDir.isNotEmpty) return projDir;
     final sshWs =
         ref.read(hostsProvider).activeSshHost?.defaultWorkspace.trim() ?? '';
-    final candidates = _candidateLocalCwds();
-    if (candidates.isNotEmpty) return candidates.first;
-    return sshWs;
+    if (sshWs.isNotEmpty) return sshWs;
+    return ref.read(runtimeProvider).status.workspaceRoot?.trim() ?? '';
   }
 
   List<FileChangeEntry> _latestTurnFallbackFiles() {
@@ -197,11 +311,40 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
     return const [];
   }
 
-  Future<void> refresh({bool showLoading = false}) async {
+  static String _joinFileDiffs(List<FileChangeEntry> files) {
+    return files
+        .map((f) => f.diff ?? '')
+        .where((d) => d.trim().isNotEmpty)
+        .join('\n');
+  }
+
+  Future<void> refresh({bool showLoading = false, bool force = false}) async {
     if (!ref.mounted) return;
     final token = ++_refreshToken;
+    final activeSid =
+        ref.read(sessionsProvider).activeSessionId ?? _currentSessionId;
     final primaryCwd = resolveActiveCwd();
     final sshHost = ref.read(hostsProvider).activeSshHost;
+
+    if (!force && sshHost == null && primaryCwd.isNotEmpty) {
+      final cached = _cwdCache[primaryCwd];
+      if (cached != null &&
+          DateTime.now().difference(cached.fetchedAt) < _cwdCacheTtl) {
+        final fallback = _latestTurnFallbackFiles();
+        final effective =
+            cached.state.files.isNotEmpty ? cached.state.files : fallback;
+        final nextState = cached.state.copyWith(
+          loading: false,
+          files: effective,
+          unifiedDiff: cached.state.unifiedDiff.isNotEmpty
+              ? cached.state.unifiedDiff
+              : _joinFileDiffs(effective),
+        );
+        state = nextState;
+        if (activeSid != null) _putSessionCache(activeSid, nextState);
+        return;
+      }
+    }
 
     if (showLoading) {
       state = state.copyWith(loading: true, cwd: primaryCwd);
@@ -210,15 +353,14 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
     if (primaryCwd.isEmpty && sshHost == null) {
       final fallback = _latestTurnFallbackFiles();
       if (!ref.mounted || token != _refreshToken) return;
-      state = WorkspaceDiffState(
+      final nextState = WorkspaceDiffState(
         loading: false,
         cwd: '',
         files: fallback,
-        unifiedDiff: fallback
-            .map((f) => f.diff ?? '')
-            .where((d) => d.trim().isNotEmpty)
-            .join('\n'),
+        unifiedDiff: _joinFileDiffs(fallback),
       );
+      state = nextState;
+      if (activeSid != null) _putSessionCache(activeSid, nextState);
       return;
     }
 
@@ -254,60 +396,80 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
         );
         final fallback = _latestTurnFallbackFiles();
         final effectiveFiles = parsed.isNotEmpty ? parsed : fallback;
-        state = WorkspaceDiffState(
+        final nextState = WorkspaceDiffState(
           loading: false,
           cwd: primaryCwd,
           branch: branch,
           status: status,
-          unifiedDiff: diff.isNotEmpty
-              ? diff
-              : effectiveFiles
-                  .map((f) => f.diff ?? '')
-                  .where((d) => d.trim().isNotEmpty)
-                  .join('\n'),
+          unifiedDiff:
+              diff.isNotEmpty ? diff : _joinFileDiffs(effectiveFiles),
           files: effectiveFiles,
         );
+        state = nextState;
+        if (activeSid != null) _putSessionCache(activeSid, nextState);
         return;
       }
 
-      final candidates = _candidateLocalCwds();
       String chosenCwd = primaryCwd;
       String chosenBranch = '';
       String chosenStatus = '';
       String chosenDiff = '';
       List<FileChangeEntry> chosenFiles = const [];
 
-      for (final candidate in candidates) {
-        final res = await RuntimeBridge.instance.gitDiffDetailed(candidate);
-        if (!ref.mounted || token != _refreshToken) return;
-        final branch = res.branch.trim();
-        final status = res.status.trim();
-        final diff = res.diff.trim();
-        if (chosenBranch.isEmpty && branch.isNotEmpty) {
-          chosenCwd = candidate;
-          chosenBranch = branch;
-        }
-        if (res.files.isNotEmpty || status.isNotEmpty || diff.isNotEmpty) {
-          chosenCwd = candidate;
-          chosenBranch = branch;
-          chosenStatus = status;
-          chosenDiff = diff;
-          chosenFiles = res.files;
-          break;
+      final primaryRes = await RuntimeBridge.instance.gitDiffDetailed(primaryCwd);
+      if (!ref.mounted || token != _refreshToken) return;
+      chosenBranch = primaryRes.branch.trim();
+      chosenStatus = primaryRes.status.trim();
+      chosenDiff = primaryRes.diff.trim();
+      chosenFiles = primaryRes.files;
+
+      final primaryHasChanges =
+          chosenFiles.isNotEmpty || chosenStatus.isNotEmpty || chosenDiff.isNotEmpty;
+
+      if (!primaryHasChanges) {
+        final isPrimaryRealRepo =
+            chosenBranch.isNotEmpty && chosenBranch != 'shadow-checkpoint';
+        final secondary = <String>{
+          ..._recentToolCwds(),
+          if (!isPrimaryRealRepo) ..._fallbackProjectCwds(),
+        }..remove(primaryCwd);
+
+        if (secondary.isNotEmpty) {
+          final results = await Future.wait(
+            secondary.map((c) async {
+              final r = await RuntimeBridge.instance.gitDiffDetailed(c);
+              return (cwd: c, res: r);
+            }),
+          );
+          if (!ref.mounted || token != _refreshToken) return;
+          for (final item in results) {
+            final branch = item.res.branch.trim();
+            final status = item.res.status.trim();
+            final diff = item.res.diff.trim();
+            if (chosenBranch.isEmpty && branch.isNotEmpty) {
+              chosenCwd = item.cwd;
+              chosenBranch = branch;
+            }
+            if (item.res.files.isNotEmpty ||
+                status.isNotEmpty ||
+                diff.isNotEmpty) {
+              chosenCwd = item.cwd;
+              chosenBranch = branch;
+              chosenStatus = status;
+              chosenDiff = diff;
+              chosenFiles = item.res.files;
+              break;
+            }
+          }
         }
       }
 
       final fallback = _latestTurnFallbackFiles();
-      final effectiveFiles =
-          chosenFiles.isNotEmpty ? chosenFiles : fallback;
-      final effectiveDiff = chosenDiff.isNotEmpty
-          ? chosenDiff
-          : effectiveFiles
-              .map((f) => f.diff ?? '')
-              .where((d) => d.trim().isNotEmpty)
-              .join('\n');
+      final effectiveFiles = chosenFiles.isNotEmpty ? chosenFiles : fallback;
+      final effectiveDiff =
+          chosenDiff.isNotEmpty ? chosenDiff : _joinFileDiffs(effectiveFiles);
 
-      state = WorkspaceDiffState(
+      final nextState = WorkspaceDiffState(
         loading: false,
         cwd: chosenCwd,
         branch: chosenBranch,
@@ -315,18 +477,25 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
         unifiedDiff: effectiveDiff,
         files: effectiveFiles,
       );
+      state = nextState;
+      _putCwdCache(primaryCwd, nextState);
+      if (chosenCwd != primaryCwd) {
+        _putCwdCache(chosenCwd, nextState);
+      }
+      if (activeSid != null) {
+        _putSessionCache(activeSid, nextState);
+      }
     } catch (_) {
       if (!ref.mounted || token != _refreshToken) return;
       final fallback = _latestTurnFallbackFiles();
-      state = WorkspaceDiffState(
+      final nextState = WorkspaceDiffState(
         loading: false,
         cwd: primaryCwd,
         files: fallback,
-        unifiedDiff: fallback
-            .map((f) => f.diff ?? '')
-            .where((d) => d.trim().isNotEmpty)
-            .join('\n'),
+        unifiedDiff: _joinFileDiffs(fallback),
       );
+      state = nextState;
+      if (activeSid != null) _putSessionCache(activeSid, nextState);
     }
   }
 

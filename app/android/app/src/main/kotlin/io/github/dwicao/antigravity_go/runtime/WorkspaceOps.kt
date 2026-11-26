@@ -28,6 +28,33 @@ internal class WorkspaceOps(
         }
     }
 
+    private fun hasStandardGitRoot(dir: File): Boolean {
+        var cur: File? = dir
+        var depth = 0
+        while (cur != null && depth < 16) {
+            if (File(cur, ".git").exists()) return true
+            cur = cur.parentFile
+            depth++
+        }
+        return false
+    }
+
+    private fun parseBranchFromStatusHeader(headerLine: String): String {
+        val body = headerLine.removePrefix("## ").trim()
+        if (body.startsWith("No commits yet on ")) {
+            return body.removePrefix("No commits yet on ").trim()
+        }
+        if (body.startsWith("Initial commit on ")) {
+            return body.removePrefix("Initial commit on ").trim()
+        }
+        if (body.startsWith("HEAD (no branch)")) return "HEAD"
+        val dotsIdx = body.indexOf("...")
+        if (dotsIdx >= 0) return body.substring(0, dotsIdx).trim()
+        val bracketIdx = body.indexOf(" [")
+        if (bracketIdx >= 0) return body.substring(0, bracketIdx).trim()
+        return body
+    }
+
     fun gitDiff(cwd: String?): Map<String, String> {
         val dir = if (!cwd.isNullOrBlank()) File(cwd) else workspaceDir
         if (!dir.exists() || !dir.isDirectory) {
@@ -38,6 +65,16 @@ internal class WorkspaceOps(
                 "branch" to "",
             )
         }
+        val shadowCandidate = shadowGitDir(dir).takeIf { it.exists() }
+        if (!hasStandardGitRoot(dir) && shadowCandidate == null) {
+            return mapOf(
+                "status" to "",
+                "diff" to "",
+                "numstat" to "",
+                "branch" to "",
+            )
+        }
+
         val (insideCode, insideOut) = runCapturedArgs(
             gitCmd(null, "rev-parse", "--is-inside-work-tree"),
             dir,
@@ -45,7 +82,7 @@ internal class WorkspaceOps(
             15,
         )
         val useStandard = insideCode == 0 && insideOut.trim() == "true"
-        val shadowDir = if (!useStandard) shadowGitDir(dir).takeIf { it.exists() } else null
+        val shadowDir = if (!useStandard) shadowCandidate else null
 
         if (!useStandard && shadowDir == null) {
             return mapOf(
@@ -61,23 +98,60 @@ internal class WorkspaceOps(
             ensureShadowExclude(shadowDir)
         }
         val pathFilterArgs = shadowExcludeArgs.toTypedArray()
-        val (_, statusRaw) = runCapturedArgs(
-            gitCmd(shadowDir, "status", "--short", "-uall", *pathFilterArgs),
+        val (_, statusWithBranchRaw) = runCapturedArgs(
+            gitCmd(shadowDir, "status", "--short", "--branch", "-uall", *pathFilterArgs),
             dir,
             workEnv,
             20,
         )
-        val (hasHeadCode, _) = runCapturedArgs(
-            gitCmd(shadowDir, "rev-parse", "--verify", "HEAD"),
-            dir,
-            workEnv,
-            15,
-        )
-        val hasHead = hasHeadCode == 0
+        val rawStatusLines = statusWithBranchRaw.lines()
+        val firstLine = rawStatusLines.firstOrNull()?.trim() ?: ""
+        val hasBranchHeader = firstLine.startsWith("## ")
+        val statusLines = if (hasBranchHeader) rawStatusLines.drop(1) else rawStatusLines
+        val statusRaw = statusLines.joinToString("\n").trim()
+        val branch = if (shadowDir != null) {
+            "shadow-checkpoint"
+        } else if (hasBranchHeader) {
+            parseBranchFromStatusHeader(firstLine)
+        } else {
+            val (_, b) = runCapturedArgs(gitCmd(null, "rev-parse", "--abbrev-ref", "HEAD"), dir, emptyMap(), 15)
+            b.trim()
+        }
+
+        // Fast path: clean repository has nothing to diff or numstat.
+        if (statusRaw.isEmpty()) {
+            return mapOf(
+                "status" to "",
+                "diff" to "",
+                "numstat" to "",
+                "branch" to branch,
+            )
+        }
+
+        val hasTrackedChanges = statusRaw.lineSequence().any { line ->
+            val trimmed = line.trimEnd()
+            trimmed.isNotEmpty() && !trimmed.startsWith("?? ")
+        }
+        val hasHead = if (!hasBranchHeader) {
+            val (hasHeadCode, _) = runCapturedArgs(
+                gitCmd(shadowDir, "rev-parse", "--verify", "HEAD"),
+                dir,
+                workEnv,
+                15,
+            )
+            hasHeadCode == 0
+        } else {
+            val headerBody = firstLine.removePrefix("## ").trim()
+            !headerBody.startsWith("No commits yet on ") &&
+                !headerBody.startsWith("Initial commit on ")
+        }
 
         val diffText: String
         val numstatText: String
-        if (shadowDir != null) {
+        if (!hasTrackedChanges) {
+            diffText = ""
+            numstatText = ""
+        } else if (shadowDir != null) {
             val (_, d) = runCapturedArgs(
                 if (hasHead) {
                     gitCmd(shadowDir, "diff", "HEAD", *pathFilterArgs)
@@ -112,13 +186,6 @@ internal class WorkspaceOps(
             val (_, n2) = runCapturedArgs(gitCmd(null, "diff", "--cached", "--numstat", *pathFilterArgs), dir, emptyMap(), 25)
             diffText = listOf(d1.trim(), d2.trim()).filter { it.isNotEmpty() }.joinToString("\n")
             numstatText = listOf(n1.trim(), n2.trim()).filter { it.isNotEmpty() }.joinToString("\n")
-        }
-
-        val branch = if (shadowDir != null) {
-            "shadow-checkpoint"
-        } else {
-            val (_, b) = runCapturedArgs(gitCmd(null, "rev-parse", "--abbrev-ref", "HEAD"), dir, emptyMap(), 15)
-            b.trim()
         }
 
         // Synthesize GitHub-style unified diffs & numstat for untracked (`??`) text files.

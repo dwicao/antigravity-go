@@ -2,6 +2,14 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.40] - 2026-11-26
+
+### Changed
+- **Fast Chat-Switch Diff Performance:**
+  - Memoized `RuntimeController.ensureShellToolchain()` so `buildEnv()` no longer re-spawns BusyBox/Bash health-check processes or re-walks 100+ applets on every `git` command.
+  - Added pure-Java `.git` / `shadow_git` fast-path + single `git status --short --branch -uall` probe in `WorkspaceOps.gitDiff`, skipping `git diff` / `git diff --numstat` / `rev-parse HEAD` entirely when clean or untracked-only.
+  - Added per-session & per-CWD caching, 0ms snapshot swap on chat switch, microtask coalescing, and parallel secondary repo probing in `WorkspaceDiffNotifier`.
+
 ## [1.0.39] - 2026-11-26
 
 ### Fixed

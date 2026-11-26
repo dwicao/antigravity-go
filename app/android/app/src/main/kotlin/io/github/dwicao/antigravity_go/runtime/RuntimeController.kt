@@ -57,6 +57,12 @@ class RuntimeController private constructor(private val appContext: Context) {
     @Volatile
     private var bashHealthy: Boolean = false
 
+    @Volatile
+    private var toolchainInitialized: Boolean = false
+
+    @Volatile
+    private var lastToolchainStorageAccess: Boolean? = null
+
     val runtimeDir: File get() = File(appContext.filesDir, "runtime")
     val binDir: File get() = File(runtimeDir, "bin")
     val tmpDir: File get() = File(runtimeDir, "tmp")
@@ -581,8 +587,16 @@ class RuntimeController private constructor(private val appContext: Context) {
         }
     }
 
-    fun ensureShellToolchain() {
+    fun ensureShellToolchain(force: Boolean = false) {
         synchronized(toolchainLock) {
+            val storageAccessNow = hasStorageAccess()
+            if (!force &&
+                toolchainInitialized &&
+                lastToolchainStorageAccess == storageAccessNow &&
+                bashFile.exists()
+            ) {
+                return
+            }
             try {
                 binDir.mkdirs()
                 tmpDir.mkdirs()
@@ -630,6 +644,8 @@ class RuntimeController private constructor(private val appContext: Context) {
                     runCatching { if (sdcardLink.exists()) sdcardLink.delete() }
                     runCatching { if (wsStorageLink.exists()) wsStorageLink.delete() }
                 }
+                toolchainInitialized = true
+                lastToolchainStorageAccess = storageAccessNow
             } catch (_: Throwable) {}
         }
     }
@@ -1230,6 +1246,7 @@ am start -a android.intent.action.VIEW -d "${'$'}url" >/dev/null 2>&1 || echo "[
         terminalManager.closeSession(sessionId)
 
     fun diagnoseRuntime(): Map<String, Any?> {
+        ensureShellToolchain(force = true)
         val env = buildEnv()
         val bashWorks = runCatching {
             runShell(
