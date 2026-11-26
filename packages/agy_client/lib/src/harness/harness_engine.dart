@@ -329,6 +329,7 @@ class HarnessContextSnapshot {
     required this.statusLabel,
     this.compactedMessages = 0,
     this.activeMessages = 0,
+    this.compactAtTokens,
   });
 
   final int usedTokens;
@@ -339,6 +340,7 @@ class HarnessContextSnapshot {
   final String statusLabel;
   final int compactedMessages;
   final int activeMessages;
+  final int? compactAtTokens;
 
   int get percentage => (ratio * 100).clamp(0, 100).round();
 }
@@ -351,6 +353,64 @@ class HarnessContextMonitor {
     this.compactThreshold = 0.80,
     this.maxCompactTokens,
   });
+
+  static const int minQuotaCompactTokens = 256000;
+  static const int mediumQuotaCompactTokens = 512000;
+  static const int maxQuotaCompactTokens = 800000;
+
+  static final RegExp _largeTaskPromptRe = RegExp(
+    r'(?:^|\s)(?:/(?:plan|boost|goal|teamwork|swarm)\b)|'
+    r'\b(refactor|refactoring|architect|architecture|migrate|migration|redesign|rewrite|overhaul|multi[- ]?file|monorepo|end[- ]?to[- ]?end|e2e|full[- ]?stack|codebase|audit|investigate|deep[- ]?dive|benchmark|upgrade|rombak|migrasi|menyeluruh)\b',
+    caseSensitive: false,
+  );
+
+  /// Resolves an adaptive compaction cap:
+  /// - When [quotaSaverEnabled] is false, returns `null` (full 80% model window).
+  /// - When [quotaSaverEnabled] is true, starts at [minQuotaCompactTokens] (256K)
+  ///   and scales adaptively to 512K (medium coding/high effort) or 800K
+  ///   (complex/large work such as refactors, architecture, or >=4 changed files).
+  static int? resolveAdaptiveCompactTokens({
+    required bool quotaSaverEnabled,
+    required int budgetTokens,
+    Iterable<String> recentPrompts = const <String>[],
+    int toolCallCount = 0,
+    int changedFileCount = 0,
+    String? reasoningEffort,
+  }) {
+    if (!quotaSaverEnabled) return null;
+    if (budgetTokens <= minQuotaCompactTokens) {
+      return (budgetTokens * 0.80).round();
+    }
+
+    var hasLargeTaskPrompt = false;
+    var hasSubstantialPrompt = false;
+    for (final raw in recentPrompts) {
+      final p = raw.trim();
+      if (p.isEmpty) continue;
+      if (_largeTaskPromptRe.hasMatch(p)) {
+        hasLargeTaskPrompt = true;
+        break;
+      }
+      if (p.length >= 350) {
+        hasSubstantialPrompt = true;
+      }
+    }
+
+    if (hasLargeTaskPrompt || changedFileCount >= 4 || toolCallCount >= 20) {
+      return math.min((budgetTokens * 0.80).round(), maxQuotaCompactTokens);
+    }
+
+    final eff = (reasoningEffort ?? '').trim().toLowerCase();
+    final isHighEffort = eff == 'high' || eff == 'xhigh' || eff == 'max';
+    if (hasSubstantialPrompt ||
+        changedFileCount >= 2 ||
+        toolCallCount >= 8 ||
+        isHighEffort) {
+      return math.min((budgetTokens * 0.80).round(), mediumQuotaCompactTokens);
+    }
+
+    return minQuotaCompactTokens;
+  }
 
   final double warningThreshold;
   final double compactThreshold;
@@ -442,6 +502,7 @@ class HarnessContextMonitor {
       statusLabel: statusLabel,
       compactedMessages: compactedMessages,
       activeMessages: activeMessages ?? msgCount,
+      compactAtTokens: compactAt,
     );
   }
 

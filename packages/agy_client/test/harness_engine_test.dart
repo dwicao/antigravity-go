@@ -315,15 +315,70 @@ void main() {
     });
 
     test('caps auto-compact threshold at maxCompactTokens on 1M context models', () {
-      const monitor = HarnessContextMonitor(maxCompactTokens: 160000);
-      final big = List<String>.filled(650000, 'a').join();
+      const monitor = HarnessContextMonitor(maxCompactTokens: 256000);
+      final belowFloor = List<String>.filled(700000, 'a').join();
+      final snapLow = monitor.evaluate(
+        messageTexts: [belowFloor],
+        modelId: 'gemini-4-neon',
+      );
+      expect(snapLow.budgetTokens, 1000000);
+      expect(snapLow.usedTokens, greaterThan(180000));
+      expect(snapLow.usedTokens, lessThan(256000));
+      expect(snapLow.shouldCompact, isFalse);
+
+      final big = List<String>.filled(1050000, 'a').join();
       final snap = monitor.evaluate(
         messageTexts: [big],
         modelId: 'gemini-4-neon',
       );
       expect(snap.budgetTokens, 1000000);
-      expect(snap.usedTokens, greaterThan(160000));
+      expect(snap.usedTokens, greaterThan(256000));
       expect(snap.shouldCompact, isTrue);
+      expect(snap.compactAtTokens, 256000);
+    });
+
+    test('resolveAdaptiveCompactTokens uses 256K floor and scales to 512K/800K for refactors', () {
+      expect(
+        HarnessContextMonitor.resolveAdaptiveCompactTokens(
+          quotaSaverEnabled: false,
+          budgetTokens: 1000000,
+        ),
+        isNull,
+      );
+      expect(
+        HarnessContextMonitor.resolveAdaptiveCompactTokens(
+          quotaSaverEnabled: true,
+          budgetTokens: 1000000,
+          recentPrompts: ['Explain this error concisely'],
+          reasoningEffort: 'medium',
+        ),
+        256000,
+      );
+      expect(
+        HarnessContextMonitor.resolveAdaptiveCompactTokens(
+          quotaSaverEnabled: true,
+          budgetTokens: 1000000,
+          recentPrompts: ['Update button padding'],
+          toolCallCount: 10,
+        ),
+        512000,
+      );
+      expect(
+        HarnessContextMonitor.resolveAdaptiveCompactTokens(
+          quotaSaverEnabled: true,
+          budgetTokens: 1000000,
+          recentPrompts: ['Refactor auth and state layer across modules'],
+        ),
+        800000,
+      );
+      expect(
+        HarnessContextMonitor.resolveAdaptiveCompactTokens(
+          quotaSaverEnabled: true,
+          budgetTokens: 1000000,
+          changedFileCount: 5,
+        ),
+        800000,
+      );
     });
 
     test('routes conversational acks to Flash Low under quotaSaverEnabled', () {

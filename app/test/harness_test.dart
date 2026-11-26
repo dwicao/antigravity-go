@@ -189,6 +189,46 @@ void main() {
     expect(snap.budgetTokens, 1000000);
     expect(snap.usedTokens, 120000);
     expect(snap.percentage, 12);
+    expect(snap.compactAtTokens, 256000);
+  });
+
+  test('contextBudgetProvider adapts compactAtTokens from 256K to 800K for refactor workloads', () {
+    final container = ProviderContainer(
+      overrides: [
+        settingsProvider.overrideWith(
+          () => _FixedSettingsNotifier(
+            const AppSettings(selectedModelId: 'gemini-4-neon'),
+          ),
+        ),
+        chatProvider.overrideWith(
+          () => _FixedChatNotifier(
+            ChatThreadState(
+              messages: [
+                ChatMessage(
+                  id: 'u1',
+                  role: ChatRole.user,
+                  text: 'Refactor runtime bridge and ACP session architecture',
+                  createdAt: DateTime.utc(2026, 11, 26, 12, 0),
+                ),
+                ChatMessage(
+                  id: 'a1',
+                  role: ChatRole.assistant,
+                  text: 'Refactoring in progress.',
+                  createdAt: DateTime.utc(2026, 11, 26, 12, 1),
+                  modelId: 'gemini-4-neon',
+                  contextTokens: 320000,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    final snap = container.read(contextBudgetProvider);
+    expect(snap.compactAtTokens, 800000);
+    expect(snap.shouldCompact, isFalse);
   });
 
   testWidgets('MessageBubble renders Rewind button on user messages with checkpoint', (tester) async {

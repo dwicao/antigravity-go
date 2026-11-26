@@ -136,6 +136,8 @@ final contextBudgetProvider = Provider<HarnessContextSnapshot>((ref) {
   final messages = ref.watch(chatProvider.select((s) => s.messages));
   final selectedModelId =
       ref.watch(settingsProvider.select((s) => s.selectedModelId));
+  final reasoningEffort =
+      ref.watch(settingsProvider.select((s) => s.reasoningEffort));
   final quotaSaver =
       ref.watch(harnessProvider.select((h) => h.quotaSaverEnabled));
   final activeCustom = ref.watch(activeCustomProviderProvider);
@@ -154,8 +156,30 @@ final contextBudgetProvider = Provider<HarnessContextSnapshot>((ref) {
               threadModelId == selectedModelId))
       ? activeCustom.contextWindowTokens
       : null;
+  final effectiveBudget = overrideBudget ??
+      HarnessContextMonitor.effectiveBudgetForModel(threadModelId);
+  final changedFilePaths = <String>{};
+  var toolCallCount = 0;
+  final recentPrompts = <String>[];
+  for (final m in activeMessages) {
+    if (m.role == ChatRole.user && m.text.trim().isNotEmpty) {
+      recentPrompts.add(m.text);
+    }
+    toolCallCount += m.tools.length;
+    for (final f in m.changedFiles) {
+      if (f.path.isNotEmpty) changedFilePaths.add(f.path);
+    }
+  }
+  final adaptiveCompactCap = HarnessContextMonitor.resolveAdaptiveCompactTokens(
+    quotaSaverEnabled: quotaSaver,
+    budgetTokens: effectiveBudget,
+    recentPrompts: recentPrompts,
+    toolCallCount: toolCallCount,
+    changedFileCount: changedFilePaths.length,
+    reasoningEffort: reasoningEffort,
+  );
   final monitor = HarnessContextMonitor(
-    maxCompactTokens: quotaSaver ? 160000 : null,
+    maxCompactTokens: adaptiveCompactCap,
   );
   final estimated = monitor.evaluate(
     // Historical completed turns' internal thoughts are excluded from
@@ -226,11 +250,11 @@ final contextBudgetProvider = Provider<HarnessContextSnapshot>((ref) {
       final budget = estimated.budgetTokens;
       final ratio = (combinedTokens / budget).clamp(0.0, 1.0);
       final defaultCompactAt = (budget * monitor.compactThreshold).round();
-      final compactAt = quotaSaver
-          ? math.min(defaultCompactAt, 160000)
+      final compactAt = (adaptiveCompactCap != null && adaptiveCompactCap > 0)
+          ? math.min(defaultCompactAt, adaptiveCompactCap)
           : defaultCompactAt;
       final defaultWarnAt = (budget * monitor.warningThreshold).round();
-      final warnAt = quotaSaver
+      final warnAt = (adaptiveCompactCap != null && adaptiveCompactCap > 0)
           ? math.min(defaultWarnAt, (compactAt * 0.80).round())
           : defaultWarnAt;
       final shouldCompact = combinedTokens >= compactAt;
@@ -248,6 +272,7 @@ final contextBudgetProvider = Provider<HarnessContextSnapshot>((ref) {
                 : 'Healthy',
         compactedMessages: compactedCount,
         activeMessages: activeMessages.length,
+        compactAtTokens: compactAt,
       );
     }
   }

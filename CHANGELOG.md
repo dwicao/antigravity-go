@@ -2,6 +2,13 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.47] - 2026-11-26
+
+### Changed & Improved
+- **Adaptive Auto-Compaction (256K–800K):** Raised the Quota Saver auto-compaction floor from `160K` to **`256K` tokens** and made `HarnessContextMonitor.resolveAdaptiveCompactTokens` adaptive: scales to **`512K`** for medium coding / high-effort turns and up to **`800K`** automatically for complex or large tasks (e.g., `refactor`, architecture, multi-file edits `>=4` files, or `>=20` tool calls).
+- **Inference Speed Tier UI & Conversational Flash Routing:** Exposed `Regular` / `Fast` / `Ultrafast` Speed Tier selectors in `HarnessPage` and `QuickPanel`, and routed short conversational greetings/acks to `gemini-3.8-flash` (`low`) under Quota Saver mode.
+- **BFS Repo Map, ACP Prewarm Alignment & OOM-Safe File Reads:** Switched `RepoMapBuilder` to breadth-first scanning (with `600`-token / `80`-file Quota Saver caps), aligned `prewarmAcpWorker` signatures (`extraDirs`, `skipPermissions`, `agent`) with `startTurn`, synchronized `configLock` around ACP config/prompt dispatch, and added bounded/streaming `fs/read_text_file` reads for files `>512 KB`.
+
 ## [1.0.46] - 2026-11-26
 
 ### Added & Optimized (Better, Cheaper & Faster Harness)

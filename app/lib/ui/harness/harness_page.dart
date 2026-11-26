@@ -213,8 +213,8 @@ class _HarnessPageState extends ConsumerState<HarnessPage> {
                     children: [
                       Text(
                         ctxSnap.compactedMessages > 0
-                            ? '~${ctxSnap.usedTokens} / ${ctxSnap.budgetTokens} tokens (${ctxSnap.compactedMessages} archived) · ${ctxSnap.statusLabel}'
-                            : '~${ctxSnap.usedTokens} / ${ctxSnap.budgetTokens} tokens · ${ctxSnap.statusLabel}',
+                            ? '~${ctxSnap.usedTokens} / ${ctxSnap.budgetTokens} tokens (${ctxSnap.compactedMessages} archived${ctxSnap.compactAtTokens != null ? ", compact @ ${(ctxSnap.compactAtTokens! / 1000).round()}K" : ""}) · ${ctxSnap.statusLabel}'
+                            : '~${ctxSnap.usedTokens} / ${ctxSnap.budgetTokens} tokens${ctxSnap.compactAtTokens != null ? " (compact @ ${(ctxSnap.compactAtTokens! / 1000).round()}K)" : ""} · ${ctxSnap.statusLabel}',
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant,
                         ),
@@ -279,7 +279,7 @@ class _HarnessPageState extends ConsumerState<HarnessPage> {
                   secondary: const Icon(Icons.savings_outlined, size: 20),
                   title: const Text('Quota Saver Mode'),
                   subtitle: const Text(
-                    'Caps auto-compact at 160K, uses Flash for /compact & minimal MCP tools',
+                    'Adaptive 256K–800K auto-compact, Flash for /compact & minimal MCP tools',
                   ),
                   value: harness.quotaSaverEnabled,
                   onChanged: (v) =>
@@ -387,7 +387,7 @@ class _HarnessPageState extends ConsumerState<HarnessPage> {
                   title: const Text('Auto-Compact History'),
                   subtitle: Text(
                     harness.quotaSaverEnabled
-                        ? 'Summarizes context automatically at 160K tokens (Flash Low)'
+                        ? 'Adaptive auto-compact (256K min · up to 800K for refactors) via Flash Low'
                         : 'Automatically summarizes context when usage exceeds 80%',
                   ),
                   value: harness.autoCompactEnabled,
