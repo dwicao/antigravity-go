@@ -2,6 +2,17 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.53] - 2026-11-26
+
+### Added & Improved
+- **Context-Aware & Runtime-Escalating Thinking Effort (`HarnessTurnRouter`, `ChatNotifier`):**
+  - Integrated real active session signals (`changedFiles`, `toolCalls`, and recent tool failures/loop warnings via `ChatNotifier.summarizeSessionRoutingContext`) into adaptive Thinking Effort routing so multi-file/error-recovery follow-ups automatically receive higher effort while casual acknowledgments stay `Low`.
+  - Wired automatic 1-tier effort escalation (`stepUpEffort` via `forceEscalate`) into `breakLoopAndPivot` retries so stuck turns step up automatically within the selected model's capabilities.
+  - Added inline quick override tags (`!low`, `!med`, `!high`, `!xhigh`/`!extra`, `!max`) stripped automatically before prompt submission (preserving markdown/inline code snippets).
+- **Live Effort Preview & 1-Tap Override in Composer (`ChatComposerBar`):**
+  - Effort pill now previews real-time `Auto · <Effort>` and `Tag · <Effort>` while typing via isolated `ValueListenableBuilder`, and lets users pin a 1-turn override (`Pin · <Effort>`) or return to `Auto` in a single tap.
+  - Fixed `SettingsNotifier.setModel` async load guard (`_dirtyKeys`) so rapid model changes on cold start are never overwritten by initial preference loads.
+
 ## [1.0.52] - 2026-11-26
 
 ### Changed & Improved
