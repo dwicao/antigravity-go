@@ -14,6 +14,7 @@ import '../../state/settings_state.dart';
 import '../../state/update_state.dart';
 import '../../theme/app_theme.dart';
 import '../auth/google_login_sheet.dart';
+import '../backup/chat_backup_page.dart';
 import '../cli/cli_manager_page.dart';
 import '../phone/phone_control_page.dart';
 import '../remote/custom_providers_page.dart';
@@ -292,7 +293,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               ),
             ),
             _section(
-              'stats spend cost tokens requests analytics usage quota runtime ssh remote hosts external models phone control safetygate',
+              'stats spend cost tokens requests analytics backup chats restore export import sessions history json markdown usage quota runtime ssh remote hosts external models phone control safetygate',
               Column(
                 children: [
                   _tile(
@@ -303,6 +304,19 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                         'Total spend (\$), tokens, cache savings & per-model stats',
                     onTap: () => Navigator.of(context).push(
                       MaterialPageRoute<void>(builder: (_) => const StatsPage()),
+                    ),
+                  ),
+                  const Divider(height: 1),
+                  _tile(
+                    theme,
+                    icon: Icons.backup_outlined,
+                    title: 'Chat Backup & Restore',
+                    subtitle:
+                        'Backup all chats (.json.gz), Markdown & restore from file',
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const ChatBackupPage(),
+                      ),
                     ),
                   ),
                   const Divider(height: 1),

@@ -137,6 +137,17 @@ class ProjectsNotifier extends Notifier<ProjectsState> {
     await _persist(next);
   }
 
+  /// Adds restored project definitions whose IDs do not exist locally yet.
+  Future<void> importMissingProjects(List<AgyProject> incoming) async {
+    if (incoming.isEmpty) return;
+    final existingIds = {for (final p in state.projects) p.id};
+    final toAdd = incoming.where((p) => !existingIds.contains(p.id)).toList();
+    if (toAdd.isEmpty) return;
+    final next = [...state.projects, ...toAdd];
+    state = state.copyWith(projects: next);
+    await _persist(next);
+  }
+
   Future<void> deleteProject(String id) async {
     if (state.projects.length <= 1) return;
     final next = state.projects.where((p) => p.id != id).toList();

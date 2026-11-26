@@ -5,6 +5,7 @@ import '../../state/projects_state.dart';
 import '../../state/sessions_state.dart';
 import '../../state/side_panel_state.dart';
 import '../automations/automations_page.dart';
+import '../backup/chat_backup_page.dart';
 import '../cli/cli_manager_page.dart';
 import '../customizations/customizations_page.dart';
 import '../harness/harness_page.dart';
@@ -63,6 +64,17 @@ class _CommandPaletteDialogState extends ConsumerState<CommandPaletteDialog> {
           Navigator.of(context).pop();
           Navigator.of(context).push(
             MaterialPageRoute<void>(builder: (_) => const StatsPage()),
+          );
+        },
+      ),
+      (
+        'Chat Backup & Restore',
+        'Backup all or selected chats (.json.gz / .md) & restore from file',
+        Icons.backup_outlined,
+        () {
+          Navigator.of(context).pop();
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(builder: (_) => const ChatBackupPage()),
           );
         },
       ),

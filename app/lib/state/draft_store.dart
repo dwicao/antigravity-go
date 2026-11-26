@@ -98,6 +98,32 @@ class DraftStoreNotifier extends Notifier<Map<String, ChatDraft>> {
 
   void clear(String sessionId) => save(sessionId, '');
 
+  /// Merges restored composer drafts into the store and persists them.
+  Future<void> importDrafts(
+    Map<String, ChatDraft> drafts, {
+    bool overwrite = false,
+  }) async {
+    if (drafts.isEmpty) return;
+    await _loaded;
+    if (!ref.mounted) return;
+    final next = {...state};
+    var changed = false;
+    for (final entry in drafts.entries) {
+      final clean = sanitizeDraftText(entry.value.text);
+      if (clean.isEmpty) continue;
+      if (overwrite || !next.containsKey(entry.key)) {
+        next[entry.key] = ChatDraft(
+          text: clean,
+          updatedAt: entry.value.updatedAt,
+        );
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    state = _capped(next);
+    await flush();
+  }
+
   Future<void> flush() async {
     _debounce?.cancel();
     _debounce = null;

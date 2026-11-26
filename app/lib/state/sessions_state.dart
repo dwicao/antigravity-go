@@ -133,6 +133,24 @@ class SessionsNotifier extends Notifier<SessionsState> {
     await _persist(next);
   }
 
+  /// Inserts or replaces multiple sessions in a single atomic state update
+  /// and persistence write (used by chat backup restore).
+  Future<void> importSessions(List<AgySessionSummary> upserted) async {
+    if (upserted.isEmpty) return;
+    final byId = {for (final s in state.sessions) s.id: s};
+    for (final s in upserted) {
+      byId[s.id] = s;
+    }
+    final next = byId.values.toList()..sort(_compareSessions);
+    final activeValid = state.activeSessionId != null &&
+        next.any((s) => s.id == state.activeSessionId);
+    final nextActive = activeValid
+        ? state.activeSessionId
+        : (next.where((s) => !s.archived).firstOrNull?.id ?? next.first.id);
+    state = SessionsState(sessions: next, activeSessionId: nextActive);
+    await _persist(next);
+  }
+
   Future<void> togglePinSession(String id) async {
     final target = state.sessions.where((s) => s.id == id).firstOrNull;
     if (target == null) return;

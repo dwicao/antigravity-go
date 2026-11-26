@@ -4,9 +4,11 @@ import 'package:agy_client/agy_client.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../state/chat_backup_service.dart';
 import '../../state/chat_message_store.dart';
 import '../../state/chat_models.dart';
 import '../../state/session_export_helper.dart';
+import '../backup/chat_backup_page.dart';
 import '../chat/message_bubble.dart';
 
 /// Step-by-step playback viewer & exporter for saved conversations,
@@ -137,6 +139,44 @@ class _ConversationReplayPageState extends State<ConversationReplayPage> {
                     const SnackBar(content: Text('Conversation JSON copied')),
                   );
                 }
+              } else if (v == 'backup_chat') {
+                await Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => ChatBackupPage(
+                      initialSelectedSessionIds: {widget.session.id},
+                    ),
+                  ),
+                );
+              } else if (v == 'save_backup_gz') {
+                final bundle = ChatBackupBundle(
+                  appVersion: 'replay',
+                  exportedAt: DateTime.now(),
+                  entries: [
+                    ChatBackupEntry(
+                      session: widget.session,
+                      messages: _messages,
+                    ),
+                  ],
+                );
+                final saved = await SessionExportHelper.saveBytesToDownloads(
+                  filename: ChatBackupService.suggestedFileName(
+                    at: bundle.exportedAt,
+                    compressed: true,
+                  ),
+                  bytes: bundle.encodeBytes(compressed: true),
+                  mimeType: 'application/gzip',
+                );
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        saved != null
+                            ? 'Backup saved to $saved'
+                            : 'Could not save backup to Downloads',
+                      ),
+                    ),
+                  );
+                }
               }
             },
             itemBuilder: (_) => const [
@@ -144,6 +184,9 @@ class _ConversationReplayPageState extends State<ConversationReplayPage> {
               PopupMenuItem(value: 'save_md', child: Text('Save Markdown to Downloads')),
               PopupMenuItem(value: 'share_md', child: Text('Share via Android')),
               PopupMenuItem(value: 'copy_json', child: Text('Copy Raw JSON')),
+              PopupMenuDivider(),
+              PopupMenuItem(value: 'save_backup_gz', child: Text('Save Backup (.json.gz)')),
+              PopupMenuItem(value: 'backup_chat', child: Text('Open Chat Backup & Restore…')),
             ],
           ),
         ],

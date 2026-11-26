@@ -618,6 +618,16 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     return <String>{..._sessionRuntimes.keys};
   }
 
+  /// Clears cached idle transcript state for [sessionId] and reloads from
+  /// persistent storage if it is currently displayed on screen.
+  Future<void> reloadSessionIfIdle(String sessionId) async {
+    if (_sessionRuntimes.containsKey(sessionId)) return;
+    _inFlightMessages.remove(sessionId);
+    if (_loadedSessionId == sessionId) {
+      await _loadMessages(sessionId);
+    }
+  }
+
   Future<void> _loadMessages(String sessionId) async {
     final inFlight = _inFlightMessages[sessionId];
     final activeRt = _sessionRuntimes[sessionId];

@@ -10,6 +10,7 @@ import '../../state/projects_state.dart';
 import '../../state/sessions_state.dart';
 import '../auth/google_login_sheet.dart';
 import '../automations/automations_page.dart';
+import '../backup/chat_backup_page.dart';
 import '../customizations/customizations_page.dart';
 import '../remote/ssh_hosts_page.dart';
 import '../replay/conversation_replay_page.dart';
@@ -377,6 +378,18 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
                     },
                   ),
                   _SidebarNavTile(
+                    icon: Icons.backup_outlined,
+                    title: 'Backup & Restore Chats',
+                    onTap: () {
+                      widget.onClose?.call();
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const ChatBackupPage(),
+                        ),
+                      );
+                    },
+                  ),
+                  _SidebarNavTile(
                     icon: Icons.speed_rounded,
                     title: 'Usage Limits',
                     onTap: () {
@@ -484,6 +497,10 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
               const PopupMenuItem(
                 value: 'replay',
                 child: Text('Replay & Export'),
+              ),
+              const PopupMenuItem(
+                value: 'backup',
+                child: Text('Backup Chat…'),
               ),
               const PopupMenuItem(value: 'rename', child: Text('Rename')),
               const PopupMenuItem(value: 'delete', child: Text('Delete')),
@@ -635,6 +652,12 @@ class _SessionsDrawerState extends ConsumerState<SessionsDrawer> {
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => ConversationReplayPage(session: s),
+        ),
+      );
+    } else if (action == 'backup') {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ChatBackupPage(initialSelectedSessionIds: {s.id}),
         ),
       );
     } else if (action == 'delete') {
