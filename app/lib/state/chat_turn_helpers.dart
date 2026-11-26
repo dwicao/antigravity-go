@@ -721,9 +721,11 @@ class ChatTurnHelpers {
     if (currentCursor != null) {
       return (currentCursor + delta).clamp(0, userIndices.length - 1);
     }
+    if (delta > 0 && isAtBottom) {
+      return null;
+    }
     if (firstVisibleMessageIndex == null) {
-      if (delta < 0) return userIndices.length - 1;
-      return isAtBottom ? userIndices.length - 1 : 0;
+      return delta < 0 ? userIndices.length - 1 : 0;
     }
     var k = -1;
     for (var i = 0; i < userIndices.length; i++) {

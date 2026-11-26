@@ -1302,7 +1302,7 @@ void main() {
   test('ChatTurnHelpers.resolveTurnNavigationTarget stays directional from viewport', () {
     const userIndices = [0, 2, 4, 6];
 
-    // At bottom looking inside A3 (index 7): Previous goes to U3 (3), Next stays at U3 (3) never U0.
+    // At bottom looking inside A3 (index 7): Previous goes to U3 (3), Next is a no-op (never jumps up).
     expect(
       ChatTurnHelpers.resolveTurnNavigationTarget(
         userIndices: userIndices,
@@ -1321,7 +1321,7 @@ void main() {
         firstVisibleMessageTop: -120,
         isAtBottom: true,
       ),
-      3,
+      isNull,
     );
 
     // Aligned cleanly at U2 (index 4, top >= -12): Previous steps to U1 (1), Next steps to U3 (3).
