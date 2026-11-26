@@ -1540,7 +1540,7 @@ class HarnessTurnRouter {
     }
 
     final EffortCategory category;
-    if (score >= 11 ||
+    if (score >= 12 ||
         isMaxCmd ||
         isPlanCmd ||
         hasMaxScope ||
