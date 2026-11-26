@@ -28,11 +28,11 @@ class _UsagePageState extends ConsumerState<UsagePage> {
     }
   }
 
-  Future<void> _refreshLive() async {
+  Future<void> _refreshLive({bool force = false}) async {
     if (!mounted) return;
     setState(() => _probing = true);
     try {
-      await ref.read(usageProvider.notifier).refreshFromRuntime();
+      await ref.read(usageProvider.notifier).refreshFromRuntime(force: force);
     } finally {
       if (mounted) setState(() => _probing = false);
     }
@@ -60,7 +60,7 @@ class _UsagePageState extends ConsumerState<UsagePage> {
         actions: [
           IconButton(
             tooltip: 'Refresh from agy /usage',
-            onPressed: _probing ? null : _refreshLive,
+            onPressed: _probing ? null : () => _refreshLive(force: true),
             icon: _probing
                 ? const SizedBox(
                     width: 18,
@@ -104,7 +104,9 @@ class _UsagePageState extends ConsumerState<UsagePage> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      'Updated ${TimeOfDay.fromDateTime(usage.fetchedAt.toLocal()).format(context)} · ${usage.source}',
+                      _probing
+                          ? 'Refreshing live quotas… (${usage.source})'
+                          : 'Updated ${TimeOfDay.fromDateTime(usage.fetchedAt.toLocal()).format(context)} · ${usage.source}',
                       style: theme.textTheme.labelSmall?.copyWith(
                         color: semantic.textSecondary,
                       ),

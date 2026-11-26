@@ -79,4 +79,25 @@ void main() {
     expect(find.textContaining('Auto (Sandbox)'), findsNothing);
     expect(find.textContaining('Standard —'), findsWidgets);
   });
+
+  testWidgets('SettingsPage renders cleanly on compact 360px phone viewport without overflow',
+      (tester) async {
+    tester.view.physicalSize = const Size(360, 640);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      const ProviderScope(
+        child: MaterialApp(home: SettingsPage()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Settings'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('Appearance'), 160);
+    expect(find.text('Appearance'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text("What's New"), 160);
+    expect(find.text("What's New"), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }

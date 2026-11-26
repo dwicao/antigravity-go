@@ -1003,38 +1003,58 @@ am start -a android.intent.action.VIEW -d "${'$'}url" >/dev/null 2>&1 || echo "[
         return runCatching { stripGlogNoise(errFuture.get(2, TimeUnit.SECONDS)) }.getOrDefault("")
     }
 
+    private fun hasQuotaSummary(text: String): Boolean {
+        val lower = text.lowercase()
+        return lower.contains("remaining_fraction") ||
+            (lower.contains("%") &&
+                (lower.contains("5-hour") ||
+                    lower.contains("5 hour") ||
+                    lower.contains("weekly") ||
+                    lower.contains("gemini")))
+    }
+
     fun probeUsage(): String {
         if (!binaryFile.exists()) return ""
         refreshOAuthSession()
-        val sb = StringBuilder()
-        val modelsOut = runCatching { runStdoutPreferringCapture(listOf("models"), 12) }.getOrDefault("")
-        if (modelsOut.isNotBlank()) sb.append(modelsOut).append("\n")
 
-        var printUsage = runCatching {
-            runStdoutPreferringCapture(listOf("-p", "/usage", "--output-format", "json"), 18)
-        }.getOrDefault("")
-        if (!printUsage.contains("remaining_fraction") && !printUsage.contains("%")) {
-            printUsage = runCatching {
-                runStdoutPreferringCapture(listOf("-p", "/usage", "--output-format", "text"), 18)
-            }.getOrDefault("")
+        // Launch models, /usage, and /credits concurrently so cold CLI startups overlap.
+        val modelsFut = executor.submit<String> {
+            runCatching { runStdoutPreferringCapture(listOf("models"), 8) }.getOrDefault("")
         }
-        var printCredits = runCatching {
-            runStdoutPreferringCapture(listOf("-p", "/credits", "--output-format", "json"), 15)
-        }.getOrDefault("")
-        if (!printCredits.contains("remaining_credits") && !printCredits.lowercase().contains("credit")) {
-            printCredits = runCatching {
-                runStdoutPreferringCapture(listOf("-p", "/credits", "--output-format", "text"), 15)
+        val usageFut = executor.submit<String> {
+            var out = runCatching {
+                runStdoutPreferringCapture(listOf("-p", "/usage", "--output-format", "json"), 9)
             }.getOrDefault("")
+            if (!out.contains("remaining_fraction") && !out.contains("%")) {
+                out = runCatching {
+                    runStdoutPreferringCapture(listOf("-p", "/usage", "--output-format", "text"), 7)
+                }.getOrDefault("")
+            }
+            out
         }
+        val creditsFut = executor.submit<String> {
+            var out = runCatching {
+                runStdoutPreferringCapture(listOf("-p", "/credits", "--output-format", "json"), 7)
+            }.getOrDefault("")
+            if (!out.contains("remaining_credits") && !out.lowercase().contains("credit")) {
+                out = runCatching {
+                    runStdoutPreferringCapture(listOf("-p", "/credits", "--output-format", "text"), 6)
+                }.getOrDefault("")
+            }
+            out
+        }
+
+        val modelsOut = runCatching { modelsFut.get(10, TimeUnit.SECONDS) }.getOrDefault("")
+        val printUsage = runCatching { usageFut.get(17, TimeUnit.SECONDS) }.getOrDefault("")
+        val printCredits = runCatching { creditsFut.get(14, TimeUnit.SECONDS) }.getOrDefault("")
+
+        val sb = StringBuilder()
+        if (modelsOut.isNotBlank()) sb.append(modelsOut).append("\n")
         if (printUsage.isNotBlank()) sb.append(printUsage).append("\n")
         if (printCredits.isNotBlank()) sb.append(printCredits).append("\n")
 
-        val combinedSoFar = sb.toString().lowercase()
-        val hasQuotaNumbers = combinedSoFar.contains("remaining_fraction") ||
-            (combinedSoFar.contains("%") &&
-                (combinedSoFar.contains("5-hour") || combinedSoFar.contains("5 hour") || combinedSoFar.contains("weekly") || combinedSoFar.contains("gemini")))
-        if (!hasQuotaNumbers) {
-            val interactiveOut = stripGlogNoise(runInteractiveProbe("/usage\n/credits\n/exit\n", 14))
+        if (!hasQuotaSummary(sb.toString())) {
+            val interactiveOut = stripGlogNoise(runInteractiveProbe("/usage\n/exit\n", 9))
             if (interactiveOut.isNotBlank()) sb.append(interactiveOut).append("\n")
         }
         return sb.toString().trim()
@@ -1054,9 +1074,40 @@ am start -a android.intent.action.VIEW -d "${'$'}url" >/dev/null 2>&1 || echo "[
                 writer.write(stdinCommands)
                 writer.flush()
             }
-            val readFuture = executor.submit<String> { proc.inputStream.bufferedReader().use { it.readText() } }
-            if (!proc.waitFor(timeoutSeconds.toLong(), TimeUnit.SECONDS)) proc.destroyForcibly()
-            runCatching { readFuture.get(2, TimeUnit.SECONDS) }.getOrDefault("")
+            val collected = StringBuilder()
+            val streamLock = Any()
+            @Volatile var eof = false
+            val readerFuture = executor.submit {
+                try {
+                    BufferedReader(InputStreamReader(proc.inputStream)).use { reader ->
+                        val buf = CharArray(1024)
+                        while (true) {
+                            val n = reader.read(buf)
+                            if (n < 0) break
+                            synchronized(streamLock) { collected.appendRange(buf, 0, n) }
+                        }
+                    }
+                } catch (_: Throwable) {
+                } finally {
+                    eof = true
+                }
+            }
+            val deadline = System.currentTimeMillis() + timeoutSeconds * 1000L
+            var firstQuotaSeenAt = 0L
+            while (!eof && System.currentTimeMillis() < deadline) {
+                val snapshot = synchronized(streamLock) { collected.toString() }
+                if (hasQuotaSummary(snapshot)) {
+                    if (firstQuotaSeenAt == 0L) {
+                        firstQuotaSeenAt = System.currentTimeMillis()
+                    } else if (System.currentTimeMillis() - firstQuotaSeenAt >= 350L) {
+                        break
+                    }
+                }
+                Thread.sleep(100)
+            }
+            if (proc.isAlive) proc.destroyForcibly()
+            runCatching { readerFuture.get(500, TimeUnit.MILLISECONDS) }
+            synchronized(streamLock) { collected.toString() }
         } catch (_: Throwable) {
             ""
         }

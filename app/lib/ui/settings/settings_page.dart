@@ -36,6 +36,29 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   String _searchQuery = '';
   bool _searchOpen = false;
 
+  static const _compactBtnStyle = ButtonStyle(
+    visualDensity: VisualDensity.compact,
+    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    minimumSize: WidgetStatePropertyAll(Size(0, 30)),
+    padding: WidgetStatePropertyAll(
+      EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+    ),
+    textStyle: WidgetStatePropertyAll(
+      TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+    ),
+  );
+
+  static const _compactSegStyle = ButtonStyle(
+    visualDensity: VisualDensity(horizontal: -2, vertical: -2),
+    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    padding: WidgetStatePropertyAll(
+      EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+    ),
+    textStyle: WidgetStatePropertyAll(
+      TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+    ),
+  );
+
   @override
   void dispose() {
     _scrollController.dispose();
@@ -53,6 +76,112 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     final q = _searchQuery.trim().toLowerCase();
     if (q.isEmpty) return true;
     return keywords.toLowerCase().contains(q);
+  }
+
+  Widget _section(String keywords, Widget child) {
+    if (!_matches(keywords)) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 640),
+          child: Card(margin: EdgeInsets.zero, child: child),
+        ),
+      ),
+    );
+  }
+
+  Widget _tile(
+    ThemeData theme, {
+    required IconData icon,
+    Color? iconColor,
+    required String title,
+    String? subtitle,
+    Widget? trailing,
+    VoidCallback? onTap,
+  }) {
+    return ListTile(
+      dense: true,
+      visualDensity: const VisualDensity(horizontal: -2, vertical: -2),
+      minLeadingWidth: 20,
+      horizontalTitleGap: 10,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+      leading: Icon(icon, size: 19, color: iconColor),
+      title: Text(
+        title,
+        style: theme.textTheme.bodyMedium?.copyWith(
+          fontSize: 13.5,
+          fontWeight: FontWeight.w500,
+        ),
+      ),
+      subtitle: subtitle == null
+          ? null
+          : Text(
+              subtitle,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodySmall?.copyWith(fontSize: 11.5),
+            ),
+      trailing: trailing ?? const Icon(Icons.chevron_right, size: 18),
+      onTap: onTap,
+    );
+  }
+
+  Widget _switch(
+    ThemeData theme, {
+    required String title,
+    String? subtitle,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+  }) {
+    return SwitchListTile.adaptive(
+      dense: true,
+      visualDensity: const VisualDensity(horizontal: -2, vertical: -3),
+      contentPadding: EdgeInsets.zero,
+      title: Text(
+        title,
+        style: theme.textTheme.bodyMedium?.copyWith(fontSize: 13),
+      ),
+      subtitle: subtitle == null
+          ? null
+          : Text(
+              subtitle,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodySmall?.copyWith(fontSize: 11.5),
+            ),
+      value: value,
+      onChanged: onChanged,
+    );
+  }
+
+  Widget _badge(ThemeData theme, String label) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.secondaryContainer.withOpacity(0.7),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Text(
+        label,
+        style: theme.textTheme.labelSmall?.copyWith(
+          fontSize: 10.5,
+          fontWeight: FontWeight.w600,
+          color: theme.colorScheme.onSecondaryContainer,
+        ),
+      ),
+    );
+  }
+
+  Widget _sectionLabel(ThemeData theme, String text) {
+    return Text(
+      text,
+      style: theme.textTheme.labelMedium?.copyWith(
+        fontSize: 11.5,
+        fontWeight: FontWeight.w600,
+        color: theme.colorScheme.onSurfaceVariant,
+      ),
+    );
   }
 
   @override
@@ -97,91 +226,90 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         controller: _scrollController,
         child: ListView(
           controller: _scrollController,
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.fromLTRB(10, 8, 10, 20),
           children: [
             if (!_searchOpen)
               Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: InkWell(
-                  key: const ValueKey('settings-search-trigger'),
-                  borderRadius: BorderRadius.circular(14),
-                  onTap: () => setState(() => _searchOpen = true),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 14,
-                      vertical: 10,
-                    ),
-                    decoration: BoxDecoration(
-                      color: theme.colorScheme.surfaceContainerHighest
-                          .withOpacity(0.55),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(
-                          Icons.search,
-                          size: 18,
-                          color: theme.colorScheme.onSurfaceVariant,
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 640),
+                    child: InkWell(
+                      key: const ValueKey('settings-search-trigger'),
+                      borderRadius: BorderRadius.circular(10),
+                      onTap: () => setState(() => _searchOpen = true),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
                         ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'Search settings, performance, wallpaper…',
-                            style: theme.textTheme.bodyMedium?.copyWith(
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.surfaceContainerHighest
+                              .withOpacity(0.55),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.search,
+                              size: 17,
                               color: theme.colorScheme.onSurfaceVariant,
                             ),
-                          ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Search settings, performance, wallpaper…',
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  fontSize: 12.5,
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
-                      ],
+                      ),
                     ),
                   ),
                 ),
               ),
-            if (_matches('google account sign in gemini enterprise plan tier export import credentials backup transfer'))
-            Card(
-              child: ListTile(
-                leading: Icon(
-                  auth.isAuthenticated
-                      ? Icons.verified_user
-                      : Icons.account_circle_outlined,
-                  color: auth.isAuthenticated ? Colors.green : null,
-                ),
-                title: Text(
-                  auth.isAuthenticated
-                      ? (auth.email ?? auth.displayName ?? 'Signed in')
-                      : 'Sign in with Google Account',
-                ),
-                subtitle: Text(
-                  auth.isAuthenticated
-                      ? '${auth.method.label} · ${auth.planTier.label} · Export / Import'
-                      : 'Connect Google / Enterprise, or Import credentials backup',
-                ),
-                trailing: const Icon(Icons.chevron_right),
+            _section(
+              'google account sign in gemini enterprise plan tier export import credentials backup transfer',
+              _tile(
+                theme,
+                icon: auth.isAuthenticated
+                    ? Icons.verified_user
+                    : Icons.account_circle_outlined,
+                iconColor: auth.isAuthenticated ? Colors.green : null,
+                title: auth.isAuthenticated
+                    ? (auth.email ?? auth.displayName ?? 'Signed in')
+                    : 'Sign in with Google Account',
+                subtitle: auth.isAuthenticated
+                    ? '${auth.method.label} · ${auth.planTier.label} · Export / Import'
+                    : 'Connect Google / Enterprise, or Import credentials backup',
                 onTap: () => GoogleLoginSheet.show(context),
               ),
             ),
-            const SizedBox(height: 10),
-            if (_matches('usage quota runtime ssh remote hosts external models phone control safetygate'))
-            Card(
-              child: Column(
+            _section(
+              'usage quota runtime ssh remote hosts external models phone control safetygate',
+              Column(
                 children: [
-                  ListTile(
-                    leading: const Icon(Icons.speed_rounded),
-                    title: const Text('Usage Limits & Quotas'),
-                    subtitle: const Text(
-                      '5h, Weekly, Gemini Argon/Neon/Carbon/Hydrogen, Claude & GPT',
-                    ),
-                    trailing: const Icon(Icons.chevron_right),
+                  _tile(
+                    theme,
+                    icon: Icons.speed_rounded,
+                    title: 'Usage Limits & Quotas',
+                    subtitle:
+                        '5h, Weekly, Gemini Argon/Neon/Carbon/Hydrogen, Claude & GPT',
                     onTap: () => Navigator.of(context).push(
                       MaterialPageRoute<void>(builder: (_) => const UsagePage()),
                     ),
                   ),
                   const Divider(height: 1),
-                  ListTile(
-                    leading: const Icon(Icons.memory),
-                    title: const Text('On-Device Runtime'),
-                    subtitle: const Text('Install, logs, safe mode, reset'),
-                    trailing: const Icon(Icons.chevron_right),
+                  _tile(
+                    theme,
+                    icon: Icons.memory,
+                    title: 'On-Device Runtime',
+                    subtitle: 'Install, logs, safe mode, reset',
                     onTap: () => Navigator.of(context).push(
                       MaterialPageRoute<void>(
                         builder: (_) => const RuntimeSetupPage(),
@@ -189,10 +317,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     ),
                   ),
                   const Divider(height: 1),
-                  ListTile(
-                    leading: const Icon(Icons.dns_outlined),
-                    title: const Text('SSH Remote Hosts'),
-                    trailing: const Icon(Icons.chevron_right),
+                  _tile(
+                    theme,
+                    icon: Icons.dns_outlined,
+                    title: 'SSH Remote Hosts',
                     onTap: () => Navigator.of(context).push(
                       MaterialPageRoute<void>(
                         builder: (_) => const SshHostsPage(),
@@ -200,11 +328,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     ),
                   ),
                   const Divider(height: 1),
-                  ListTile(
-                    leading: const Icon(Icons.hub_outlined),
-                    title: const Text('External /v1 Models'),
-                    subtitle: const Text('OpenAI-compatible APIs, Ollama, OpenRouter'),
-                    trailing: const Icon(Icons.chevron_right),
+                  _tile(
+                    theme,
+                    icon: Icons.hub_outlined,
+                    title: 'External /v1 Models',
+                    subtitle: 'OpenAI-compatible APIs, Ollama, OpenRouter',
                     onTap: () => Navigator.of(context).push(
                       MaterialPageRoute<void>(
                         builder: (_) => const CustomProvidersPage(),
@@ -212,10 +340,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     ),
                   ),
                   const Divider(height: 1),
-                  ListTile(
-                    leading: const Icon(Icons.touch_app_outlined),
-                    title: const Text('Phone Control & SafetyGate'),
-                    trailing: const Icon(Icons.chevron_right),
+                  _tile(
+                    theme,
+                    icon: Icons.touch_app_outlined,
+                    title: 'Phone Control & SafetyGate',
                     onTap: () => Navigator.of(context).push(
                       MaterialPageRoute<void>(
                         builder: (_) => const PhoneControlPage(),
@@ -225,45 +353,41 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 ],
               ),
             ),
-            const SizedBox(height: 12),
-            if (_matches('android permissions dex all files storage notifications microphone accessibility battery'))
-            Card(
-              child: Column(
+            _section(
+              'android permissions dex all files storage notifications microphone accessibility battery',
+              Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 2),
                     child: Row(
                       children: [
-                        Text(
-                          'Android Permissions & Samsung DeX',
-                          style: theme.textTheme.titleSmall?.copyWith(
-                            fontWeight: FontWeight.w700,
+                        Expanded(
+                          child: Text(
+                            'Android Permissions & Samsung DeX',
+                            style: theme.textTheme.titleSmall?.copyWith(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
                         ),
-                        const Spacer(),
-                        if (perms.isDexMode)
-                          const Chip(
-                            visualDensity: VisualDensity.compact,
-                            label: Text('DeX Active'),
-                          ),
+                        if (perms.isDexMode) _badge(theme, 'DeX Active'),
                       ],
                     ),
                   ),
-                  ListTile(
-                    leading: Icon(
-                      perms.allFilesAccess
-                          ? Icons.folder_open
-                          : Icons.folder_off_outlined,
-                      color: perms.allFilesAccess ? Colors.green : Colors.amber,
-                    ),
-                    title: const Text('All Files Access'),
-                    subtitle: Text(
-                      perms.allFilesAccess
-                          ? 'Granted (${perms.externalStorageRoot})'
-                          : 'Required to access /storage/emulated/0 & Downloads',
-                    ),
+                  _tile(
+                    theme,
+                    icon: perms.allFilesAccess
+                        ? Icons.folder_open
+                        : Icons.folder_off_outlined,
+                    iconColor:
+                        perms.allFilesAccess ? Colors.green : Colors.amber,
+                    title: 'All Files Access',
+                    subtitle: perms.allFilesAccess
+                        ? 'Granted (${perms.externalStorageRoot})'
+                        : 'Required for /storage/emulated/0 & Downloads',
                     trailing: FilledButton.tonal(
+                      style: _compactBtnStyle,
                       onPressed: () => ref
                           .read(permissionsProvider.notifier)
                           .requestAllFilesAccess(),
@@ -271,20 +395,19 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     ),
                   ),
                   const Divider(height: 1),
-                  ListTile(
-                    leading: Icon(
-                      perms.notifications && perms.microphone
-                          ? Icons.check_circle_outline
-                          : Icons.mic_none,
-                      color: perms.notifications && perms.microphone
-                          ? Colors.green
-                          : null,
-                    ),
-                    title: const Text('Notifications & Microphone'),
-                    subtitle: Text(
-                      'Notifications: ${perms.notifications ? "Allowed" : "Off"} · Mic: ${perms.microphone ? "Allowed" : "Off"}',
-                    ),
+                  _tile(
+                    theme,
+                    icon: perms.notifications && perms.microphone
+                        ? Icons.check_circle_outline
+                        : Icons.mic_none,
+                    iconColor: perms.notifications && perms.microphone
+                        ? Colors.green
+                        : null,
+                    title: 'Notifications & Microphone',
+                    subtitle:
+                        'Notifications: ${perms.notifications ? "Allowed" : "Off"} · Mic: ${perms.microphone ? "Allowed" : "Off"}',
                     trailing: OutlinedButton(
+                      style: _compactBtnStyle,
                       onPressed: () => ref
                           .read(permissionsProvider.notifier)
                           .requestRuntimePermissions(),
@@ -292,18 +415,16 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     ),
                   ),
                   const Divider(height: 1),
-                  ListTile(
-                    leading: Icon(
-                      perms.accessibility
-                          ? Icons.accessibility_new
-                          : Icons.accessibility,
-                      color: perms.accessibility ? Colors.green : null,
-                    ),
-                    title: const Text('Phone Control Accessibility'),
-                    subtitle: Text(
-                      perms.accessibility ? 'Connected' : 'Not enabled',
-                    ),
+                  _tile(
+                    theme,
+                    icon: perms.accessibility
+                        ? Icons.accessibility_new
+                        : Icons.accessibility,
+                    iconColor: perms.accessibility ? Colors.green : null,
+                    title: 'Phone Control Accessibility',
+                    subtitle: perms.accessibility ? 'Connected' : 'Not enabled',
                     trailing: OutlinedButton(
+                      style: _compactBtnStyle,
                       onPressed: () => ref
                           .read(phoneProvider.notifier)
                           .openAccessibilitySettings(),
@@ -311,22 +432,20 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     ),
                   ),
                   const Divider(height: 1),
-                  ListTile(
-                    leading: Icon(
-                      perms.batteryOptimizationExempt
-                          ? Icons.battery_charging_full
-                          : Icons.battery_saver_outlined,
-                      color: perms.batteryOptimizationExempt
-                          ? Colors.green
-                          : Colors.amber,
-                    ),
-                    title: const Text('Background Battery Exemption'),
-                    subtitle: Text(
-                      perms.batteryOptimizationExempt
-                          ? 'Unrestricted (keeps long agent turns alive)'
-                          : 'Recommended so Android does not suspend active turns',
-                    ),
+                  _tile(
+                    theme,
+                    icon: perms.batteryOptimizationExempt
+                        ? Icons.battery_charging_full
+                        : Icons.battery_saver_outlined,
+                    iconColor: perms.batteryOptimizationExempt
+                        ? Colors.green
+                        : Colors.amber,
+                    title: 'Background Battery Exemption',
+                    subtitle: perms.batteryOptimizationExempt
+                        ? 'Unrestricted (keeps long turns alive)'
+                        : 'Recommended so Android stays alive',
                     trailing: OutlinedButton(
+                      style: _compactBtnStyle,
                       onPressed: () => ref
                           .read(permissionsProvider.notifier)
                           .requestBatteryOptimizationExemption(),
@@ -338,53 +457,73 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 ],
               ),
             ),
-            const SizedBox(height: 12),
-            if (_matches('appearance theme dark light accent workspace layout haptic wallpaper dynamic color language locale'))
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(14),
+            _section(
+              'appearance theme dark light accent workspace layout haptic wallpaper dynamic color language locale',
+              Padding(
+                padding: const EdgeInsets.all(12),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
                       'Appearance',
                       style: theme.textTheme.titleSmall?.copyWith(
+                        fontSize: 13,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
-                    const SizedBox(height: 10),
-                    SegmentedButton<ThemeMode>(
-                      segments: const [
-                        ButtonSegment(
-                          value: ThemeMode.system,
-                          label: Text('System'),
-                        ),
-                        ButtonSegment(
-                          value: ThemeMode.light,
-                          label: Text('Light'),
-                        ),
-                        ButtonSegment(
-                          value: ThemeMode.dark,
-                          label: Text('Dark'),
-                        ),
-                      ],
-                      selected: {settings.themeMode},
-                      onSelectionChanged: (s) => ref
-                          .read(settingsProvider.notifier)
-                          .setThemeMode(s.first),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      width: double.infinity,
+                      child: SegmentedButton<ThemeMode>(
+                        showSelectedIcon: false,
+                        style: _compactSegStyle,
+                        segments: const [
+                          ButtonSegment(
+                            value: ThemeMode.system,
+                            label: Text('System', maxLines: 1, overflow: TextOverflow.ellipsis),
+                          ),
+                          ButtonSegment(
+                            value: ThemeMode.light,
+                            label: Text('Light', maxLines: 1, overflow: TextOverflow.ellipsis),
+                          ),
+                          ButtonSegment(
+                            value: ThemeMode.dark,
+                            label: Text('Dark', maxLines: 1, overflow: TextOverflow.ellipsis),
+                          ),
+                        ],
+                        selected: {settings.themeMode},
+                        onSelectionChanged: (s) => ref
+                            .read(settingsProvider.notifier)
+                            .setThemeMode(s.first),
+                      ),
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 8),
                     Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
+                      spacing: 6,
+                      runSpacing: 6,
                       children: AgyAccentPreset.values
                           .map(
                             (preset) => ChoiceChip(
-                              label: Text(preset.label),
+                              visualDensity: const VisualDensity(
+                                horizontal: -2,
+                                vertical: -3,
+                              ),
+                              materialTapTargetSize:
+                                  MaterialTapTargetSize.shrinkWrap,
+                              labelPadding:
+                                  const EdgeInsets.symmetric(horizontal: 6),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 4,
+                                vertical: 2,
+                              ),
+                              label: Text(
+                                preset.label,
+                                style: const TextStyle(fontSize: 12),
+                              ),
                               selected: settings.accent == preset,
                               avatar: CircleAvatar(
                                 backgroundColor: preset.seed,
-                                radius: 8,
+                                radius: 7,
                               ),
                               onSelected: (_) => ref
                                   .read(settingsProvider.notifier)
@@ -393,62 +532,58 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                           )
                           .toList(),
                     ),
-                    const SizedBox(height: 12),
-                    Text(
-                      'Workspace Layout Mode',
-                      style: theme.textTheme.labelMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
+                    const SizedBox(height: 10),
+                    _sectionLabel(theme, 'Workspace Layout Mode'),
+                    const SizedBox(height: 5),
+                    SizedBox(
+                      width: double.infinity,
+                      child: SegmentedButton<DesktopLayoutOverride>(
+                        showSelectedIcon: false,
+                        style: _compactSegStyle,
+                        segments: DesktopLayoutOverride.values
+                            .map(
+                              (d) => ButtonSegment(
+                                value: d,
+                                label: Text(
+                                  d.label,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        selected: {settings.desktopLayout},
+                        onSelectionChanged: (s) => ref
+                            .read(settingsProvider.notifier)
+                            .setDesktopLayout(s.first),
                       ),
                     ),
-                    const SizedBox(height: 6),
-                    SegmentedButton<DesktopLayoutOverride>(
-                      segments: DesktopLayoutOverride.values
-                          .map(
-                            (d) => ButtonSegment(
-                              value: d,
-                              label: Text(d.label),
-                            ),
-                          )
-                          .toList(),
-                      selected: {settings.desktopLayout},
-                      onSelectionChanged: (s) => ref
-                          .read(settingsProvider.notifier)
-                          .setDesktopLayout(s.first),
-                    ),
-                    const SizedBox(height: 6),
-                    SwitchListTile.adaptive(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('Haptic feedback on reply complete'),
-                      subtitle: const Text(
-                        'Gently vibrates when the agent finishes a turn',
-                      ),
+                    const SizedBox(height: 4),
+                    _switch(
+                      theme,
+                      title: 'Haptic feedback on reply complete',
+                      subtitle: 'Gently vibrates when the agent finishes a turn',
                       value: settings.hapticOnComplete,
                       onChanged: (v) => ref
                           .read(settingsProvider.notifier)
                           .setHapticOnComplete(v),
                     ),
-                    SwitchListTile.adaptive(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('Follow wallpaper color (Android 12+)'),
-                      subtitle: const Text(
-                        'Adapt accent colors dynamically from your home wallpaper',
-                      ),
+                    _switch(
+                      theme,
+                      title: 'Follow wallpaper color (Android 12+)',
+                      subtitle:
+                          'Adapt accent colors dynamically from wallpaper',
                       value: settings.followWallpaperColor,
                       onChanged: (v) => ref
                           .read(settingsProvider.notifier)
                           .setFollowWallpaperColor(v),
                     ),
-                    const SizedBox(height: 10),
-                    Text(
-                      'App Language',
-                      style: theme.textTheme.labelMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
                     const SizedBox(height: 6),
+                    _sectionLabel(theme, 'App Language'),
+                    const SizedBox(height: 5),
                     Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
+                      spacing: 6,
+                      runSpacing: 6,
                       children: const [
                         ('en', 'English'),
                         ('id', 'Bahasa Indonesia'),
@@ -457,7 +592,22 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                       ]
                           .map(
                             (item) => ChoiceChip(
-                              label: Text(item.$2),
+                              visualDensity: const VisualDensity(
+                                horizontal: -2,
+                                vertical: -3,
+                              ),
+                              materialTapTargetSize:
+                                  MaterialTapTargetSize.shrinkWrap,
+                              labelPadding:
+                                  const EdgeInsets.symmetric(horizontal: 6),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 4,
+                                vertical: 2,
+                              ),
+                              label: Text(
+                                item.$2,
+                                style: const TextStyle(fontSize: 12),
+                              ),
                               selected: settings.localeCode == item.$1,
                               onSelected: (_) => ref
                                   .read(settingsProvider.notifier)
@@ -470,64 +620,68 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 ),
               ),
             ),
-            const SizedBox(height: 12),
-            if (_matches('display performance refresh rate 120hz motion blur thermal hardware'))
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(14),
+            _section(
+              'display performance refresh rate 120hz motion blur thermal hardware',
+              Padding(
+                padding: const EdgeInsets.all(12),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
                       children: [
-                        Text(
-                          'Display & Performance',
-                          style: theme.textTheme.titleSmall?.copyWith(
-                            fontWeight: FontWeight.w700,
+                        Expanded(
+                          child: Text(
+                            'Display & Performance',
+                            style: theme.textTheme.titleSmall?.copyWith(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
                         ),
-                        const Spacer(),
-                        Chip(
-                          visualDensity: VisualDensity.compact,
-                          label: Text(
-                            '${perf.snapshot.tier.toUpperCase()} · ${perf.snapshot.maxRefreshHz.round()}Hz',
-                          ),
+                        _badge(
+                          theme,
+                          '${perf.snapshot.tier.toUpperCase()} · ${perf.snapshot.maxRefreshHz.round()}Hz',
                         ),
                       ],
                     ),
                     const SizedBox(height: 8),
-                    SegmentedButton<RefreshRateMode>(
-                      segments: RefreshRateMode.values
-                          .map(
-                            (m) => ButtonSegment(
-                              value: m,
-                              label: Text(m.name.toUpperCase()),
-                            ),
-                          )
-                          .toList(),
-                      selected: {perf.refreshRateMode},
-                      onSelectionChanged: (s) => ref
-                          .read(performanceProvider.notifier)
-                          .setRefreshRateMode(s.first),
-                    ),
-                    const SizedBox(height: 6),
-                    SwitchListTile.adaptive(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('Reduce Motion'),
-                      subtitle: const Text(
-                        'Disable page transitions and heavy animations',
+                    SizedBox(
+                      width: double.infinity,
+                      child: SegmentedButton<RefreshRateMode>(
+                        showSelectedIcon: false,
+                        style: _compactSegStyle,
+                        segments: RefreshRateMode.values
+                            .map(
+                              (m) => ButtonSegment(
+                                value: m,
+                                label: Text(
+                                  m.name.toUpperCase(),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        selected: {perf.refreshRateMode},
+                        onSelectionChanged: (s) => ref
+                            .read(performanceProvider.notifier)
+                            .setRefreshRateMode(s.first),
                       ),
+                    ),
+                    const SizedBox(height: 4),
+                    _switch(
+                      theme,
+                      title: 'Reduce Motion',
+                      subtitle: 'Disable page transitions and heavy animations',
                       value: perf.reduceMotion,
                       onChanged: (v) => ref
                           .read(performanceProvider.notifier)
                           .setReduceMotion(v),
                     ),
-                    SwitchListTile.adaptive(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('Reduce Blur Effects'),
-                      subtitle: const Text(
-                        'Prefer solid translucent surfaces over GPU glass blur',
-                      ),
+                    _switch(
+                      theme,
+                      title: 'Reduce Blur Effects',
+                      subtitle: 'Prefer solid surfaces over GPU blur',
                       value: perf.reduceBlur,
                       onChanged: (v) => ref
                           .read(performanceProvider.notifier)
@@ -537,51 +691,50 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 ),
               ),
             ),
-            if (_matches('notifications alerts reply approval background'))
-            const SizedBox(height: 12),
-            if (_matches('notifications alerts reply approval background'))
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(14),
+            _section(
+              'notifications alerts reply approval background',
+              Padding(
+                padding: const EdgeInsets.all(12),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
                       'Notifications & Background Alerts',
                       style: theme.textTheme.titleSmall?.copyWith(
+                        fontSize: 13,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
-                    SwitchListTile.adaptive(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('Notify when reply finishes'),
+                    const SizedBox(height: 2),
+                    _switch(
+                      theme,
+                      title: 'Notify when reply finishes',
                       value: settings.notifyOnTurnComplete,
                       onChanged: (v) => ref
                           .read(settingsProvider.notifier)
                           .setNotifyOnTurnComplete(v),
                     ),
-                    SwitchListTile.adaptive(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('Notify when tool approval needed'),
+                    _switch(
+                      theme,
+                      title: 'Notify when tool approval needed',
                       value: settings.notifyOnApproval,
                       onChanged: (v) => ref
                           .read(settingsProvider.notifier)
                           .setNotifyOnApproval(v),
                     ),
-                    SwitchListTile.adaptive(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('Only notify while app is backgrounded'),
+                    _switch(
+                      theme,
+                      title: 'Only notify while app is backgrounded',
                       value: settings.notifyBackgroundOnly,
                       onChanged: (v) => ref
                           .read(settingsProvider.notifier)
                           .setNotifyBackgroundOnly(v),
                     ),
-                    SwitchListTile.adaptive(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('Battery & network-aware eco policy'),
-                      subtitle: const Text(
-                        'Warn when battery < 15% or on cellular data before heavy tool runs',
-                      ),
+                    _switch(
+                      theme,
+                      title: 'Battery & network-aware eco policy',
+                      subtitle:
+                          'Warn on low battery (<15%) or cellular before heavy tools',
                       value: settings.batteryNetworkPolicyEnabled,
                       onChanged: (v) => ref
                           .read(settingsProvider.notifier)
@@ -591,26 +744,29 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 ),
               ),
             ),
-            const SizedBox(height: 12),
-            if (_matches('agent permissions preset turbo standard non-workspace file layout software'))
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(14),
+            _section(
+              'agent permissions preset turbo standard non-workspace file layout software',
+              Padding(
+                padding: const EdgeInsets.all(12),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
                       'Agent Permissions & Desktop Layout',
                       style: theme.textTheme.titleSmall?.copyWith(
+                        fontSize: 13,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 8),
                     DropdownButtonFormField<AntigravityPermissionPreset>(
                       value: settings.permissionPreset,
                       isExpanded: true,
+                      isDense: true,
                       decoration: const InputDecoration(
                         labelText: 'Global Permission Preset',
+                        contentPadding:
+                            EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                       ),
                       items: AntigravityPermissionPreset.values
                           .map(
@@ -619,6 +775,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                               child: Text(
                                 '${p.label} — ${p.description}',
                                 overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontSize: 12.5),
                               ),
                             ),
                           )
@@ -631,49 +788,55 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                         }
                       },
                     ),
-                    const SizedBox(height: 8),
-                    SwitchListTile.adaptive(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('Allow Non-Workspace File Access'),
-                      subtitle: const Text(
-                        'Lets agents access /storage/emulated/0, /sdcard, and external folders',
-                      ),
+                    const SizedBox(height: 4),
+                    _switch(
+                      theme,
+                      title: 'Allow Non-Workspace File Access',
+                      subtitle:
+                          'Lets agents access /storage/emulated/0 & external folders',
                       value: settings.allowNonWorkspaceAccess,
                       onChanged: (v) => ref
                           .read(settingsProvider.notifier)
                           .setAllowNonWorkspaceAccess(v),
                     ),
-                    const SizedBox(height: 8),
-                    SegmentedButton<AntigravityLayoutMode>(
-                      segments: AntigravityLayoutMode.values
-                          .map(
-                            (l) => ButtonSegment(
-                              value: l,
-                              label: Text(l.label),
-                            ),
-                          )
-                          .toList(),
-                      selected: {settings.layoutMode},
-                      onSelectionChanged: (s) => ref
-                          .read(settingsProvider.notifier)
-                          .setLayoutMode(s.first),
+                    const SizedBox(height: 4),
+                    SizedBox(
+                      width: double.infinity,
+                      child: SegmentedButton<AntigravityLayoutMode>(
+                        showSelectedIcon: false,
+                        style: _compactSegStyle,
+                        segments: AntigravityLayoutMode.values
+                            .map(
+                              (l) => ButtonSegment(
+                                value: l,
+                                label: Text(
+                                  l.label,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        selected: {settings.layoutMode},
+                        onSelectionChanged: (s) => ref
+                            .read(settingsProvider.notifier)
+                            .setLayoutMode(s.first),
+                      ),
                     ),
                   ],
                 ),
               ),
             ),
-            const SizedBox(height: 12),
-            if (_matches('battery keep-alive oem samsung xiaomi oppo vivo diagnostics report cli flags'))
-            Card(
-              child: Column(
+            _section(
+              'battery keep-alive oem samsung xiaomi oppo vivo diagnostics report cli flags',
+              Column(
                 children: [
-                  ListTile(
-                    leading: const Icon(Icons.battery_saver_rounded),
-                    title: const Text('Background Keep-Alive Guide'),
-                    subtitle: const Text(
-                      'Battery optimization check & Samsung/Xiaomi/OPPO/vivo setup',
-                    ),
-                    trailing: const Icon(Icons.chevron_right),
+                  _tile(
+                    theme,
+                    icon: Icons.battery_saver_rounded,
+                    title: 'Background Keep-Alive Guide',
+                    subtitle:
+                        'Battery optimization check & Samsung/Xiaomi/OPPO/vivo setup',
                     onTap: () => Navigator.of(context).push(
                       MaterialPageRoute<void>(
                         builder: (_) => const BackgroundGuidePage(),
@@ -681,13 +844,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     ),
                   ),
                   const Divider(height: 1),
-                  ListTile(
-                    leading: const Icon(Icons.bug_report_outlined),
-                    title: const Text('Diagnostics Bundle'),
-                    subtitle: const Text(
-                      'Inspect, copy, share or export redacted diagnostics (.md)',
-                    ),
-                    trailing: const Icon(Icons.chevron_right),
+                  _tile(
+                    theme,
+                    icon: Icons.bug_report_outlined,
+                    title: 'Diagnostics Bundle',
+                    subtitle:
+                        'Inspect, copy, share or export redacted diagnostics (.md)',
                     onTap: () => Navigator.of(context).push(
                       MaterialPageRoute<void>(
                         builder: (_) => const DiagnosticsPage(),
@@ -695,15 +857,13 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     ),
                   ),
                   const Divider(height: 1),
-                  ListTile(
-                    leading: const Icon(Icons.terminal),
-                    title: const Text('Antigravity CLI & Flags'),
-                    subtitle: Text(
-                      settings.activeAgent.isNotEmpty
-                          ? 'Agent: ${settings.activeAgent} · Manage mcp, plugin, remote-control'
-                          : 'Manage mcp, plugin, agent, remote-control, & CLI flags',
-                    ),
-                    trailing: const Icon(Icons.chevron_right),
+                  _tile(
+                    theme,
+                    icon: Icons.terminal,
+                    title: 'Antigravity CLI & Flags',
+                    subtitle: settings.activeAgent.isNotEmpty
+                        ? 'Agent: ${settings.activeAgent} · Manage mcp, plugin, remote-control'
+                        : 'Manage mcp, plugin, agent, remote-control, & CLI flags',
                     onTap: () => Navigator.of(context).push(
                       MaterialPageRoute<void>(
                         builder: (_) => const CliManagerPage(),
@@ -713,18 +873,16 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 ],
               ),
             ),
-            const SizedBox(height: 12),
-            if (_matches('updates check release notes changelog whats new version apk install'))
-            Card(
-              child: Column(
+            _section(
+              'updates check release notes changelog whats new version apk install',
+              Column(
                 children: [
-                  ListTile(
-                    leading: const Icon(Icons.new_releases_outlined),
-                    title: const Text("What's New"),
-                    subtitle: Text(
-                      'Highlights & changelog for v${update.currentVersion}',
-                    ),
-                    trailing: const Icon(Icons.chevron_right),
+                  _tile(
+                    theme,
+                    icon: Icons.new_releases_outlined,
+                    title: "What's New",
+                    subtitle:
+                        'Highlights & changelog for v${update.currentVersion}',
                     onTap: () => _showWhatsNewDialog(
                       context,
                       currentVersion: update.currentVersion,
@@ -734,25 +892,24 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     ),
                   ),
                   const Divider(height: 1),
-                  ListTile(
-                    leading: const Icon(Icons.system_update_alt),
-                    title: const Text('Check for Updates'),
-                    subtitle: Text(
-                      update.isDownloading
-                          ? '${formatUpdateBytes(update.receivedBytes)} / ${update.effectiveTotalBytes != null ? formatUpdateBytes(update.effectiveTotalBytes!) : "…"} · Data used: ${formatUpdateBytes(update.totalDataUsedBytes)}'
-                          : update.latest != null
-                              ? (update.hasNewerVersion
-                                  ? 'Update available: ${update.latest!.tagName} (installed v${update.currentVersion}) · Data used: ${formatUpdateBytes(update.totalDataUsedBytes)}'
-                                  : 'Up to date (v${update.currentVersion}) · Data used: ${formatUpdateBytes(update.totalDataUsedBytes)}')
-                              : 'Installed v${update.currentVersion} · dwicao/antigravity-go',
-                    ),
+                  _tile(
+                    theme,
+                    icon: Icons.system_update_alt,
+                    title: 'Check for Updates',
+                    subtitle: update.isDownloading
+                        ? '${formatUpdateBytes(update.receivedBytes)} / ${update.effectiveTotalBytes != null ? formatUpdateBytes(update.effectiveTotalBytes!) : "…"} · Data used: ${formatUpdateBytes(update.totalDataUsedBytes)}'
+                        : update.latest != null
+                            ? (update.hasNewerVersion
+                                ? 'Update available: ${update.latest!.tagName} (installed v${update.currentVersion})'
+                                : 'Up to date (v${update.currentVersion}) · Data: ${formatUpdateBytes(update.totalDataUsedBytes)}')
+                            : 'Installed v${update.currentVersion} · dwicao/antigravity-go',
                     trailing: update.checking
                         ? const SizedBox(
-                            width: 18,
-                            height: 18,
+                            width: 16,
+                            height: 16,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
-                        : const Icon(Icons.refresh),
+                        : const Icon(Icons.refresh, size: 18),
                     onTap: update.checking
                         ? null
                         : () async {
@@ -774,12 +931,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   ),
                   if (update.isDownloading)
                     Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           LinearProgressIndicator(value: update.progress),
-                          const SizedBox(height: 8),
+                          const SizedBox(height: 6),
                           Row(
                             children: [
                               Expanded(
@@ -789,6 +946,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                                 ),
                               ),
                               OutlinedButton(
+                                style: _compactBtnStyle,
                                 onPressed: () => ref
                                     .read(appUpdateProvider.notifier)
                                     .cancelUpdate(),
@@ -801,22 +959,29 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     )
                   else if (update.latest?.arm64ApkUrl != null)
                     Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
                       child: Row(
                         children: [
                           Expanded(
                             child: update.hasNewerVersion
                                 ? FilledButton(
+                                    style: _compactBtnStyle,
                                     onPressed: () => UpdateSheet.show(context),
-                                    child: Text('Install ${update.latest!.tagName}'),
+                                    child: Text(
+                                      'Install ${update.latest!.tagName}',
+                                    ),
                                   )
                                 : OutlinedButton(
+                                    style: _compactBtnStyle,
                                     onPressed: () => UpdateSheet.show(context),
-                                    child: Text('Up to date (${update.latest!.tagName})'),
+                                    child: Text(
+                                      'Up to date (${update.latest!.tagName})',
+                                    ),
                                   ),
                           ),
                           const SizedBox(width: 8),
                           OutlinedButton(
+                            style: _compactBtnStyle,
                             onPressed: () =>
                                 launchUrl(Uri.parse(update.latest!.htmlUrl)),
                             child: const Text('Release Notes'),

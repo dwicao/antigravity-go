@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:antigravity_go/state/usage_state.dart';
 import 'package:antigravity_go/ui/usage/usage_page.dart';
 import 'package:flutter/material.dart';
@@ -173,5 +175,29 @@ Upgrade\thttps://antigravity.google/g1-upgrade
     );
     expect(find.text('Upgrade'), findsOneWidget);
     expect(find.text('0 credits'), findsOneWidget);
+  });
+
+  test('UsageNotifier hydrates cached probe output and honors freshness TTL', () async {
+    SharedPreferences.setMockInitialValues({
+      'agy_usage_probe_cache_v1': jsonEncode({
+        'raw': '5-hour limit: 88% remaining (resets in 4h)\nWeekly limit: 92% remaining (resets in 5d)',
+        'fetchedAtMs': DateTime.now().millisecondsSinceEpoch,
+      }),
+    });
+
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    container.read(usageProvider);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    final hydrated = container.read(usageProvider);
+    expect(hydrated.overallFiveHourRemainingPct, 88);
+    expect(hydrated.overallWeeklyRemainingPct, 92);
+
+    // Within 60s TTL, non-forced refresh returns immediately without wiping or overwriting error.
+    await container.read(usageProvider.notifier).refreshFromRuntime();
+    final afterRefresh = container.read(usageProvider);
+    expect(afterRefresh.overallFiveHourRemainingPct, 88);
+    expect(afterRefresh.lastProbeError, isNull);
   });
 }

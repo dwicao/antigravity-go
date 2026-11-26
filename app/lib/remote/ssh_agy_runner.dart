@@ -732,7 +732,11 @@ class SshAgyRunner {
     try {
       final agy = _shellQuote(host.agyBinary);
       final out = await client.run(
-        '$agy models 2>/dev/null; ($agy -p /usage --output-format json 2>/dev/null || $agy -p /usage --output-format text 2>/dev/null); ($agy -p /credits --output-format json 2>/dev/null || $agy -p /credits --output-format text 2>/dev/null) || true',
+        't=\$(mktemp -d /tmp/agy_probe.XXXXXX 2>/dev/null || echo /tmp/agy_probe_\$\$); mkdir -p "\$t"; '
+        '($agy models >"\$t/1" 2>/dev/null || true) & '
+        '(($agy -p /usage --output-format json >"\$t/2" 2>/dev/null || $agy -p /usage --output-format text >"\$t/2" 2>/dev/null) || true) & '
+        '(($agy -p /credits --output-format json >"\$t/3" 2>/dev/null || $agy -p /credits --output-format text >"\$t/3" 2>/dev/null) || true) & '
+        'wait; cat "\$t/1" "\$t/2" "\$t/3" 2>/dev/null; rm -rf "\$t" 2>/dev/null || true',
       );
       return utf8.decode(out, allowMalformed: true);
     } finally {
