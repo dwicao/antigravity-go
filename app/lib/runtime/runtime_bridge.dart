@@ -89,11 +89,21 @@ class RuntimeBridge {
     }
   }
 
-  Future<void> prewarmAcpWorker({String? cwd}) async {
+  Future<void> prewarmAcpWorker({
+    String? cwd,
+    List<String> extraDirs = const [],
+    bool skipPermissions = true,
+    String? agent,
+  }) async {
     try {
       await _method.invokeMethod<void>(
         'prewarmAcpWorker',
-        {'cwd': ?cwd},
+        {
+          'cwd': ?cwd,
+          if (extraDirs.isNotEmpty) 'extraDirs': extraDirs,
+          'skipPermissions': skipPermissions,
+          'agent': ?agent,
+        },
       );
     } on MissingPluginException {
       // No-op in headless widget tests.

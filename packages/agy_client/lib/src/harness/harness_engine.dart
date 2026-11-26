@@ -869,6 +869,11 @@ class HarnessTurnRouter {
     r'(/[^\s]+|\\[^\s]+|`[^`]+`|\.[a-zA-Z0-9]{1,5}\b|\(\)|\{|\})',
   );
 
+  static final RegExp _codingOrLookupRe = RegExp(
+    r'\b(code|file|function|class|method|widget|state|provider|api|sql|db|git|commit|branch|diff|pr|issue|log|stack|trace|explain|why|how|what|where|which|when|compare|list|show|check|find|search|read|open|run|apa|bagaimana|kenapa|dimana|jelaskan|tolong|bantu|kode|fungsi|kelas|berkas)\b',
+    caseSensitive: false,
+  );
+
   /// Returns whether `<repo_map>` injection can be skipped to save ~1K tokens
   /// and disk I/O on trivial conversational or built-in slash turns.
   static bool shouldSkipRepoMap(String prompt) {
@@ -897,6 +902,17 @@ class HarnessTurnRouter {
     return true;
   }
 
+  /// True for short greetings/acknowledgments (e.g. "halo", "ok", "thanks")
+  /// that do not require Gemini 4 reasoning quota.
+  static bool isConversationalAck(String prompt) {
+    final trimmed = prompt.trim();
+    if (trimmed.isEmpty || trimmed.length > 40) return false;
+    if (!isTrivialPrompt(trimmed)) return false;
+    if (trimmed.contains('?')) return false;
+    if (_codingOrLookupRe.hasMatch(trimmed)) return false;
+    return true;
+  }
+
   static ({String modelId, String effort}) resolveCompactionRoute() {
     return (modelId: fastCompactionModelId, effort: 'low');
   }
@@ -908,6 +924,7 @@ class HarnessTurnRouter {
     required String selectedEffort,
     required String speedTierName,
     required bool smartRoutingEnabled,
+    bool quotaSaverEnabled = false,
     bool hasAttachments = false,
   }) {
     final skipRepoMap = !hasAttachments && shouldSkipRepoMap(prompt);
@@ -943,6 +960,23 @@ class HarnessTurnRouter {
     }
 
     if (smartRoutingEnabled && !hasAttachments && isTrivialPrompt(prompt)) {
+      final isGeminiFamily = lowerModel.contains('gemini') ||
+          lowerModel.contains('orchestrator') ||
+          lowerModel.contains('neon') ||
+          lowerModel.contains('carbon') ||
+          lowerModel.contains('argon') ||
+          lowerModel.contains('hydrogen');
+      if (quotaSaverEnabled &&
+          isGeminiFamily &&
+          isConversationalAck(prompt)) {
+        return (
+          modelId: fastCompactionModelId,
+          effort: 'low',
+          skipRepoMap: true,
+          downgraded:
+              lowerModel != fastCompactionModelId || selectedEffort != 'low',
+        );
+      }
       final isHeavyGemini = lowerModel.contains('orchestrator') ||
           lowerModel.contains('neon') ||
           lowerModel.contains('carbon') ||

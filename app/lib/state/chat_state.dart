@@ -870,6 +870,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
             selectedEffort: settings.reasoningEffort,
             speedTierName: settings.speedTier.name,
             smartRoutingEnabled: harness.smartRoutingEnabled,
+            quotaSaverEnabled: harness.quotaSaverEnabled,
             hasAttachments: attachments.isNotEmpty,
           )
         : (
@@ -1056,7 +1057,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       try {
         repoMapContext = await RepoMapBuilder.buildFromDirectory(
           effectiveWorkspace,
-          maxTokens: 1000,
+          maxTokens: harness.quotaSaverEnabled ? 600 : 1000,
+          maxFiles: harness.quotaSaverEnabled ? 80 : 120,
         );
       } catch (_) {}
       if (!ref.mounted || _sessionTurnTokens[session.id] != streamToken) return;
@@ -2562,10 +2564,6 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         return (ok: false, message: 'Cancelled');
       }
 
-      final compactRoute =
-          (sshHost == null && ref.read(harnessProvider).quotaSaverEnabled)
-              ? HarnessTurnRouter.resolveCompactionRoute()
-              : null;
       final request = AgyPromptRequest(
         prompt: compactPrompt,
         workspacePath: effectiveWorkspace,
@@ -2575,8 +2573,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           if (perms.allFilesAccess) '/sdcard',
         ],
         conversationId: null,
-        modelId: compactRoute?.modelId ?? settings.selectedModelId,
-        effortCliValue: compactRoute?.effort ?? settings.reasoningEffort,
+        modelId: activeModelId,
+        effortCliValue: activeEffort,
         mode: sshHost != null
             ? AgyExecutionMode.plan
             : AgyExecutionMode.plan.androidSafe,

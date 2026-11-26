@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:agy_client/agy_client.dart';
 import 'package:test/test.dart';
 
@@ -322,6 +324,62 @@ void main() {
       expect(snap.budgetTokens, 1000000);
       expect(snap.usedTokens, greaterThan(160000));
       expect(snap.shouldCompact, isTrue);
+    });
+
+    test('routes conversational acks to Flash Low under quotaSaverEnabled', () {
+      final ack = HarnessTurnRouter.routeTurn(
+        prompt: 'ok siap makasih',
+        selectedModelId: 'Orchestrator (Neon)',
+        selectedEffort: 'high',
+        speedTierName: 'regular',
+        smartRoutingEnabled: true,
+        quotaSaverEnabled: true,
+      );
+      expect(ack.modelId, HarnessTurnRouter.fastCompactionModelId);
+      expect(ack.effort, 'low');
+      expect(ack.skipRepoMap, isTrue);
+      expect(ack.downgraded, isTrue);
+
+      final shortQuestion = HarnessTurnRouter.routeTurn(
+        prompt: 'what is riverpod?',
+        selectedModelId: 'Orchestrator (Neon)',
+        selectedEffort: 'high',
+        speedTierName: 'regular',
+        smartRoutingEnabled: true,
+        quotaSaverEnabled: true,
+      );
+      expect(shortQuestion.modelId, HarnessTurnRouter.fastCodingModelId);
+      expect(shortQuestion.effort, 'low');
+    });
+
+    test('RepoMapBuilder uses BFS so deep early dirs do not starve sibling modules', () async {
+      final tmp = await Directory.systemTemp.createTemp('agy_bfs_map_');
+      addTearDown(() async {
+        if (await tmp.exists()) await tmp.delete(recursive: true);
+      });
+      final deepAndroid = Directory('${tmp.path}/android/app/src/main/kotlin');
+      final libDir = Directory('${tmp.path}/lib');
+      final pkgDir = Directory('${tmp.path}/packages');
+      await deepAndroid.create(recursive: true);
+      await libDir.create(recursive: true);
+      await pkgDir.create(recursive: true);
+
+      for (var i = 1; i <= 5; i++) {
+        await File('${deepAndroid.path}/Helper$i.kt')
+            .writeAsString('class Helper$i {}\n');
+      }
+      await File('${libDir.path}/main.dart')
+          .writeAsString('class MyApp {}\nvoid main() {}\n');
+      await File('${pkgDir.path}/core.dart')
+          .writeAsString('class CoreEngine {}\n');
+
+      final map = await RepoMapBuilder.buildFromDirectory(
+        tmp.path,
+        maxFiles: 3,
+        useCache: false,
+      );
+      expect(map, contains('lib/main.dart'));
+      expect(map, contains('packages/core.dart'));
     });
   });
 }

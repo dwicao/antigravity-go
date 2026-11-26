@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../state/chat_state.dart';
 import '../../state/harness_state.dart';
+import '../../state/settings_state.dart';
 import '../../theme/app_theme.dart';
 
 /// Modern Agent Harness Dashboard:
@@ -130,6 +131,7 @@ class _HarnessPageState extends ConsumerState<HarnessPage> {
   @override
   Widget build(BuildContext context) {
     final harness = ref.watch(harnessProvider);
+    final settings = ref.watch(settingsProvider);
     final ctxSnap = ref.watch(contextBudgetProvider);
     final theme = Theme.of(context);
     final counts = harness.progressCounts;
@@ -289,11 +291,58 @@ class _HarnessPageState extends ConsumerState<HarnessPage> {
                   secondary: const Icon(Icons.alt_route_rounded, size: 20),
                   title: const Text('Smart Effort Routing'),
                   subtitle: const Text(
-                    'Routes short Q&A/status turns to faster Hydrogen + Low effort',
+                    'Routes short Q&A to Hydrogen Low & greetings/acks to Flash Low',
                   ),
                   value: harness.smartRoutingEnabled,
                   onChanged: (v) =>
                       ref.read(harnessProvider.notifier).setSmartRouting(v),
+                ),
+                const Divider(height: 1),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Inference Speed Tier',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        switch (settings.speedTier) {
+                          InferenceSpeedTier.regular =>
+                            'Regular: Uses your selected model & effort (smart-routed on trivial prompts)',
+                          InferenceSpeedTier.fast =>
+                            'Fast: Routes heavy Gemini models to Hydrogen + Medium/Low effort',
+                          InferenceSpeedTier.ultrafast =>
+                            'Ultrafast: Uses Gemini 3.8 Flash + Low effort for maximum speed & zero Gemini 4 quota',
+                        },
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      SizedBox(
+                        width: double.infinity,
+                        child: SegmentedButton<InferenceSpeedTier>(
+                          segments: InferenceSpeedTier.values
+                              .map(
+                                (t) => ButtonSegment<InferenceSpeedTier>(
+                                  value: t,
+                                  label: Text(t.label),
+                                ),
+                              )
+                              .toList(),
+                          selected: {settings.speedTier},
+                          onSelectionChanged: (s) => ref
+                              .read(settingsProvider.notifier)
+                              .setSpeedTier(s.first),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
                 const Divider(height: 1),
                 SwitchListTile.adaptive(

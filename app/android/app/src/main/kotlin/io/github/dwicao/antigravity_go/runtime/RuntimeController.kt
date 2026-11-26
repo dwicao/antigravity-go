@@ -1321,7 +1321,12 @@ am start -a android.intent.action.VIEW -d "${'$'}url" >/dev/null 2>&1 || echo "[
         PhoneControlCoordinator.minimalCodingMcp = minimal
     }
 
-    fun prewarmAcpWorker(cwd: String? = null) {
+    fun prewarmAcpWorker(
+        cwd: String? = null,
+        extraDirs: List<String> = emptyList(),
+        skipPermissions: Boolean = true,
+        agent: String? = null,
+    ) {
         if (!binaryFile.exists() || !binaryFile.canExecute()) return
         val dir = if (!cwd.isNullOrBlank() && File(cwd).isDirectory) File(cwd) else workspaceDir
         if (!dir.exists()) runCatching { dir.mkdirs() }
@@ -1329,8 +1334,9 @@ am start -a android.intent.action.VIEW -d "${'$'}url" >/dev/null 2>&1 || echo "[
             binaryPath = binaryFile.absolutePath,
             cwd = dir,
             env = buildEnv(),
-            extraDirs = defaultExtraDirs(emptyList()),
-            skipPermissions = true,
+            extraDirs = defaultExtraDirs(extraDirs),
+            skipPermissions = skipPermissions,
+            agent = agent?.takeIf { it.isNotBlank() },
             clientVersion = appVersionName(),
             onAuthenticated = {
                 if (!authMarkerFile.exists()) {

@@ -103,8 +103,16 @@ class RuntimePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChann
             }
             "prewarmAcpWorker" -> {
                 val cwd = call.argument<String>("cwd")
+                val extraDirs = call.argument<List<String>>("extraDirs") ?: emptyList()
+                val skipPermissions = call.argument<Boolean>("skipPermissions") ?: true
+                val agent = call.argument<String>("agent")
                 runAsync(result) {
-                    ctrl.prewarmAcpWorker(cwd)
+                    ctrl.prewarmAcpWorker(
+                        cwd = cwd,
+                        extraDirs = extraDirs,
+                        skipPermissions = skipPermissions,
+                        agent = agent,
+                    )
                     null
                 }
             }

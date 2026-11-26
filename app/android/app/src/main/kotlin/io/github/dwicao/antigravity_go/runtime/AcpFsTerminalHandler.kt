@@ -5,6 +5,7 @@ import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
+import java.io.RandomAccessFile
 import java.util.concurrent.ExecutorService
 
 /**
@@ -238,6 +239,69 @@ internal class AcpFsTerminalHandler(
         }
     }
 
+    companion object {
+        private const val LARGE_FILE_STREAM_THRESHOLD_BYTES = 512L * 1024L
+
+        internal fun readBoundedFileContent(
+            file: File,
+            startLine: Int = 0,
+            limit: Int = 0,
+        ): String {
+            if (startLine > 0 || limit > 0) {
+                val from = (startLine - 1).coerceAtLeast(0)
+                val maxLines = if (limit > 0) limit else Int.MAX_VALUE
+                val selected = ArrayList<String>(limit.coerceIn(16, 512))
+                var totalChars = 0
+                file.bufferedReader(Charsets.UTF_8).use { br ->
+                    var lineIdx = 0
+                    while (true) {
+                        val l = br.readLine() ?: break
+                        if (lineIdx >= from) {
+                            selected.add(l)
+                            totalChars += l.length + 1
+                            if (selected.size >= maxLines || totalChars >= 120_000) {
+                                break
+                            }
+                        }
+                        lineIdx++
+                    }
+                }
+                return selected.joinToString("\n")
+            }
+
+            val fileBytes = file.length()
+            if (fileBytes > LARGE_FILE_STREAM_THRESHOLD_BYTES) {
+                val headBytes = ByteArray(16_000)
+                val tailBytes = ByteArray(4_000)
+                var headLen = 0
+                var tailLen = 0
+                RandomAccessFile(file, "r").use { raf ->
+                    headLen = raf.read(headBytes).coerceAtLeast(0)
+                    val tailStart = (fileBytes - tailBytes.size).coerceAtLeast(0L)
+                    raf.seek(tailStart)
+                    tailLen = raf.read(tailBytes).coerceAtLeast(0)
+                }
+                val head = String(headBytes, 0, headLen, Charsets.UTF_8)
+                val tail = String(tailBytes, 0, tailLen, Charsets.UTF_8)
+                return "$head\n\n... [TRUNCATED large file ($fileBytes bytes total) — re-call fs/read_text_file with line & limit to inspect specific sections] ...\n\n$tail"
+            }
+
+            val rawText = file.readText()
+            if (rawText.length > 24_000) {
+                val lines = rawText.lines()
+                return if (lines.size > 320) {
+                    val head = lines.take(220).joinToString("\n")
+                    val tail = lines.takeLast(60).joinToString("\n")
+                    val omitted = lines.size - 280
+                    "$head\n\n... [TRUNCATED $omitted middle lines (${lines.size} lines / ${rawText.length} chars total) — re-call fs/read_text_file with line & limit to inspect specific sections] ...\n\n$tail"
+                } else {
+                    rawText.take(16_000) + "\n\n... [TRUNCATED ${rawText.length - 20_000} middle chars] ...\n\n" + rawText.takeLast(4_000)
+                }
+            }
+            return rawText
+        }
+    }
+
     fun handleReadTextFile(
         active: ActiveAcp,
         writer: OutputStreamWriter,
@@ -256,25 +320,7 @@ internal class AcpFsTerminalHandler(
             }
             val startLine = params?.optInt("line", 0) ?: 0
             val limit = params?.optInt("limit", 0) ?: 0
-            val rawText = file.readText()
-            val content = if (startLine > 0 || limit > 0) {
-                val lines = rawText.lines()
-                val from = (startLine - 1).coerceIn(0, lines.size)
-                val to = if (limit > 0) (from + limit).coerceAtMost(lines.size) else lines.size
-                lines.subList(from, to).joinToString("\n")
-            } else if (rawText.length > 24_000) {
-                val lines = rawText.lines()
-                if (lines.size > 320) {
-                    val head = lines.take(220).joinToString("\n")
-                    val tail = lines.takeLast(60).joinToString("\n")
-                    val omitted = lines.size - 280
-                    "$head\n\n... [TRUNCATED $omitted middle lines (${lines.size} lines / ${rawText.length} chars total) — re-call fs/read_text_file with line & limit to inspect specific sections] ...\n\n$tail"
-                } else {
-                    rawText.take(16_000) + "\n\n... [TRUNCATED ${rawText.length - 20_000} middle chars] ...\n\n" + rawText.takeLast(4_000)
-                }
-            } else {
-                rawText
-            }
+            val content = readBoundedFileContent(file, startLine = startLine, limit = limit)
             AcpConfigAndPromptHelper.sendJson(
                 writer,
                 JSONObject()

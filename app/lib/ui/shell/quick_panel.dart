@@ -179,6 +179,22 @@ class QuickPanel extends ConsumerWidget {
               }
             },
           ),
+          const SizedBox(height: 10),
+          Text('Speed Tier', style: theme.textTheme.labelMedium),
+          const SizedBox(height: 6),
+          SegmentedButton<InferenceSpeedTier>(
+            segments: InferenceSpeedTier.values
+                .map(
+                  (t) => ButtonSegment<InferenceSpeedTier>(
+                    value: t,
+                    label: Text(t.label),
+                  ),
+                )
+                .toList(),
+            selected: {settings.speedTier},
+            onSelectionChanged: (s) =>
+                ref.read(settingsProvider.notifier).setSpeedTier(s.first),
+          ),
           const SizedBox(height: 14),
           Text(
             'Harness Tools',

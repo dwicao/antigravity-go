@@ -45,6 +45,7 @@ internal data class ActiveAcp(
     @Volatile var pendingModeCli: String? = null,
     @Volatile var standbyReady: Boolean = false,
     val claimSignal: CompletableFuture<String> = CompletableFuture(),
+    val configLock: Any = Any(),
     val pendingConfigReqIds: MutableSet<Int> = Collections.synchronizedSet(mutableSetOf()),
     val cancelled: AtomicBoolean = AtomicBoolean(false),
     val exitEmittedTurnIds: ConcurrentHashMap<String, Boolean> = ConcurrentHashMap(),
@@ -112,8 +113,11 @@ internal object AcpConfigAndPromptHelper {
                     )
             )
         }
+        val lowerModel = modelId?.lowercase().orEmpty()
         val effectiveEffort = effort?.takeIf {
-            it.isNotBlank() && !(modelId?.lowercase()?.contains("orchestrator") == true)
+            it.isNotBlank() &&
+                !lowerModel.contains("orchestrator") &&
+                !lowerModel.contains("gpt-oss")
         }
         if (effectiveEffort != null && effectiveEffort != active.lastEffort) {
             active.lastEffort = effectiveEffort

@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../runtime/runtime_bridge.dart';
 import 'chat_state.dart';
 import 'custom_providers_state.dart';
+import 'permissions_state.dart';
 import 'projects_state.dart';
 import 'runtime_state.dart';
 import 'sessions_state.dart';
@@ -273,13 +274,13 @@ class HarnessNotifier extends Notifier<HarnessState> {
       (prev, next) {
         if (next && prev != true) {
           final cwd = _activeWorkspace();
-          unawaited(
-            RuntimeBridge.instance.prewarmAcpWorker(
-              cwd: cwd.isEmpty ? null : cwd,
-            ),
-          );
+          _prewarmCurrentWorkspace(cwd);
           if (state.repoMapEnabled && cwd.isNotEmpty) {
-            unawaited(refreshRepoMap(maxTokens: 1000));
+            unawaited(
+              refreshRepoMap(
+                maxTokens: state.quotaSaverEnabled ? 600 : 1000,
+              ),
+            );
           }
         }
       },
@@ -287,13 +288,43 @@ class HarnessNotifier extends Notifier<HarnessState> {
     ref.listen<String>(
       projectsProvider.select((p) => p.activeProject.primaryFolder),
       (prev, next) {
-        if (prev != next && next.isNotEmpty && state.repoMapEnabled) {
-          unawaited(refreshRepoMap(maxTokens: 1000));
+        if (prev != next && next.isNotEmpty) {
+          _prewarmCurrentWorkspace(next);
+          if (state.repoMapEnabled) {
+            unawaited(
+              refreshRepoMap(
+                maxTokens: state.quotaSaverEnabled ? 600 : 1000,
+              ),
+            );
+          }
         }
       },
     );
     unawaited(_loadPrefs());
     return const HarnessState();
+  }
+
+  void _prewarmCurrentWorkspace([String? overrideCwd]) {
+    if (!ref.read(runtimeProvider).status.isReady) return;
+    final cwd = overrideCwd ?? _activeWorkspace();
+    final project = ref.read(projectsProvider).activeProject;
+    final settings = ref.read(settingsProvider);
+    final perms = ref.read(permissionsProvider);
+    final effectivePreset = project.permissionPreset ?? settings.permissionPreset;
+    final skipPerms = effectivePreset == AntigravityPermissionPreset.turbo;
+    final extraDirs = <String>[
+      ...project.folders,
+      if (perms.allFilesAccess) perms.externalStorageRoot,
+      if (perms.allFilesAccess) '/sdcard',
+    ];
+    unawaited(
+      RuntimeBridge.instance.prewarmAcpWorker(
+        cwd: cwd.isEmpty ? null : cwd,
+        extraDirs: extraDirs,
+        skipPermissions: skipPerms,
+        agent: settings.activeAgent.isEmpty ? null : settings.activeAgent,
+      ),
+    );
   }
 
   String _activeWorkspace() {

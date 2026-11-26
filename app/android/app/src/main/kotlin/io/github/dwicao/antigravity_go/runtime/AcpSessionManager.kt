@@ -35,14 +35,28 @@ class AcpSessionManager(
     )
 
     private fun takeStandbyWorker(expectedSignature: String): ActiveAcp? {
+        val mismatched: ActiveAcp?
         synchronized(standbyLock) {
             val w = standbyWorker ?: return null
             if (w.process.isAlive && w.standbyReady && w.workerSignature == expectedSignature) {
                 standbyWorker = null
                 return w
             }
-            return null
+            mismatched = if (w.standbyReady || !w.process.isAlive) {
+                standbyWorker = null
+                w
+            } else {
+                null
+            }
         }
+        if (mismatched != null) {
+            mismatched.cancelled.set(true)
+            mismatched.claimSignal.complete("__CANCELLED__")
+            mismatched.terminals.values.forEach { t -> runCatching { t.process.destroyForcibly() } }
+            runCatching { mismatched.writer.close() }
+            runCatching { mismatched.process.destroyForcibly() }
+        }
+        return null
     }
 
     private fun closeStandbyWorker() {
@@ -311,7 +325,7 @@ class AcpSessionManager(
                                     active.claimSignal.complete("__CANCELLED__")
                                 }
                             }
-                            val claimedTid = runCatching { active.claimSignal.get(120, TimeUnit.SECONDS) }.getOrNull()
+                            val claimedTid = runCatching { active.claimSignal.get(300, TimeUnit.SECONDS) }.getOrNull()
                             if (claimedTurnCancelled(claimedTid, active)) {
                                 return@submit
                             }
@@ -444,29 +458,35 @@ class AcpSessionManager(
                 }
 
                 if (acpSessionId != null) {
-                    active.sessionId = acpSessionId
-                    active.pendingConfigReqIds.clear()
-                    AcpConfigAndPromptHelper.queueConfigOptions(
-                        active = active,
-                        writer = writer,
-                        sessionId = acpSessionId,
-                        modelId = active.pendingModelId,
-                        effort = active.pendingEffort,
-                        modeCli = active.pendingModeCli,
-                        skipPermissions = skipPermissions,
-                    )
-
-                    if (active.pendingConfigReqIds.isEmpty()) {
-                        val nextPid = active.nextId.getAndIncrement()
-                        active.promptReqId = nextPid
-                        active.promptSent = true
-                        val pText = active.pendingPromptText ?: ""
-                        val pAtt = active.pendingPromptAttachments
-                        active.pendingPromptText = null
-                        active.pendingPromptAttachments = emptyList()
+                    var promptPid = -1
+                    var pText = ""
+                    var pAtt: List<String> = emptyList()
+                    synchronized(active.configLock) {
+                        active.sessionId = acpSessionId
+                        active.pendingConfigReqIds.clear()
+                        AcpConfigAndPromptHelper.queueConfigOptions(
+                            active = active,
+                            writer = writer,
+                            sessionId = acpSessionId,
+                            modelId = active.pendingModelId,
+                            effort = active.pendingEffort,
+                            modeCli = active.pendingModeCli,
+                            skipPermissions = skipPermissions,
+                        )
+                        if (active.pendingConfigReqIds.isEmpty() && !active.promptSent) {
+                            promptPid = active.nextId.getAndIncrement()
+                            active.promptReqId = promptPid
+                            active.promptSent = true
+                            pText = active.pendingPromptText ?: ""
+                            pAtt = active.pendingPromptAttachments
+                            active.pendingPromptText = null
+                            active.pendingPromptAttachments = emptyList()
+                        }
+                    }
+                    if (promptPid >= 0) {
                         AcpConfigAndPromptHelper.sendPromptRpc(
                             writer = writer,
-                            reqId = nextPid,
+                            reqId = promptPid,
                             sessionId = acpSessionId,
                             prompt = pText,
                             attachments = pAtt,
@@ -483,25 +503,40 @@ class AcpSessionManager(
                 is String -> msgId.toIntOrNull()
                 else -> null
             }
-            if (configMsgId != null && active.pendingConfigReqIds.remove(configMsgId)) {
-                val activeSid = active.sessionId
-                if (active.pendingConfigReqIds.isEmpty() && !active.promptSent && activeSid != null) {
-                    val nextPid = active.nextId.getAndIncrement()
-                    active.promptReqId = nextPid
-                    active.promptSent = true
-                    val pText = active.pendingPromptText ?: ""
-                    val pAtt = active.pendingPromptAttachments
-                    active.pendingPromptText = null
-                    active.pendingPromptAttachments = emptyList()
-                    AcpConfigAndPromptHelper.sendPromptRpc(
-                        writer = writer,
-                        reqId = nextPid,
-                        sessionId = activeSid,
-                        prompt = pText,
-                        attachments = pAtt,
-                    )
+            if (configMsgId != null) {
+                var handledConfig = false
+                var promptSid: String? = null
+                var promptPid = -1
+                var pText = ""
+                var pAtt: List<String> = emptyList()
+                synchronized(active.configLock) {
+                    if (active.pendingConfigReqIds.remove(configMsgId)) {
+                        handledConfig = true
+                        val activeSid = active.sessionId
+                        if (active.pendingConfigReqIds.isEmpty() && !active.promptSent && activeSid != null) {
+                            promptPid = active.nextId.getAndIncrement()
+                            active.promptReqId = promptPid
+                            active.promptSent = true
+                            pText = active.pendingPromptText ?: ""
+                            pAtt = active.pendingPromptAttachments
+                            active.pendingPromptText = null
+                            active.pendingPromptAttachments = emptyList()
+                            promptSid = activeSid
+                        }
+                    }
                 }
-                continue
+                if (handledConfig) {
+                    if (promptSid != null) {
+                        AcpConfigAndPromptHelper.sendPromptRpc(
+                            writer = writer,
+                            reqId = promptPid,
+                            sessionId = promptSid!!,
+                            prompt = pText,
+                            attachments = pAtt,
+                        )
+                    }
+                    continue
+                }
             }
 
             if (method == "fs/read_text_file" && msgId != null) {
@@ -620,25 +655,30 @@ class AcpSessionManager(
                                 .toString(),
                         )
                     )
-                    AcpConfigAndPromptHelper.queueConfigOptions(
-                        active = reused,
-                        writer = reused.writer,
-                        sessionId = existingSessionId!!,
-                        modelId = modelId,
-                        effort = effort,
-                        modeCli = modeCli,
-                        skipPermissions = skipPermissions,
-                    )
-                    if (reused.pendingConfigReqIds.isEmpty()) {
-                        val nextPromptId = reused.nextId.getAndIncrement()
-                        reused.promptReqId = nextPromptId
-                        reused.promptSent = true
-                        reused.pendingPromptText = null
-                        reused.pendingPromptAttachments = emptyList()
+                    var promptPid = -1
+                    synchronized(reused.configLock) {
+                        AcpConfigAndPromptHelper.queueConfigOptions(
+                            active = reused,
+                            writer = reused.writer,
+                            sessionId = existingSessionId!!,
+                            modelId = modelId,
+                            effort = effort,
+                            modeCli = modeCli,
+                            skipPermissions = skipPermissions,
+                        )
+                        if (reused.pendingConfigReqIds.isEmpty() && !reused.promptSent) {
+                            promptPid = reused.nextId.getAndIncrement()
+                            reused.promptReqId = promptPid
+                            reused.promptSent = true
+                            reused.pendingPromptText = null
+                            reused.pendingPromptAttachments = emptyList()
+                        }
+                    }
+                    if (promptPid >= 0) {
                         AcpConfigAndPromptHelper.sendPromptRpc(
                             writer = reused.writer,
-                            reqId = nextPromptId,
-                            sessionId = existingSessionId,
+                            reqId = promptPid,
+                            sessionId = existingSessionId!!,
                             prompt = prompt,
                             attachments = attachments,
                         )

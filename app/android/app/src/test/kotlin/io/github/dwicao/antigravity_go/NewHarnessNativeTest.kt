@@ -2,6 +2,7 @@ package io.github.dwicao.antigravity_go
 
 import io.github.dwicao.antigravity_go.phone.HeadlessBrowserHelper
 import io.github.dwicao.antigravity_go.phone.PhoneMcpServer
+import io.github.dwicao.antigravity_go.runtime.AcpFsTerminalHandler
 import io.github.dwicao.antigravity_go.runtime.CustomizationsOps
 import io.github.dwicao.antigravity_go.runtime.LifecycleHooksManager
 import io.github.dwicao.antigravity_go.runtime.WorkspaceOps
@@ -167,5 +168,32 @@ class NewHarnessNativeTest {
         assertTrue(HeadlessBrowserHelper.isHttpOrHttpsUrl("http://127.0.0.1:3000"))
         assertFalse(HeadlessBrowserHelper.isHttpOrHttpsUrl("file:///etc/passwd"))
         assertFalse(HeadlessBrowserHelper.isHttpOrHttpsUrl("javascript:alert(1)"))
+    }
+
+    @Test
+    fun acpFsTerminalHandlerReadsLargeFilesWithBoundedMemory() {
+        val bigFile = tempFolder.newFile("huge_log.txt")
+        bigFile.bufferedWriter().use { bw ->
+            bw.write("FIRST_LINE_MARKER\n")
+            for (i in 2..15000) {
+                bw.write("line_$i padding_0123456789abcdef0123456789abcdef0123456789\n")
+            }
+            bw.write("LAST_LINE_MARKER\n")
+        }
+        assertTrue(bigFile.length() > 512L * 1024L)
+
+        val boundedFull = AcpFsTerminalHandler.readBoundedFileContent(bigFile)
+        assertTrue(boundedFull.contains("FIRST_LINE_MARKER"))
+        assertTrue(boundedFull.contains("LAST_LINE_MARKER"))
+        assertTrue(boundedFull.contains("TRUNCATED large file"))
+
+        val lineSlice = AcpFsTerminalHandler.readBoundedFileContent(
+            bigFile,
+            startLine = 500,
+            limit = 3,
+        )
+        assertTrue(lineSlice.contains("line_500"))
+        assertTrue(lineSlice.contains("line_502"))
+        assertFalse(lineSlice.contains("line_503"))
     }
 }

@@ -15,6 +15,7 @@ import 'package:antigravity_go/ui/chat/chat_composer_bar.dart';
 import 'package:antigravity_go/ui/chat/message_bubble.dart';
 import 'package:antigravity_go/ui/chat/message_metrics_footer.dart';
 import 'package:antigravity_go/ui/chat/workspace_changes_banner.dart';
+import 'package:antigravity_go/ui/harness/harness_page.dart';
 import 'package:antigravity_go/ui/terminal/terminal_page.dart';
 import 'package:antigravity_go/ui/workspace/diff_review_view.dart';
 import 'package:antigravity_go/ui/workspace/diff_syntax_highlighter.dart';
@@ -659,6 +660,29 @@ diff --git a/app/lib/main.dart b/app/lib/main.dart
     expect(updated.quotaSaverEnabled, isFalse);
     expect(updated.smartRoutingEnabled, isFalse);
     expect(updated.autoPivotLoopEnabled, isFalse);
+  });
+
+  testWidgets('HarnessPage exposes Inference Speed Tier selector and updates settings', (tester) async {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          theme: _theme(),
+          home: const HarnessPage(autoRefreshOnOpen: false),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final tierLabel = find.text('Ultrafast');
+    await tester.ensureVisible(tierLabel);
+    await tester.tap(tierLabel);
+    await tester.pumpAndSettle();
+
+    expect(container.read(settingsProvider).speedTier, InferenceSpeedTier.ultrafast);
   });
 }
 

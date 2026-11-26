@@ -341,14 +341,19 @@ class RepoMapBuilder {
     final root = Directory(rootPath);
     if (!await root.exists()) return '';
 
+    // Breadth-first scan ensures monorepo modules (e.g. app/lib, packages/)
+    // are represented evenly before hitting [maxFiles] instead of one deep
+    // alphabetical folder exhausting the entire budget.
     final collected = <File>[];
-    Future<void> walk(Directory dir) async {
-      if (collected.length >= maxFiles) return;
+    final queue = <Directory>[root];
+    var head = 0;
+    while (head < queue.length && collected.length < maxFiles) {
+      final dir = queue[head++];
       List<FileSystemEntity> entries;
       try {
         entries = await dir.list(followLinks: false).toList();
       } catch (_) {
-        return;
+        continue;
       }
       entries.sort((a, b) => a.path.compareTo(b.path));
       for (final entity in entries) {
@@ -356,7 +361,7 @@ class RepoMapBuilder {
         final name = entity.path.split(Platform.pathSeparator).last;
         if (entity is Directory) {
           if (ignoredDirs.contains(name) || name.startsWith('.')) continue;
-          await walk(entity);
+          queue.add(entity);
         } else if (entity is File) {
           final ext = name.contains('.') ? name.split('.').last.toLowerCase() : '';
           if (supportedExtensions.contains(ext)) {
@@ -365,8 +370,6 @@ class RepoMapBuilder {
         }
       }
     }
-
-    await walk(root);
     final rootPrefix = root.path.endsWith(Platform.pathSeparator)
         ? root.path
         : '${root.path}${Platform.pathSeparator}';
