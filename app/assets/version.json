@@ -1,7 +1,7 @@
 {
-  "version": "1.0.54",
+  "version": "1.0.55",
   "buildNumber": 1,
-  "tag": "v1.0.54",
+  "tag": "v1.0.55",
   "changelogUrl": "https://github.com/dwicao/antigravity-go/blob/main/CHANGELOG.md",
-  "releaseNotes": "### Added & Improved\n- **User-Configurable Category Effort Profiles (`EffortCategory`, `EffortCategoryProfile`):**\n  - Replaced opaque automatic effort overrides with explicit per-category Thinking Effort configuration (`Simple Chat / Q&A` = `Low`, `Normal Task` = `Medium`, `Refactor & Debug` = `High`, `Deep & Audit` = `XHigh`, `Compaction` = `Low` by default).\n  - Added the **Effort Per Category** editor and **Reset defaults** control under **Category Effort Routing** in `HarnessPage`, persisted via `HarnessNotifier` (`SharedPreferences`) and applied cleanly to both prompt routing and manual/auto compaction.\n  - Updated `ChatComposerBar` effort pill to show live `<Category> \u00b7 <Effort>` previews (e.g. `Chat \u00b7 Low`, `Normal \u00b7 Medium`, `Refactor \u00b7 High`, `Deep \u00b7 XHigh`) instead of generic `Auto` labels, while preserving 1-tap per-turn pins (`Pin \u00b7 <Effort>`) and inline `!low`\u2013`!max` tags."
+  "releaseNotes": "### Fixed\n- **Accurate Previous / Next User Turn Navigation (`ChatScreen`, `ChatTurnHelpers`):**\n  - Replaced blind scroll-ratio jumps and stale turn cursors with viewport-aware direction tracking (`ChatTurnHelpers.resolveTurnNavigationTarget` + `_ChatRowMountProbe`), so pressing **Previous user turn** from inside a long AI reply jumps cleanly to that turn's user bubble (then steps upward), and pressing **Next user turn** at the bottom never jumps backward to Turn #0.\n  - Reset turn cursor automatically on manual scrolling, prompt submission/steering, and *Jump to latest*; locked `_isProgrammaticScroll` and waited for `_visibleLimit` expansion layout before binary-seeking across variable-height `ListView` items and aligning smoothly with `Scrollable.ensureVisible`."
 }

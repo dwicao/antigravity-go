@@ -2,6 +2,13 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.55] - 2026-11-27
+
+### Fixed
+- **Accurate Previous / Next User Turn Navigation (`ChatScreen`, `ChatTurnHelpers`):**
+  - Replaced blind scroll-ratio jumps and stale turn cursors with viewport-aware direction tracking (`ChatTurnHelpers.resolveTurnNavigationTarget` + `_ChatRowMountProbe`), so pressing **Previous user turn** from inside a long AI reply jumps cleanly to that turn's user bubble (then steps upward), and pressing **Next user turn** at the bottom never jumps backward to Turn #0.
+  - Reset turn cursor automatically on manual scrolling, prompt submission/steering, and *Jump to latest*; locked `_isProgrammaticScroll` and waited for `_visibleLimit` expansion layout before binary-seeking across variable-height `ListView` items and aligning smoothly with `Scrollable.ensureVisible`.
+
 ## [1.0.54] - 2026-11-26
 
 ### Added & Improved
