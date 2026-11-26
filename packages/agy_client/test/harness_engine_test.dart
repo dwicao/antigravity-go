@@ -396,7 +396,7 @@ void main() {
       expect(ack.skipRepoMap, isTrue);
       expect(ack.downgraded, isTrue);
 
-      final standardQuestion = HarnessTurnRouter.routeTurn(
+      final chatTurn = HarnessTurnRouter.routeTurn(
         prompt: 'what is riverpod?',
         selectedModelId: 'gemini-4-hydrogen',
         selectedEffort: 'medium',
@@ -404,22 +404,34 @@ void main() {
         smartRoutingEnabled: true,
         quotaSaverEnabled: true,
       );
-      expect(standardQuestion.modelId, 'gemini-4-hydrogen');
-      expect(standardQuestion.effort, 'medium');
-      expect(standardQuestion.downgraded, isFalse);
+      expect(chatTurn.modelId, 'gemini-4-hydrogen');
+      expect(chatTurn.effort, 'low');
+      expect(chatTurn.downgraded, isTrue);
 
-      final complexFix = HarnessTurnRouter.routeTurn(
+      final normalEdit = HarnessTurnRouter.routeTurn(
         prompt: 'Fix typo in app/lib/state/chat_state.dart and add unit tests',
+        selectedModelId: 'gemini-4-hydrogen',
+        selectedEffort: 'high',
+        speedTierName: 'regular',
+        smartRoutingEnabled: true,
+        quotaSaverEnabled: true,
+      );
+      expect(normalEdit.modelId, 'gemini-4-hydrogen');
+      expect(normalEdit.effort, 'medium');
+      expect(normalEdit.skipRepoMap, isFalse);
+      expect(normalEdit.downgraded, isTrue);
+
+      final refactorTurn = HarnessTurnRouter.routeTurn(
+        prompt: 'Refactor lib/state/chat_state.dart cleanly',
         selectedModelId: 'gemini-4-hydrogen',
         selectedEffort: 'medium',
         speedTierName: 'regular',
         smartRoutingEnabled: true,
         quotaSaverEnabled: true,
       );
-      expect(complexFix.modelId, 'gemini-4-hydrogen');
-      expect(complexFix.effort, 'high');
-      expect(complexFix.skipRepoMap, isFalse);
-      expect(complexFix.downgraded, isFalse);
+      expect(refactorTurn.modelId, 'gemini-4-hydrogen');
+      expect(refactorTurn.effort, 'high');
+      expect(refactorTurn.downgraded, isFalse);
 
       final deepDesign = HarnessTurnRouter.routeTurn(
         prompt: 'Redesign multi-file auth architecture end-to-end',
@@ -433,18 +445,46 @@ void main() {
       expect(deepDesign.effort, 'xhigh');
       expect(deepDesign.downgraded, isFalse);
 
-      final maxAudit = HarnessTurnRouter.routeTurn(
-        prompt:
-            'Audit the entire codebase for security leaks and redesign multi-file auth architecture end-to-end',
-        selectedModelId: 'gemini-4-hydrogen',
-        selectedEffort: 'medium',
-        speedTierName: 'regular',
-        smartRoutingEnabled: true,
-        quotaSaverEnabled: true,
+      final customProfile = const EffortCategoryProfile(
+        chat: 'low',
+        normal: 'medium',
+        refactor: 'high',
+        deep: 'max',
+        compaction: 'medium',
       );
-      expect(maxAudit.modelId, 'gemini-4-hydrogen');
-      expect(maxAudit.effort, 'max');
-      expect(maxAudit.downgraded, isFalse);
+      expect(
+        HarnessTurnRouter.resolveCompactionRoute(
+          selectedModelId: 'gemini-4-hydrogen',
+          categoryProfile: customProfile,
+        ).effort,
+        'medium',
+      );
+      expect(
+        HarnessTurnRouter.routeTurn(
+          prompt:
+              'Audit the entire codebase for security leaks and redesign multi-file auth architecture end-to-end',
+          selectedModelId: 'gemini-4-hydrogen',
+          selectedEffort: 'medium',
+          speedTierName: 'regular',
+          smartRoutingEnabled: true,
+          categoryProfile: customProfile,
+        ).effort,
+        'max',
+      );
+      expect(
+        HarnessTurnRouter.routeTurn(
+          prompt: 'Refactor lib/state/chat_state.dart cleanly',
+          selectedModelId: 'gemini-4-hydrogen',
+          selectedEffort: 'high',
+          speedTierName: 'regular',
+          smartRoutingEnabled: true,
+          categoryProfile: customProfile.withCategoryEffort(
+            EffortCategory.refactor,
+            'medium',
+          ),
+        ).effort,
+        'medium',
+      );
 
       final claudeMax = HarnessTurnRouter.routeTurn(
         prompt: '/boost refactor auth state across modules',
@@ -456,15 +496,15 @@ void main() {
       expect(claudeMax.modelId, 'claude-opus-5-5-medium');
       expect(claudeMax.effort, 'max');
 
-      final carbonExtraFallback = HarnessTurnRouter.routeTurn(
+      final carbonDeep = HarnessTurnRouter.routeTurn(
         prompt: '/plan migrate database layer',
         selectedModelId: 'gemini-4-carbon',
         selectedEffort: 'medium',
         speedTierName: 'regular',
         smartRoutingEnabled: true,
       );
-      expect(carbonExtraFallback.modelId, 'gemini-4-carbon');
-      expect(carbonExtraFallback.effort, 'high');
+      expect(carbonDeep.modelId, 'gemini-4-carbon');
+      expect(carbonDeep.effort, 'max');
 
       final flashCappedHigh = HarnessTurnRouter.routeTurn(
         prompt: 'Audit the entire codebase from scratch',
@@ -515,7 +555,17 @@ void main() {
         smartRoutingEnabled: true,
       );
       expect(indoQuestion.modelId, 'gemini-4-hydrogen');
-      expect(indoQuestion.effort, 'medium');
+      expect(indoQuestion.effort, 'low');
+
+      final indoNormalTask = HarnessTurnRouter.routeTurn(
+        prompt: 'tambahin tombol simpan di app/lib/ui/settings_page.dart',
+        selectedModelId: 'gemini-4-hydrogen',
+        selectedEffort: 'high',
+        speedTierName: 'regular',
+        smartRoutingEnabled: true,
+      );
+      expect(indoNormalTask.modelId, 'gemini-4-hydrogen');
+      expect(indoNormalTask.effort, 'medium');
 
       final indoCausalBug = HarnessTurnRouter.routeTurn(
         prompt:
@@ -528,7 +578,7 @@ void main() {
       expect(indoCausalBug.modelId, 'gemini-4-hydrogen');
       expect(indoCausalBug.effort, 'high');
 
-      final indoCompoundConstraint = HarnessTurnRouter.routeTurn(
+      final indoCompoundRefactor = HarnessTurnRouter.routeTurn(
         prompt:
             'tolong ubah tampilan header sekaligus perbaiki bug scroll di chat_page.dart, jangan sampai merusak animasi yang udah jalan',
         selectedModelId: 'gemini-4-hydrogen',
@@ -536,19 +586,20 @@ void main() {
         speedTierName: 'regular',
         smartRoutingEnabled: true,
       );
-      expect(indoCompoundConstraint.modelId, 'gemini-4-hydrogen');
-      expect(indoCompoundConstraint.effort, 'xhigh');
+      expect(indoCompoundRefactor.modelId, 'gemini-4-hydrogen');
+      expect(indoCompoundRefactor.effort, 'high');
 
-      final indoMaxAudit = HarnessTurnRouter.routeTurn(
+      final indoDeepAudit = HarnessTurnRouter.routeTurn(
         prompt:
             'audit keseluruhan aplikasi secara menyeluruh dan rancang ulang arsitektur autentikasi multi-file',
         selectedModelId: 'gemini-4-hydrogen',
         selectedEffort: 'medium',
         speedTierName: 'regular',
         smartRoutingEnabled: true,
+        categoryProfile: const EffortCategoryProfile(deep: 'max'),
       );
-      expect(indoMaxAudit.modelId, 'gemini-4-hydrogen');
-      expect(indoMaxAudit.effort, 'max');
+      expect(indoDeepAudit.modelId, 'gemini-4-hydrogen');
+      expect(indoDeepAudit.effort, 'max');
     });
 
     test('supports inline effort tags, session-aware routing, and forceEscalate', () {
@@ -574,7 +625,7 @@ void main() {
       expect(inlineRouted.modelId, 'gemini-4-hydrogen');
       expect(inlineRouted.effort, 'xhigh');
 
-      // Short follow-up task in a heavy failing multi-file session escalates.
+      // Short follow-up task in a heavy failing multi-file session routes to Refactor.
       final sessionHeavy = HarnessTurnRouter.routeTurn(
         prompt: 'coba periksa lagi bagian auth ini',
         selectedModelId: 'gemini-4-hydrogen',
@@ -585,7 +636,7 @@ void main() {
         sessionChangedFiles: 4,
         sessionHasRecentFailure: true,
       );
-      expect(sessionHeavy.effort, 'xhigh');
+      expect(sessionHeavy.effort, 'high');
 
       // Simple ack stays Low even during a heavy session.
       final sessionAck = HarnessTurnRouter.routeTurn(
@@ -599,6 +650,19 @@ void main() {
         sessionHasRecentFailure: true,
       );
       expect(sessionAck.effort, 'low');
+
+      // EffortCategoryProfile JSON serialization roundtrip.
+      const savedProfile = EffortCategoryProfile(
+        chat: 'low',
+        normal: 'medium',
+        refactor: 'high',
+        deep: 'max',
+        compaction: 'low',
+      );
+      expect(
+        EffortCategoryProfile.decodeJson(savedProfile.encodeJson()),
+        savedProfile,
+      );
 
       // Loop/pivot escalation steps effort up one supported tier.
       final loopEscalateHydrogen = HarnessTurnRouter.routeTurn(

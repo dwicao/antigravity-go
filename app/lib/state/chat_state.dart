@@ -1029,6 +1029,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
             previousTurnEffort: sessionRoutingCtx.previousEffort,
             forceEscalate: forceEscalate,
             explicitEffortOverride: effectiveEffortOverride,
+            categoryProfile: harness.effortProfile,
           )
         : (
             modelId: activeCustom.modelId,
@@ -2708,9 +2709,10 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     final activeCustom = ref.read(activeCustomProviderProvider);
     final compactRoute = (activeCustom == null &&
             sshHost == null &&
-            harness.quotaSaverEnabled)
+            (harness.smartRoutingEnabled || harness.quotaSaverEnabled))
         ? HarnessTurnRouter.resolveCompactionRoute(
             selectedModelId: settings.selectedModelId,
+            categoryProfile: harness.effortProfile,
           )
         : null;
     final activeModelId =

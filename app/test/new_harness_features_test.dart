@@ -720,7 +720,7 @@ diff --git a/app/lib/main.dart b/app/lib/main.dart
     expect(ctx.previousEffort, 'high');
   });
 
-  testWidgets('ChatComposerBar shows live Auto effort preview, !tag preview, and 1-tap pin override',
+  testWidgets('ChatComposerBar shows live category effort preview, !tag preview, and 1-tap pin override',
       (tester) async {
     final container = ProviderContainer();
     addTearDown(container.dispose);
@@ -774,11 +774,15 @@ diff --git a/app/lib/main.dart b/app/lib/main.dart
     await tester.pumpWidget(StatefulBuilder(builder: (_, s) => buildHarness(s)));
     await tester.pumpAndSettle();
 
-    expect(find.text('Auto'), findsOneWidget);
+    expect(find.text('Chat · Low'), findsOneWidget);
+
+    ctrl.text = 'tambahin tombol share';
+    await tester.pump();
+    expect(find.text('Normal · Medium'), findsOneWidget);
 
     ctrl.text = 'tolong benerin UI nya ngefreeze';
     await tester.pump();
-    expect(find.text('Auto · High'), findsOneWidget);
+    expect(find.text('Refactor · High'), findsOneWidget);
 
     ctrl.text = 'tolong cek ini !max';
     await tester.pump();
@@ -792,7 +796,7 @@ diff --git a/app/lib/main.dart b/app/lib/main.dart
     expect(find.text('Pin · Low'), findsOneWidget);
   });
 
-  testWidgets('HarnessPage exposes Inference Speed Tier selector and updates settings', (tester) async {
+  testWidgets('HarnessPage exposes Category Effort Profile & Inference Speed Tier controls', (tester) async {
     final container = ProviderContainer();
     addTearDown(container.dispose);
 
@@ -807,8 +811,15 @@ diff --git a/app/lib/main.dart b/app/lib/main.dart
     );
     await tester.pumpAndSettle();
 
+    expect(find.text('Effort Per Category'), findsOneWidget);
+    await container
+        .read(harnessProvider.notifier)
+        .setCategoryEffort(EffortCategory.deep, 'max');
+    await tester.pumpAndSettle();
+    expect(container.read(harnessProvider).effortProfile.deep, 'max');
+
     final tierLabel = find.text('Ultrafast');
-    await tester.drag(find.byType(ListView), const Offset(0, -300));
+    await tester.drag(find.byType(ListView), const Offset(0, -520));
     await tester.pumpAndSettle();
     await tester.ensureVisible(tierLabel);
     await tester.pumpAndSettle();

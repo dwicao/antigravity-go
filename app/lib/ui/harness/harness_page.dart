@@ -279,7 +279,7 @@ class _HarnessPageState extends ConsumerState<HarnessPage> {
                   secondary: const Icon(Icons.savings_outlined, size: 20),
                   title: const Text('Quota Saver Mode'),
                   subtitle: const Text(
-                    'Adaptive 256K–800K auto-compact, Low effort for /compact & minimal MCP tools',
+                    'Adaptive 256K–800K auto-compact, Compaction effort profile & minimal MCP tools',
                   ),
                   value: harness.quotaSaverEnabled,
                   onChanged: (v) =>
@@ -289,14 +289,156 @@ class _HarnessPageState extends ConsumerState<HarnessPage> {
                 SwitchListTile.adaptive(
                   dense: true,
                   secondary: const Icon(Icons.alt_route_rounded, size: 20),
-                  title: const Text('Smart Effort Routing'),
+                  title: const Text('Category Effort Routing'),
                   subtitle: const Text(
-                    'Adapts Thinking Effort (Low–Max) using prompt, session context, loop escalation & !low–!max tags',
+                    'Uses your configured Thinking Effort per category (Chat, Normal, Refactor, Deep, Compaction)',
                   ),
                   value: harness.smartRoutingEnabled,
                   onChanged: (v) =>
                       ref.read(harnessProvider.notifier).setSmartRouting(v),
                 ),
+                if (harness.smartRoutingEnabled) ...[
+                  const Divider(height: 1),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                'Effort Per Category',
+                                style: theme.textTheme.bodyMedium?.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                            TextButton(
+                              style: TextButton.styleFrom(
+                                visualDensity: VisualDensity.compact,
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 8),
+                              ),
+                              onPressed: harness.effortProfile ==
+                                      EffortCategoryProfile.defaults
+                                  ? null
+                                  : () => ref
+                                      .read(harnessProvider.notifier)
+                                      .resetEffortProfile(),
+                              child: const Text('Reset defaults'),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Always obeys your active model — only Thinking Effort changes per task category (inline !low–!max tags still override).',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        for (final cat in EffortCategory.values)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 6),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        cat.label,
+                                        style:
+                                            theme.textTheme.bodySmall?.copyWith(
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                      Text(
+                                        cat.description,
+                                        style:
+                                            theme.textTheme.bodySmall?.copyWith(
+                                          fontSize: 11,
+                                          color: theme
+                                              .colorScheme.onSurfaceVariant,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                PopupMenuButton<String>(
+                                  tooltip: 'Set effort for ${cat.label}',
+                                  onSelected: (value) => ref
+                                      .read(harnessProvider.notifier)
+                                      .setCategoryEffort(cat, value),
+                                  itemBuilder: (_) => ReasoningEffort.values
+                                      .map(
+                                        (e) => PopupMenuItem<String>(
+                                          value: e.cliValue,
+                                          child: Row(
+                                            children: [
+                                              Expanded(child: Text(e.label)),
+                                              if (harness.effortProfile
+                                                      .effortFor(cat) ==
+                                                  e.cliValue)
+                                                Icon(
+                                                  Icons.check_rounded,
+                                                  size: 16,
+                                                  color:
+                                                      theme.colorScheme.primary,
+                                                ),
+                                            ],
+                                          ),
+                                        ),
+                                      )
+                                      .toList(),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                      vertical: 5,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: theme
+                                          .colorScheme.surfaceContainerHighest,
+                                      borderRadius: BorderRadius.circular(10),
+                                      border: Border.all(
+                                        color: theme.colorScheme.outlineVariant
+                                            .withOpacity(0.45),
+                                      ),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(
+                                          ReasoningEffort.fromString(
+                                            harness.effortProfile
+                                                .effortFor(cat),
+                                          ).label,
+                                          style: theme.textTheme.labelMedium
+                                              ?.copyWith(
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 2),
+                                        Icon(
+                                          Icons.keyboard_arrow_down_rounded,
+                                          size: 16,
+                                          color:
+                                              theme.colorScheme.onSurfaceVariant,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
                 const Divider(height: 1),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
@@ -313,7 +455,7 @@ class _HarnessPageState extends ConsumerState<HarnessPage> {
                       Text(
                         switch (settings.speedTier) {
                           InferenceSpeedTier.regular =>
-                            'Regular: Keeps your selected model & adapts Thinking Effort (Low–Max) to complexity',
+                            'Regular: Keeps your selected model & applies your Category Effort Profile',
                           InferenceSpeedTier.fast =>
                             'Fast: Keeps your selected model & caps Thinking Effort at Medium (Low on simple prompts)',
                           InferenceSpeedTier.ultrafast =>
@@ -386,8 +528,8 @@ class _HarnessPageState extends ConsumerState<HarnessPage> {
                   secondary: const Icon(Icons.compress_rounded, size: 20),
                   title: const Text('Auto-Compact History'),
                   subtitle: Text(
-                    harness.quotaSaverEnabled
-                        ? 'Adaptive auto-compact (256K min · up to 800K for refactors) via Low effort'
+                    (harness.smartRoutingEnabled || harness.quotaSaverEnabled)
+                        ? 'Adaptive auto-compact (256K min · up to 800K for refactors) via ${ReasoningEffort.fromString(harness.effortProfile.compaction).label} effort'
                         : 'Automatically summarizes context when usage exceeds 80%',
                   ),
                   value: harness.autoCompactEnabled,

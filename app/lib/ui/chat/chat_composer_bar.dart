@@ -131,6 +131,9 @@ class ChatComposerBar extends ConsumerWidget {
     final smartRoutingEnabled = ref.watch(
       harnessProvider.select((h) => h.smartRoutingEnabled),
     );
+    final effortProfile = ref.watch(
+      harnessProvider.select((h) => h.effortProfile),
+    );
     final hosts = ref.watch(hostsProvider);
     final customState = ref.watch(customProvidersProvider);
     final activeCustom = customState.activeProfile;
@@ -443,7 +446,25 @@ class ChatComposerBar extends ConsumerWidget {
                             HarnessTurnRouter.extractInlineEffortOverride(
                           textVal.text,
                         );
-                        final autoRoute = HarnessTurnRouter.routeTurn(
+                        final effectivePrompt = inline.cleanPrompt.isNotEmpty
+                            ? inline.cleanPrompt
+                            : textVal.text;
+                        final detectedCat =
+                            HarnessTurnRouter.classifyPromptCategory(
+                          prompt: effectivePrompt,
+                          hasAttachments: hasAttachments,
+                          sessionToolCalls: sessionToolCalls,
+                          sessionChangedFiles: sessionChangedFiles,
+                          sessionHasRecentFailure: sessionHasRecentFailure,
+                        );
+                        final shortCat = switch (detectedCat.category) {
+                          EffortCategory.chat => 'Chat',
+                          EffortCategory.normal => 'Normal',
+                          EffortCategory.refactor => 'Refactor',
+                          EffortCategory.deep => 'Deep',
+                          EffortCategory.compaction => 'Compact',
+                        };
+                        final categoryRoute = HarnessTurnRouter.routeTurn(
                           prompt: textVal.text,
                           selectedModelId: settings.selectedModelId,
                           selectedEffort: settings.reasoningEffort,
@@ -454,9 +475,11 @@ class ChatComposerBar extends ConsumerWidget {
                           sessionChangedFiles: sessionChangedFiles,
                           sessionHasRecentFailure: sessionHasRecentFailure,
                           previousTurnEffort: previousTurnEffort,
+                          categoryProfile: effortProfile,
                         );
                         final effectiveLabel =
-                            ReasoningEffort.fromString(autoRoute.effort).label;
+                            ReasoningEffort.fromString(categoryRoute.effort)
+                                .label;
                         final pinned = nextTurnEffortOverride != null &&
                             nextTurnEffortOverride!.isNotEmpty;
                         final pillLabel = pinned
@@ -464,12 +487,7 @@ class ChatComposerBar extends ConsumerWidget {
                             : inline.effortOverride != null
                                 ? 'Tag · $effectiveLabel'
                                 : smartRoutingEnabled
-                                    ? (textVal.text.trim().isEmpty &&
-                                            !hasAttachments &&
-                                            sessionToolCalls == 0 &&
-                                            !sessionHasRecentFailure
-                                        ? 'Auto'
-                                        : 'Auto · $effectiveLabel')
+                                    ? '$shortCat · $effectiveLabel'
                                     : ReasoningEffort.fromString(
                                         settings.reasoningEffort,
                                       ).label;
@@ -487,14 +505,14 @@ class ChatComposerBar extends ConsumerWidget {
                                     child: Row(
                                       children: [
                                         Icon(
-                                          Icons.auto_awesome_rounded,
+                                          Icons.tune_rounded,
                                           size: 15,
                                           color: theme.colorScheme.primary,
                                         ),
                                         const SizedBox(width: 8),
                                         Expanded(
                                           child: Text(
-                                            'Auto ($effectiveLabel)',
+                                            '$shortCat ($effectiveLabel by profile)',
                                             style: TextStyle(
                                               fontWeight: !pinned
                                                   ? FontWeight.w700

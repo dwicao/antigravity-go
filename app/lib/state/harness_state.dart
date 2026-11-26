@@ -25,6 +25,7 @@ class HarnessState {
     this.autoCompactEnabled = true,
     this.quotaSaverEnabled = true,
     this.smartRoutingEnabled = true,
+    this.effortProfile = EffortCategoryProfile.defaults,
     this.repoMapEnabled = true,
     this.initialized = false,
     this.loading = false,
@@ -47,6 +48,7 @@ class HarnessState {
   final bool autoCompactEnabled;
   final bool quotaSaverEnabled;
   final bool smartRoutingEnabled;
+  final EffortCategoryProfile effortProfile;
   final bool repoMapEnabled;
   final bool initialized;
   final bool loading;
@@ -88,6 +90,7 @@ class HarnessState {
     bool? autoCompactEnabled,
     bool? quotaSaverEnabled,
     bool? smartRoutingEnabled,
+    EffortCategoryProfile? effortProfile,
     bool? repoMapEnabled,
     bool? initialized,
     bool? loading,
@@ -111,6 +114,7 @@ class HarnessState {
       autoCompactEnabled: autoCompactEnabled ?? this.autoCompactEnabled,
       quotaSaverEnabled: quotaSaverEnabled ?? this.quotaSaverEnabled,
       smartRoutingEnabled: smartRoutingEnabled ?? this.smartRoutingEnabled,
+      effortProfile: effortProfile ?? this.effortProfile,
       repoMapEnabled: repoMapEnabled ?? this.repoMapEnabled,
       initialized: initialized ?? this.initialized,
       loading: loading ?? this.loading,
@@ -298,6 +302,7 @@ class HarnessNotifier extends Notifier<HarnessState> {
   static const _kAutoCompact = 'agy_harness_auto_compact';
   static const _kQuotaSaver = 'agy_harness_quota_saver';
   static const _kSmartRouting = 'agy_harness_smart_routing';
+  static const _kEffortProfile = 'agy_harness_effort_profile';
   static const _kRepoMap = 'agy_harness_repo_map';
   static const _kHooksJson = 'agy_harness_lifecycle_hooks';
   static const _kCustomVerify = 'agy_harness_custom_verify';
@@ -392,6 +397,9 @@ class HarnessNotifier extends Notifier<HarnessState> {
       final quotaSaver = prefs.getBool(_kQuotaSaver) ?? true;
       final hooksRaw = prefs.getString(_kHooksJson) ?? '';
       final hooks = LifecycleHooksConfig.decodeJson(hooksRaw);
+      final effortProfile = EffortCategoryProfile.decodeJson(
+        prefs.getString(_kEffortProfile) ?? '',
+      );
       state = state.copyWith(
         loopBreakerEnabled: prefs.getBool(_kLoopBreaker) ?? true,
         autoPivotLoopEnabled: prefs.getBool(_kAutoPivotLoop) ?? true,
@@ -401,6 +409,7 @@ class HarnessNotifier extends Notifier<HarnessState> {
         autoCompactEnabled: prefs.getBool(_kAutoCompact) ?? true,
         quotaSaverEnabled: quotaSaver,
         smartRoutingEnabled: prefs.getBool(_kSmartRouting) ?? true,
+        effortProfile: effortProfile,
         repoMapEnabled: prefs.getBool(_kRepoMap) ?? true,
         customVerifyCommand: prefs.getString(_kCustomVerify),
         hooksConfig: hooks,
@@ -459,6 +468,19 @@ class HarnessNotifier extends Notifier<HarnessState> {
     state = state.copyWith(smartRoutingEnabled: value);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kSmartRouting, value);
+  }
+
+  Future<void> setCategoryEffort(EffortCategory category, String effort) async {
+    final next = state.effortProfile.withCategoryEffort(category, effort);
+    state = state.copyWith(effortProfile: next);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kEffortProfile, next.encodeJson());
+  }
+
+  Future<void> resetEffortProfile() async {
+    state = state.copyWith(effortProfile: EffortCategoryProfile.defaults);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_kEffortProfile);
   }
 
   Future<void> setRepoMapEnabled(bool value) async {

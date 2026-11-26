@@ -947,6 +947,170 @@ ${pendingNote}Do NOT blindly trust prior claims. Independently inspect the works
 /// compaction turns onto lighter models and lower reasoning effort without
 /// downgrading multi-file coding or debugging tasks.
 /// Routes prompt turns cleanly across Thinking Effort tiers while strictly
+/// Prompt/turn work categories whose Thinking Effort can be configured by the user.
+enum EffortCategory {
+  chat('chat', 'Simple Chat / Q&A', 'Greetings, status checks & short questions', 'low'),
+  normal('normal', 'Normal Task', 'Everyday coding, UI tweaks & simple edits', 'medium'),
+  refactor('refactor', 'Refactor & Debug', 'Bug fixes, freezes, multi-file refactors & retries', 'high'),
+  deep('deep', 'Deep & Audit', '/plan, /boost, architecture & full audits', 'xhigh'),
+  compaction('compaction', 'Compaction', 'Manual /compact and automatic history summaries', 'low');
+
+  const EffortCategory(
+    this.id,
+    this.label,
+    this.description,
+    this.defaultEffort,
+  );
+
+  final String id;
+  final String label;
+  final String description;
+  final String defaultEffort;
+
+  static EffortCategory fromId(String? value) {
+    final norm = (value ?? '').trim().toLowerCase();
+    for (final c in EffortCategory.values) {
+      if (c.id == norm) return c;
+    }
+    return EffortCategory.normal;
+  }
+}
+
+/// User-configured Thinking Effort per [EffortCategory].
+class EffortCategoryProfile {
+  const EffortCategoryProfile({
+    this.chat = 'low',
+    this.normal = 'medium',
+    this.refactor = 'high',
+    this.deep = 'xhigh',
+    this.compaction = 'low',
+  });
+
+  static const EffortCategoryProfile defaults = EffortCategoryProfile();
+
+  final String chat;
+  final String normal;
+  final String refactor;
+  final String deep;
+  final String compaction;
+
+  String effortFor(EffortCategory category) {
+    switch (category) {
+      case EffortCategory.chat:
+        return chat;
+      case EffortCategory.normal:
+        return normal;
+      case EffortCategory.refactor:
+        return refactor;
+      case EffortCategory.deep:
+        return deep;
+      case EffortCategory.compaction:
+        return compaction;
+    }
+  }
+
+  EffortCategoryProfile withCategoryEffort(
+    EffortCategory category,
+    String effort,
+  ) {
+    final norm = _normalizeCategoryEffort(effort, fallback: category.defaultEffort);
+    return switch (category) {
+      EffortCategory.chat => copyWith(chat: norm),
+      EffortCategory.normal => copyWith(normal: norm),
+      EffortCategory.refactor => copyWith(refactor: norm),
+      EffortCategory.deep => copyWith(deep: norm),
+      EffortCategory.compaction => copyWith(compaction: norm),
+    };
+  }
+
+  EffortCategoryProfile copyWith({
+    String? chat,
+    String? normal,
+    String? refactor,
+    String? deep,
+    String? compaction,
+  }) {
+    return EffortCategoryProfile(
+      chat: chat ?? this.chat,
+      normal: normal ?? this.normal,
+      refactor: refactor ?? this.refactor,
+      deep: deep ?? this.deep,
+      compaction: compaction ?? this.compaction,
+    );
+  }
+
+  Map<String, String> toJson() => {
+        'chat': chat,
+        'normal': normal,
+        'refactor': refactor,
+        'deep': deep,
+        'compaction': compaction,
+      };
+
+  String encodeJson() => jsonEncode(toJson());
+
+  static String _normalizeCategoryEffort(
+    String? raw, {
+    required String fallback,
+  }) {
+    switch ((raw ?? '').trim().toLowerCase()) {
+      case 'low':
+        return 'low';
+      case 'med':
+      case 'medium':
+        return 'medium';
+      case 'high':
+        return 'high';
+      case 'xhigh':
+      case 'extra':
+      case 'extra_high':
+        return 'xhigh';
+      case 'max':
+        return 'max';
+      default:
+        return fallback;
+    }
+  }
+
+  factory EffortCategoryProfile.fromJson(Map<String, dynamic> json) {
+    return EffortCategoryProfile(
+      chat: _normalizeCategoryEffort(json['chat']?.toString(), fallback: 'low'),
+      normal: _normalizeCategoryEffort(json['normal']?.toString(), fallback: 'medium'),
+      refactor: _normalizeCategoryEffort(json['refactor']?.toString(), fallback: 'high'),
+      deep: _normalizeCategoryEffort(json['deep']?.toString(), fallback: 'xhigh'),
+      compaction: _normalizeCategoryEffort(
+        json['compaction']?.toString(),
+        fallback: 'low',
+      ),
+    );
+  }
+
+  static EffortCategoryProfile decodeJson(String raw) {
+    if (raw.trim().isEmpty) return defaults;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map<String, dynamic>) {
+        return EffortCategoryProfile.fromJson(decoded);
+      }
+    } catch (_) {}
+    return defaults;
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return other is EffortCategoryProfile &&
+        other.chat == chat &&
+        other.normal == normal &&
+        other.refactor == refactor &&
+        other.deep == deep &&
+        other.compaction == compaction;
+  }
+
+  @override
+  int get hashCode => Object.hash(chat, normal, refactor, deep, compaction);
+}
+
+/// Routes prompt turns cleanly across Thinking Effort categories while strictly
 /// preserving the user's selected model (never switching to hardcoded models).
 class HarnessTurnRouter {
   const HarnessTurnRouter._();
@@ -986,8 +1150,13 @@ class HarnessTurnRouter {
     caseSensitive: false,
   );
 
+  static final RegExp _refactorOrDebugRe = RegExp(
+    r'\b(refactor|refaktor|debug|migrasi|migrate|migration|concurrency|konkurensi|race\s+condition|deadlock|memory\s+leak|kebocoran\s+memori|root\s+cause|akar\s+masalah|multi[- ]?file|banyak\s+file|lintas\s+modul|antar\s+modul|redesign|rancang\s+ulang|desain\s+ulang|rombak|rewrite|tulis\s+ulang|investigate|investigasi|telusuri|lacak|optimize|optimasi|optimalkan)\b',
+    caseSensitive: false,
+  );
+
   static final RegExp _bugSymptomRe = RegExp(
-    r'\b(error|eror|fail|failed|gagal|crash|hang|freeze|nge-?freeze|lemot|nge-?lag|lag|macet|bocor|nyangkut|stuck|rusak|mental|force\s+close|expired|kadaluarsa|kedaluwarsa|timeout|exception|anomali|bermasalah|tidak\s+jalan|tak\s+jalan|gak\s+jalan|nggak\s+jalan|ga\s+jalan|tidak\s+bisa|tak\s+bisa|gak\s+bisa|nggak\s+bisa|ga\s+bisa)\b',
+    r'\b(bug|error|eror|fail|failed|gagal|crash|hang|freeze|nge-?freeze|lemot|nge-?lag|lag|macet|bocor|nyangkut|stuck|rusak|mental|force\s+close|expired|kadaluarsa|kedaluwarsa|timeout|exception|anomali|bermasalah|tidak\s+jalan|tak\s+jalan|gak\s+jalan|nggak\s+jalan|ga\s+jalan|tidak\s+bisa|tak\s+bisa|gak\s+bisa|nggak\s+bisa|ga\s+bisa)\b',
     caseSensitive: false,
   );
 
@@ -1097,14 +1266,21 @@ class HarnessTurnRouter {
   }
 
   /// Resolves compaction route while strictly keeping [selectedModelId] and
-  /// dropping Thinking Effort to Low (or empty when the model ignores effort).
+  /// using the user's configured Compaction effort from [categoryProfile].
   static ({String modelId, String effort}) resolveCompactionRoute({
     required String selectedModelId,
+    EffortCategoryProfile categoryProfile = EffortCategoryProfile.defaults,
   }) {
     final modelInfo = AgyModelCatalog.resolve(selectedModelId);
+    if (!modelInfo.supportsEffort) {
+      return (modelId: selectedModelId, effort: '');
+    }
     return (
       modelId: selectedModelId,
-      effort: modelInfo.supportsEffort ? 'low' : '',
+      effort: _clampOverrideToModel(
+        categoryProfile.compaction,
+        modelInfo: modelInfo,
+      ),
     );
   }
 
@@ -1222,14 +1398,11 @@ class HarnessTurnRouter {
     }
   }
 
-  /// Analyzes prompt complexity using weighted semantic, structural, and active
-  /// session context signals in both English and Bahasa Indonesia, returning
-  /// score, detected signals, and target Thinking Effort.
-  static ({int score, String effort, List<String> signals})
-      analyzePromptComplexity({
+  /// Classifies a prompt + session state into a semantic [EffortCategory]
+  /// (`chat`, `normal`, `refactor`, `deep`) plus diagnostic score and signals.
+  static ({EffortCategory category, int score, List<String> signals})
+      classifyPromptCategory({
     required String prompt,
-    required bool supportsExtraEffort,
-    bool supportsMaxEffort = false,
     bool hasAttachments = false,
     int sessionToolCalls = 0,
     int sessionChangedFiles = 0,
@@ -1237,27 +1410,37 @@ class HarnessTurnRouter {
   }) {
     final trimmed = prompt.trim();
     if (trimmed.isEmpty) {
-      return (score: 0, effort: 'low', signals: const ['empty']);
+      return (category: EffortCategory.chat, score: 0, signals: const ['empty']);
     }
 
     if (!hasAttachments &&
         trimmed.startsWith('/') &&
         !_deepCommandRe.hasMatch(trimmed)) {
-      return (score: 0, effort: 'low', signals: const ['utility_command']);
+      return (
+        category: EffortCategory.chat,
+        score: 0,
+        signals: const ['utility_command'],
+      );
     }
 
     if (!hasAttachments && isConversationalAck(trimmed)) {
-      return (score: 0, effort: 'low', signals: const ['conversational_ack']);
+      return (
+        category: EffortCategory.chat,
+        score: 0,
+        signals: const ['conversational_ack'],
+      );
     }
 
     var score = 0;
     final signals = <String>[];
 
-    if (_maxCommandRe.hasMatch(trimmed)) {
+    final isMaxCmd = _maxCommandRe.hasMatch(trimmed);
+    final isPlanCmd = !isMaxCmd && _deepCommandRe.hasMatch(trimmed);
+    if (isMaxCmd) {
       score += 12;
       signals.add('max_command');
-    } else if (_deepCommandRe.hasMatch(trimmed)) {
-      score += 5;
+    } else if (isPlanCmd) {
+      score += 8;
       signals.add('plan_command');
     }
 
@@ -1267,19 +1450,24 @@ class HarnessTurnRouter {
     }
 
     final hasWorkVerb = _complexWorkRe.hasMatch(trimmed);
+    final hasRefactorOrDebug = _refactorOrDebugRe.hasMatch(trimmed);
     final hasSymptom = _bugSymptomRe.hasMatch(trimmed);
-    if (hasWorkVerb || hasSymptom) {
+    if (hasRefactorOrDebug || hasSymptom) {
+      score += 6;
+      signals.add(hasSymptom ? 'bug_symptom' : 'refactor_or_debug');
+    } else if (hasWorkVerb) {
       score += 4;
-      signals.add(hasSymptom ? 'work_or_bug' : 'engineering_task');
+      signals.add('engineering_task');
     }
 
     final extraMatches = _extraComplexWorkRe.allMatches(trimmed).length;
     if (extraMatches > 0) {
-      score += 5 + (extraMatches >= 2 ? 2 : 0);
+      score += 6 + (extraMatches >= 2 ? 2 : 0);
       signals.add('deep_domain($extraMatches)');
     }
 
-    if (_maxComplexWorkRe.hasMatch(trimmed)) {
+    final hasMaxScope = _maxComplexWorkRe.hasMatch(trimmed);
+    if (hasMaxScope) {
       score += 8;
       signals.add('exhaustive_scope');
     }
@@ -1351,25 +1539,66 @@ class HarnessTurnRouter {
       signals.add('prior_failure_recovery');
     }
 
-    final int level;
-    if (score >= 12) {
-      level = 5;
-    } else if (score >= 7) {
-      level = 4;
-    } else if (score >= 4) {
-      level = 3;
+    final EffortCategory category;
+    if (score >= 11 ||
+        isMaxCmd ||
+        isPlanCmd ||
+        hasMaxScope ||
+        extraMatches > 0) {
+      category = EffortCategory.deep;
+    } else if (score >= 7 ||
+        hasRefactorOrDebug ||
+        hasSymptom ||
+        sessionChangedFiles >= 3 ||
+        sessionHasRecentFailure) {
+      category = EffortCategory.refactor;
+    } else if (score >= 1 ||
+        hasWorkVerb ||
+        hasAttachments ||
+        codeMatches > 0 ||
+        trimmed.length > 80) {
+      category = EffortCategory.normal;
     } else {
-      level = 2;
+      category = EffortCategory.chat;
     }
 
+    return (category: category, score: score, signals: signals);
+  }
+
+  /// Analyzes prompt complexity using weighted semantic, structural, and active
+  /// session context signals in both English and Bahasa Indonesia, returning
+  /// score, detected signals, and target Thinking Effort.
+  static ({int score, String effort, List<String> signals})
+      analyzePromptComplexity({
+    required String prompt,
+    required bool supportsExtraEffort,
+    bool supportsMaxEffort = false,
+    bool hasAttachments = false,
+    int sessionToolCalls = 0,
+    int sessionChangedFiles = 0,
+    bool sessionHasRecentFailure = false,
+  }) {
+    final classified = classifyPromptCategory(
+      prompt: prompt,
+      hasAttachments: hasAttachments,
+      sessionToolCalls: sessionToolCalls,
+      sessionChangedFiles: sessionChangedFiles,
+      sessionHasRecentFailure: sessionHasRecentFailure,
+    );
+    final int level = switch (classified.category) {
+      EffortCategory.chat || EffortCategory.compaction => 1,
+      EffortCategory.normal => 2,
+      EffortCategory.refactor => 3,
+      EffortCategory.deep => classified.score >= 12 ? 5 : 4,
+    };
     return (
-      score: score,
+      score: classified.score,
       effort: _mapComplexityLevelToEffort(
         level,
         supportsExtraEffort: supportsExtraEffort,
         supportsMaxEffort: supportsMaxEffort,
       ),
-      signals: signals,
+      signals: classified.signals,
     );
   }
 
@@ -1410,6 +1639,7 @@ class HarnessTurnRouter {
     String? previousTurnEffort,
     bool forceEscalate = false,
     String? explicitEffortOverride,
+    EffortCategoryProfile categoryProfile = EffortCategoryProfile.defaults,
   }) {
     final inline = extractInlineEffortOverride(prompt);
     final effectivePrompt =
@@ -1445,23 +1675,23 @@ class HarnessTurnRouter {
     }
 
     final normalizedSelected = selectedEffort.trim().toLowerCase();
-    final supportsMax =
-        modelInfo.supportsMaxEffort || modelInfo.supportsExtraEffort;
+    final detected = classifyPromptCategory(
+      prompt: effectivePrompt,
+      hasAttachments: hasAttachments,
+      sessionToolCalls: sessionToolCalls,
+      sessionChangedFiles: sessionChangedFiles,
+      sessionHasRecentFailure: sessionHasRecentFailure || forceEscalate,
+    );
+    final profileEffort = _clampOverrideToModel(
+      categoryProfile.effortFor(detected.category),
+      modelInfo: modelInfo,
+    );
 
     if (forceEscalate) {
-      final classified = classifyEffortForPrompt(
-        prompt: effectivePrompt,
-        supportsExtraEffort: modelInfo.supportsExtraEffort,
-        supportsMaxEffort: supportsMax,
-        hasAttachments: hasAttachments,
-        sessionToolCalls: sessionToolCalls,
-        sessionChangedFiles: sessionChangedFiles,
-        sessionHasRecentFailure: true,
-      );
       final baseline =
-          _effortRank(previousTurnEffort ?? '') > _effortRank(classified)
+          _effortRank(previousTurnEffort ?? '') > _effortRank(profileEffort)
               ? previousTurnEffort!
-              : classified;
+              : profileEffort;
       final escalated = stepUpEffort(baseline, modelInfo: modelInfo);
       return (
         modelId: selectedModelId,
@@ -1477,29 +1707,12 @@ class HarnessTurnRouter {
       nextEffort = 'low';
     } else if (tier == 'fast') {
       if (smartRoutingEnabled) {
-        final classified = classifyEffortForPrompt(
-          prompt: effectivePrompt,
-          supportsExtraEffort: modelInfo.supportsExtraEffort,
-          supportsMaxEffort: supportsMax,
-          hasAttachments: hasAttachments,
-          sessionToolCalls: sessionToolCalls,
-          sessionChangedFiles: sessionChangedFiles,
-          sessionHasRecentFailure: sessionHasRecentFailure,
-        );
-        nextEffort = classified == 'low' ? 'low' : 'medium';
+        nextEffort = detected.category == EffortCategory.chat ? 'low' : 'medium';
       } else {
         nextEffort = normalizedSelected == 'low' ? 'low' : 'medium';
       }
     } else if (smartRoutingEnabled) {
-      nextEffort = classifyEffortForPrompt(
-        prompt: effectivePrompt,
-        supportsExtraEffort: modelInfo.supportsExtraEffort,
-        supportsMaxEffort: supportsMax,
-        hasAttachments: hasAttachments,
-        sessionToolCalls: sessionToolCalls,
-        sessionChangedFiles: sessionChangedFiles,
-        sessionHasRecentFailure: sessionHasRecentFailure,
-      );
+      nextEffort = profileEffort;
     } else {
       nextEffort = selectedEffort;
     }
