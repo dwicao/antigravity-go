@@ -5,6 +5,8 @@ import io.github.dwicao.antigravity_go.runtime.CustomizationsOps
 import io.github.dwicao.antigravity_go.runtime.LifecycleHooksManager
 import io.github.dwicao.antigravity_go.runtime.WorkspaceOps
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.Paths
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -114,6 +116,13 @@ class NewHarnessNativeTest {
         assertFalse(extraFile.exists())
 
         // Verify gitDiff works on shadow-git workspace with modified + untracked files
+        // and excludes runtime convenience symlinks like phone_storage -> /storage/emulated/0.
+        runCatching {
+            Files.createSymbolicLink(
+                File(work, "phone_storage").toPath(),
+                Paths.get("/storage/emulated/0"),
+            )
+        }
         mainFile.writeText("v1\nadded_line\n")
         File(work, "brand_new.kt").writeText("fun hello() {}\n")
         val diffRes = ops.gitDiff(work.absolutePath)
@@ -121,5 +130,9 @@ class NewHarnessNativeTest {
         assertTrue((diffRes["diff"] ?: "").contains("added_line"))
         assertTrue((diffRes["diff"] ?: "").contains("brand_new.kt"))
         assertTrue((diffRes["numstat"] ?: "").contains("brand_new.kt"))
+        assertFalse((diffRes["diff"] ?: "").contains("phone_storage"))
+        assertFalse((diffRes["diff"] ?: "").contains("/storage/emulated/0"))
+        assertFalse((diffRes["numstat"] ?: "").contains("phone_storage"))
+        assertFalse((diffRes["status"] ?: "").contains("phone_storage"))
     }
 }

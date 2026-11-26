@@ -3,6 +3,7 @@ package io.github.dwicao.antigravity_go.runtime
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.nio.file.Files
 import java.security.MessageDigest
 
 /**
@@ -56,8 +57,12 @@ internal class WorkspaceOps(
         }
 
         val workEnv = if (shadowDir != null) mapOf("GIT_WORK_TREE" to dir.absolutePath) else emptyMap()
+        if (shadowDir != null) {
+            ensureShadowExclude(shadowDir)
+        }
+        val pathFilterArgs = shadowExcludeArgs.toTypedArray()
         val (_, statusRaw) = runCapturedArgs(
-            gitCmd(shadowDir, "status", "--short", "-uall"),
+            gitCmd(shadowDir, "status", "--short", "-uall", *pathFilterArgs),
             dir,
             workEnv,
             20,
@@ -74,13 +79,21 @@ internal class WorkspaceOps(
         val numstatText: String
         if (shadowDir != null) {
             val (_, d) = runCapturedArgs(
-                if (hasHead) gitCmd(shadowDir, "diff", "HEAD") else gitCmd(shadowDir, "diff"),
+                if (hasHead) {
+                    gitCmd(shadowDir, "diff", "HEAD", *pathFilterArgs)
+                } else {
+                    gitCmd(shadowDir, "diff", *pathFilterArgs)
+                },
                 dir,
                 workEnv,
                 25,
             )
             val (_, n) = runCapturedArgs(
-                if (hasHead) gitCmd(shadowDir, "diff", "--numstat", "HEAD") else gitCmd(shadowDir, "diff", "--numstat"),
+                if (hasHead) {
+                    gitCmd(shadowDir, "diff", "--numstat", "HEAD", *pathFilterArgs)
+                } else {
+                    gitCmd(shadowDir, "diff", "--numstat", *pathFilterArgs)
+                },
                 dir,
                 workEnv,
                 25,
@@ -88,15 +101,15 @@ internal class WorkspaceOps(
             diffText = d
             numstatText = n
         } else if (hasHead) {
-            val (_, d) = runCapturedArgs(gitCmd(null, "diff", "HEAD"), dir, emptyMap(), 25)
-            val (_, n) = runCapturedArgs(gitCmd(null, "diff", "--numstat", "HEAD"), dir, emptyMap(), 25)
+            val (_, d) = runCapturedArgs(gitCmd(null, "diff", "HEAD", *pathFilterArgs), dir, emptyMap(), 25)
+            val (_, n) = runCapturedArgs(gitCmd(null, "diff", "--numstat", "HEAD", *pathFilterArgs), dir, emptyMap(), 25)
             diffText = d
             numstatText = n
         } else {
-            val (_, d1) = runCapturedArgs(gitCmd(null, "diff"), dir, emptyMap(), 25)
-            val (_, d2) = runCapturedArgs(gitCmd(null, "diff", "--cached"), dir, emptyMap(), 25)
-            val (_, n1) = runCapturedArgs(gitCmd(null, "diff", "--numstat"), dir, emptyMap(), 25)
-            val (_, n2) = runCapturedArgs(gitCmd(null, "diff", "--cached", "--numstat"), dir, emptyMap(), 25)
+            val (_, d1) = runCapturedArgs(gitCmd(null, "diff", *pathFilterArgs), dir, emptyMap(), 25)
+            val (_, d2) = runCapturedArgs(gitCmd(null, "diff", "--cached", *pathFilterArgs), dir, emptyMap(), 25)
+            val (_, n1) = runCapturedArgs(gitCmd(null, "diff", "--numstat", *pathFilterArgs), dir, emptyMap(), 25)
+            val (_, n2) = runCapturedArgs(gitCmd(null, "diff", "--cached", "--numstat", *pathFilterArgs), dir, emptyMap(), 25)
             diffText = listOf(d1.trim(), d2.trim()).filter { it.isNotEmpty() }.joinToString("\n")
             numstatText = listOf(n1.trim(), n2.trim()).filter { it.isNotEmpty() }.joinToString("\n")
         }
@@ -117,8 +130,9 @@ internal class WorkspaceOps(
             if (rel.startsWith("\"") && rel.endsWith("\"") && rel.length >= 2) {
                 rel = rel.substring(1, rel.length - 1)
             }
-            if (rel.isEmpty() || rel.endsWith("/")) continue
+            if (rel.isEmpty() || rel.endsWith("/") || isIgnoredRuntimeLink(rel)) continue
             val f = File(dir, rel)
+            if (runCatching { Files.isSymbolicLink(f.toPath()) }.getOrDefault(false)) continue
             if (!f.isFile || f.length() > 64 * 1024) continue
             val sample = ByteArray(512)
             val n = runCatching { f.inputStream().use { it.read(sample) } }.getOrDefault(0)
@@ -258,6 +272,23 @@ internal class WorkspaceOps(
         false
     }
 
+    private val ignoredRuntimeLinks = setOf("phone_storage", "sdcard")
+    private val shadowExcludeArgs = listOf("--", ".", ":(exclude)phone_storage", ":(exclude)sdcard")
+
+    private fun isIgnoredRuntimeLink(relPath: String): Boolean {
+        val clean = relPath.trim().trimStart('/').removeSuffix("/")
+        return clean in ignoredRuntimeLinks
+    }
+
+    private fun ensureShadowExclude(shadowDir: File) {
+        runCatching {
+            val infoDir = File(shadowDir, "info").apply { mkdirs() }
+            File(infoDir, "exclude").writeText(
+                ".git/\n.gradle/\nbuild/\nnode_modules/\n.dart_tool/\n.agy-harness/\nphone_storage\nsdcard\n",
+            )
+        }
+    }
+
     private fun shadowGitDir(workDir: File): File {
         val canonical = runCatching { workDir.canonicalPath }.getOrElse { workDir.absolutePath }
         val digest = MessageDigest.getInstance("SHA-256")
@@ -280,28 +311,27 @@ internal class WorkspaceOps(
         if (!shadowDir.exists()) {
             shadowDir.mkdirs()
             val (initCode, _) = runCapturedArgs(
-                listOf("git", "init", "--bare", shadowDir.absolutePath),
+                gitCmd(null, "init", "--bare", shadowDir.absolutePath),
                 workDir,
                 emptyMap(),
                 30,
             )
             if (initCode != 0) return null
-            val infoDir = File(shadowDir, "info").apply { mkdirs() }
-            File(infoDir, "exclude").writeText(
-                ".git/\n.gradle/\nbuild/\nnode_modules/\n.dart_tool/\n.agy-harness/\n",
-            )
+            ensureShadowExclude(shadowDir)
             runCapturedArgs(
-                listOf("git", "--git-dir=${shadowDir.absolutePath}", "config", "user.name", "Antigravity"),
+                gitCmd(shadowDir, "config", "user.name", "Antigravity"),
                 workDir,
                 emptyMap(),
                 15,
             )
             runCapturedArgs(
-                listOf("git", "--git-dir=${shadowDir.absolutePath}", "config", "user.email", "harness@antigravity.local"),
+                gitCmd(shadowDir, "config", "user.email", "harness@antigravity.local"),
                 workDir,
                 emptyMap(),
                 15,
             )
+        } else {
+            ensureShadowExclude(shadowDir)
         }
         val (headCode, headOut) = runCapturedArgs(
             gitCmd(shadowDir, "rev-parse", "--verify", "HEAD"),
@@ -319,7 +349,8 @@ internal class WorkspaceOps(
                 "GIT_INDEX_FILE" to tmpIdx.absolutePath,
                 "GIT_WORK_TREE" to workDir.absolutePath,
             )
-            runCapturedArgs(gitCmd(shadowDir, "add", "-A"), workDir, env, 30)
+            val addArgs = shadowExcludeArgs.toTypedArray()
+            runCapturedArgs(gitCmd(shadowDir, "add", "-A", *addArgs), workDir, env, 30)
             val (treeCode, treeOut) = runCapturedArgs(gitCmd(shadowDir, "write-tree"), workDir, env, 30)
             val treeSha = treeOut.trim()
             if (treeCode != 0 || treeSha.isEmpty()) return null
@@ -380,8 +411,17 @@ internal class WorkspaceOps(
                     put("GIT_WORK_TREE", dir.absolutePath)
                 }
             }
+            val addArgs = shadowExcludeArgs.toTypedArray()
             runCapturedArgs(gitCmd(shadowDir, "read-tree", headSha), dir, env, 30)
-            runCapturedArgs(gitCmd(shadowDir, "add", "-A"), dir, env, 30)
+            runCapturedArgs(gitCmd(shadowDir, "add", "-A", *addArgs), dir, env, 30)
+            if (shadowDir != null) {
+                runCapturedArgs(
+                    gitCmd(shadowDir, "rm", "-r", "--cached", "--ignore-unmatch", "phone_storage", "sdcard"),
+                    dir,
+                    env,
+                    15,
+                )
+            }
             val (treeCode, treeOut) = runCapturedArgs(gitCmd(shadowDir, "write-tree"), dir, env, 30)
             val treeSha = treeOut.trim()
             if (treeCode != 0 || treeSha.isEmpty()) {
@@ -467,7 +507,7 @@ internal class WorkspaceOps(
             }
             if (shadowDir == null) {
                 val (resetCode, resetOut) = runCapturedArgs(
-                    listOf("git", "reset", "--hard", baseHead),
+                    gitCmd(null, "reset", "--hard", baseHead),
                     dir,
                     emptyMap(),
                     30,
@@ -475,6 +515,8 @@ internal class WorkspaceOps(
                 if (resetCode != 0) {
                     return mapOf("ok" to false, "ref" to cleanRef, "output" to resetOut.trim())
                 }
+            } else {
+                ensureShadowExclude(shadowDir)
             }
             val (readTreeCode, readTreeOut) = runCapturedArgs(
                 gitCmd(shadowDir, "read-tree", "--reset", "-u", cleanRef),
@@ -500,7 +542,7 @@ internal class WorkspaceOps(
             )
             for (rel in untrackedRaw.lineSequence()) {
                 val p = rel.trim()
-                if (p.isNotEmpty() && p !in snapFiles) {
+                if (p.isNotEmpty() && p !in snapFiles && !isIgnoredRuntimeLink(p)) {
                     runCatching { File(dir, p).delete() }
                 }
             }

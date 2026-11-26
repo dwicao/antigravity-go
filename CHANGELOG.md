@@ -2,6 +2,11 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.39] - 2026-11-26
+
+### Fixed
+- **Exclude `phone_storage` / `sdcard` Runtime Symlinks from Git Diff & Shadow Git:** Updated `WorkspaceOps` (`gitDiff`, `ensureShadowGitInitialized`, `createCheckpoint`, `restoreCheckpoint`) to ignore runtime convenience symlinks (`phone_storage`, `sdcard`) via `info/exclude`, Git `:(exclude)` pathspecs, and symlink guards so `phone_storage` (`-/storage/emulated/0`) no longer shows up as a phantom 1-line deletion.
+
 ## [1.0.38] - 2026-11-26
 
 ### Fixed
