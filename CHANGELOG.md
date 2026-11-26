@@ -2,6 +2,15 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.56] - 2026-11-27
+
+### Improved & Optimized
+- **Compact, Mobile-First Settings UI (`SettingsPage`):**
+  - Tightened padding/card margins (`ConstrainedBox(maxWidth: 640)` on wide screens, zero outer card margin on narrow phones), added compact tiles, switches, action buttons, choice chips, badges, and full-width `SegmentedButton` controls (`showSelectedIcon: false`) so nothing clips or feels oversized on 360px phone screens.
+- **Much Faster Usage Limits Probing & Instant Cache (`RuntimeController`, `SshAgyRunner`, `UsageNotifier`, `UsagePage`):**
+  - Parallelized `agy models`, `/usage`, and `/credits` CLI probes on both Android native (`RuntimeController.probeUsage`) and SSH (`SshAgyRunner.probeUsage`), plus streaming early-exit in `runInteractiveProbe` as soon as quota metrics arrive instead of waiting out the full timeout.
+  - Added persistent probe caching in `SharedPreferences` (`agy_usage_probe_cache_v1`), in-flight probe deduplication, and a 60s freshness window on auto-open (`force: true` on manual refresh) so `UsagePage` opens instantaneously.
+
 ## [1.0.55] - 2026-11-27
 
 ### Fixed

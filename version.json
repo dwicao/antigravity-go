@@ -1,7 +1,7 @@
 {
-  "version": "1.0.55",
+  "version": "1.0.56",
   "buildNumber": 1,
-  "tag": "v1.0.55",
+  "tag": "v1.0.56",
   "changelogUrl": "https://github.com/dwicao/antigravity-go/blob/main/CHANGELOG.md",
-  "releaseNotes": "### Fixed\n- **Accurate Previous / Next User Turn Navigation (`ChatScreen`, `ChatTurnHelpers`):**\n  - Replaced blind scroll-ratio jumps and stale turn cursors with viewport-aware direction tracking (`ChatTurnHelpers.resolveTurnNavigationTarget` + `_ChatRowMountProbe`), so pressing **Previous user turn** from inside a long AI reply jumps cleanly to that turn's user bubble (then steps upward), and pressing **Next user turn** at the bottom never jumps backward to Turn #0.\n  - Reset turn cursor automatically on manual scrolling, prompt submission/steering, and *Jump to latest*; locked `_isProgrammaticScroll` and waited for `_visibleLimit` expansion layout before binary-seeking across variable-height `ListView` items and aligning smoothly with `Scrollable.ensureVisible`."
+  "releaseNotes": "### Improved & Optimized\n- **Compact, Mobile-First Settings UI (`SettingsPage`):**\n  - Tightened padding/card margins (`ConstrainedBox(maxWidth: 640)` on wide screens, zero outer card margin on narrow phones), added compact tiles, switches, action buttons, choice chips, badges, and full-width `SegmentedButton` controls (`showSelectedIcon: false`) so nothing clips or feels oversized on 360px phone screens.\n- **Much Faster Usage Limits Probing & Instant Cache (`RuntimeController`, `SshAgyRunner`, `UsageNotifier`, `UsagePage`):**\n  - Parallelized `agy models`, `/usage`, and `/credits` CLI probes on both Android native (`RuntimeController.probeUsage`) and SSH (`SshAgyRunner.probeUsage`), plus streaming early-exit in `runInteractiveProbe` as soon as quota metrics arrive instead of waiting out the full timeout.\n  - Added persistent probe caching in `SharedPreferences` (`agy_usage_probe_cache_v1`), in-flight probe deduplication, and a 60s freshness window on auto-open (`force: true` on manual refresh) so `UsagePage` opens instantaneously."
 }
