@@ -397,10 +397,23 @@ diff --git a/app/lib/main.dart b/app/lib/main.dart
 
     final wordRange = DiffSyntaxHighlighter.computeIntralineRange(
       "print('hello');",
-      "print('hi');",
+      "print('world');",
     );
     expect(wordRange, isNotNull);
     expect("print('hello');".substring(wordRange!.start, wordRange.end), 'hello');
+
+    final prefixSharedRange = DiffSyntaxHighlighter.computeIntralineRange(
+      "print('hello');",
+      "print('hi');",
+    );
+    expect(prefixSharedRange, isNotNull);
+    expect(
+      "print('hello');".substring(
+        prefixSharedRange!.start,
+        prefixSharedRange.end,
+      ),
+      'ello',
+    );
   });
 }
 
