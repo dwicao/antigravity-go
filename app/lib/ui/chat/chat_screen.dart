@@ -18,6 +18,7 @@ import 'secret_mask.dart';
 import '../../state/auth_state.dart';
 import '../../state/background_tasks_state.dart';
 import '../../state/chat_state.dart';
+import '../../state/chat_turn_helpers.dart';
 import '../../state/custom_providers_state.dart';
 import '../../state/customizations_state.dart';
 import '../../state/device_policy_state.dart';
@@ -149,6 +150,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   Future<void> _jumpToBottom({bool animate = true}) async {
     if (!_scrollController.hasClients) return;
     final target = _scrollController.position.maxScrollExtent;
+    _turnCursor = null;
     _userActivelyScrollingUp = false;
     if (mounted && !_followLatest) {
       setState(() => _followLatest = true);
@@ -173,8 +175,37 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   final Map<String, GlobalKey> _turnKeys = {};
+  final Map<int, BuildContext> _mountedRowContexts = {};
   int? _turnCursor;
+  int _turnJumpToken = 0;
   bool _reconnectDismissed = false;
+
+  ({int index, double top})? _detectTopVisibleMessage() {
+    if (!_scrollController.hasClients) return null;
+    final viewportRender =
+        _scrollController.position.context.notificationContext?.findRenderObject();
+    final viewportBox = viewportRender is RenderBox ? viewportRender : null;
+    if (viewportBox == null || !viewportBox.hasSize) return null;
+
+    int? bestIdx;
+    double? bestTop;
+    final sortedIndices = _mountedRowContexts.keys.toList()..sort();
+    for (final idx in sortedIndices) {
+      final ctx = _mountedRowContexts[idx];
+      if (ctx == null || !ctx.mounted) continue;
+      final ro = ctx.findRenderObject();
+      if (ro is! RenderBox || !ro.hasSize || !ro.attached) continue;
+      final top = ro.localToGlobal(Offset.zero, ancestor: viewportBox).dy;
+      final bottom = top + ro.size.height;
+      if (bottom > 12.0) {
+        bestIdx = idx;
+        bestTop = top;
+        break;
+      }
+    }
+    if (bestIdx == null || bestTop == null) return null;
+    return (index: bestIdx, top: bestTop);
+  }
 
   Future<void> _jumpUserTurn(
     List<ChatMessage> messages, {
@@ -185,52 +216,133 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         if (messages[i].role == ChatRole.user) i,
     ];
     if (userIndices.isEmpty || !_scrollController.hasClients) return;
-    final current = _turnCursor ?? (delta < 0 ? userIndices.length : -1);
-    final nextIdx = (current + delta).clamp(0, userIndices.length - 1);
-    setState(() {
-      _turnCursor = nextIdx;
-      _followLatest = false;
-    });
+
+    final topVisible = _detectTopVisibleMessage();
+    final pos = _scrollController.position;
+    final atBottom = pos.pixels >= pos.maxScrollExtent - 8.0;
+    final nextIdx = ChatTurnHelpers.resolveTurnNavigationTarget(
+      userIndices: userIndices,
+      delta: delta,
+      currentCursor: _turnCursor,
+      firstVisibleMessageIndex: topVisible?.index,
+      firstVisibleMessageTop: topVisible?.top,
+      isAtBottom: atBottom,
+    );
+    if (nextIdx == null) return;
+
+    final myToken = ++_turnJumpToken;
     final msgIndex = userIndices[nextIdx];
     final targetId = messages[msgIndex].id;
     final hiddenCount = messages.length > _visibleLimit
         ? messages.length - _visibleLimit
         : 0;
-    if (msgIndex < hiddenCount) {
-      setState(() {
-        _visibleLimit = messages.length - msgIndex + 4;
-      });
-    }
-    final keyCtx = _turnKeys[targetId]?.currentContext;
-    if (keyCtx != null) {
-      await Scrollable.ensureVisible(
-        keyCtx,
-        duration: const Duration(milliseconds: 240),
-        curve: Curves.easeOutCubic,
-        alignment: 0.08,
-      );
-      return;
-    }
-    final maxExtent = _scrollController.position.maxScrollExtent;
-    final ratio = messages.length <= 1
-        ? 0.0
-        : (msgIndex / (messages.length - 1)).clamp(0.0, 1.0);
-    await _scrollController.animateTo(
-      maxExtent * ratio,
-      duration: const Duration(milliseconds: 240),
-      curve: Curves.easeOutCubic,
-    );
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final ctxAfter = _turnKeys[targetId]?.currentContext;
-      if (ctxAfter != null && mounted) {
-        Scrollable.ensureVisible(
-          ctxAfter,
-          duration: const Duration(milliseconds: 160),
-          curve: Curves.easeOut,
-          alignment: 0.08,
-        );
+    final needExpand = msgIndex < hiddenCount;
+
+    _remainingOpenSnapFrames = 0;
+    _userActivelyScrollingUp = false;
+    setState(() {
+      _turnCursor = nextIdx;
+      _followLatest = false;
+      if (needExpand) {
+        _visibleLimit =
+            (messages.length - msgIndex + 6).clamp(_initialMessageWindow, messages.length);
       }
     });
+
+    _isProgrammaticScroll = true;
+    try {
+      if (needExpand) {
+        await WidgetsBinding.instance.endOfFrame;
+        if (!mounted || myToken != _turnJumpToken || !_scrollController.hasClients) {
+          return;
+        }
+      }
+
+      if (_turnKeys[targetId]?.currentContext == null) {
+        final effectiveHidden = messages.length > _visibleLimit
+            ? messages.length - _visibleLimit
+            : 0;
+        final visibleTotal = (messages.length - effectiveHidden).clamp(1, messages.length);
+        final visiblePos = (msgIndex - effectiveHidden).clamp(0, visibleTotal - 1);
+
+        var low = 0.0;
+        var high = _scrollController.position.maxScrollExtent;
+        var minMounted = -1;
+        var maxMounted = -1;
+        for (final k in _mountedRowContexts.keys) {
+          if (_mountedRowContexts[k]?.mounted == true) {
+            if (minMounted == -1 || k < minMounted) minMounted = k;
+            if (k > maxMounted) maxMounted = k;
+          }
+        }
+        final curPx = _scrollController.position.pixels;
+        if (maxMounted >= 0 && maxMounted < msgIndex && curPx > low) {
+          low = curPx;
+        } else if (minMounted >= 0 && minMounted > msgIndex && curPx < high) {
+          high = curPx;
+        }
+
+        final ratio = visibleTotal <= 1 ? 0.0 : visiblePos / (visibleTotal - 1);
+        var guess = (high * ratio).clamp(low, high);
+
+        for (var step = 0; step < 16; step++) {
+          final maxNow = _scrollController.position.maxScrollExtent;
+          if (maxNow > high) high = maxNow;
+          final clampedGuess = guess.clamp(0.0, maxNow);
+          _scrollController.jumpTo(clampedGuess);
+          await WidgetsBinding.instance.endOfFrame;
+          if (!mounted ||
+              myToken != _turnJumpToken ||
+              !_scrollController.hasClients) {
+            return;
+          }
+          if (_turnKeys[targetId]?.currentContext != null) break;
+
+          var stepMin = -1;
+          var stepMax = -1;
+          for (final k in _mountedRowContexts.keys) {
+            if (_mountedRowContexts[k]?.mounted == true) {
+              if (stepMin == -1 || k < stepMin) stepMin = k;
+              if (k > stepMax) stepMax = k;
+            }
+          }
+          final nowPx = _scrollController.position.pixels;
+          final nextMax = _scrollController.position.maxScrollExtent;
+          if (nextMax > high) high = nextMax;
+
+          if (stepMax >= 0 && stepMax < msgIndex) {
+            low = nowPx;
+            if (high <= low + 4.0) {
+              high = nextMax;
+            }
+            guess = (low + high) * 0.5;
+          } else if (stepMin >= 0 && stepMin > msgIndex) {
+            high = nowPx;
+            guess = (low + high) * 0.5;
+          } else {
+            break;
+          }
+          if ((high - low).abs() < 4.0) break;
+        }
+      }
+
+      final keyCtx = _turnKeys[targetId]?.currentContext;
+      if (keyCtx != null && mounted && myToken == _turnJumpToken) {
+        await Scrollable.ensureVisible(
+          keyCtx,
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOutCubic,
+          alignment: 0.04,
+        );
+      }
+      if (mounted && myToken == _turnJumpToken) {
+        _onScroll();
+      }
+    } finally {
+      if (myToken == _turnJumpToken) {
+        _isProgrammaticScroll = false;
+      }
+    }
   }
 
   Future<void> _showMultiSelectCopySheet(
@@ -625,11 +737,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         ? '> ${quote.replaceAll('\n', '\n> ')}\n\n$text'
         : text;
     _clearInputMenus(clearAttachments: true);
-    if ((_quotedText != null || _nextTurnEffortOverride != null) && mounted) {
+    if (mounted) {
       setState(() {
         _quotedText = null;
         _nextTurnEffortOverride = null;
+        _turnCursor = null;
       });
+    } else {
+      _turnCursor = null;
     }
     WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
     await ref.read(chatProvider.notifier).sendPrompt(
@@ -685,6 +800,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       _showSlashMenu = false;
       _showMentionMenu = false;
       _nextTurnEffortOverride = null;
+      _turnCursor = null;
     });
     WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
     await ref.read(chatProvider.notifier).steerNow(
@@ -916,6 +1032,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       _visibleLimit = _initialMessageWindow;
       _turnCursor = null;
       _turnKeys.clear();
+      _mountedRowContexts.clear();
     }
     if (chat.messages.isNotEmpty) {
       final readyForActive = chat.loadedSessionId == null ||
@@ -1292,6 +1409,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                     notification.metrics.axis != Axis.vertical) {
                                   return false;
                                 }
+                                if (!_isProgrammaticScroll &&
+                                    notification.direction !=
+                                        ScrollDirection.idle) {
+                                  _turnCursor = null;
+                                }
                                 if (notification.direction ==
                                     ScrollDirection.forward) {
                                   _remainingOpenSnapFrames = 0;
@@ -1509,8 +1631,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                                             ),
                                           ),
                                         );
-                                        final wrapped = RepaintBoundary(
-                                          child: bubble,
+                                        final wrapped = _ChatRowMountProbe(
+                                          index: globalIdx,
+                                          registry: _mountedRowContexts,
+                                          child: RepaintBoundary(
+                                            child: bubble,
+                                          ),
                                         );
                                         return turnKey == null
                                             ? wrapped
@@ -2210,6 +2336,50 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       ],
     );
   }
+}
+
+class _ChatRowMountProbe extends StatefulWidget {
+  const _ChatRowMountProbe({
+    required this.index,
+    required this.registry,
+    required this.child,
+  });
+
+  final int index;
+  final Map<int, BuildContext> registry;
+  final Widget child;
+
+  @override
+  State<_ChatRowMountProbe> createState() => _ChatRowMountProbeState();
+}
+
+class _ChatRowMountProbeState extends State<_ChatRowMountProbe> {
+  @override
+  void initState() {
+    super.initState();
+    widget.registry[widget.index] = context;
+  }
+
+  @override
+  void didUpdateWidget(covariant _ChatRowMountProbe oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.index != widget.index &&
+        oldWidget.registry[oldWidget.index] == context) {
+      oldWidget.registry.remove(oldWidget.index);
+    }
+    widget.registry[widget.index] = context;
+  }
+
+  @override
+  void dispose() {
+    if (widget.registry[widget.index] == context) {
+      widget.registry.remove(widget.index);
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }
 
 class _StreamingAgentStatusBar extends StatefulWidget {

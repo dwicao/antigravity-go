@@ -704,4 +704,45 @@ class ChatTurnHelpers {
     }
     return next;
   }
+
+  /// Resolves the target index inside [userIndices] when navigating Previous
+  /// (`delta < 0`) or Next (`delta > 0`). Uses the current viewport's top
+  /// visible message when no sequential cursor is active so navigation never
+  /// jumps in the wrong direction after manual scrolling.
+  static int? resolveTurnNavigationTarget({
+    required List<int> userIndices,
+    required int delta,
+    int? currentCursor,
+    int? firstVisibleMessageIndex,
+    double? firstVisibleMessageTop,
+    bool isAtBottom = false,
+  }) {
+    if (userIndices.isEmpty || delta == 0) return null;
+    if (currentCursor != null) {
+      return (currentCursor + delta).clamp(0, userIndices.length - 1);
+    }
+    if (firstVisibleMessageIndex == null) {
+      if (delta < 0) return userIndices.length - 1;
+      return isAtBottom ? userIndices.length - 1 : 0;
+    }
+    var k = -1;
+    for (var i = 0; i < userIndices.length; i++) {
+      if (userIndices[i] <= firstVisibleMessageIndex) {
+        k = i;
+      } else {
+        break;
+      }
+    }
+    if (delta < 0) {
+      if (k < 0) return 0;
+      final scrolledPastTurnTop = userIndices[k] < firstVisibleMessageIndex ||
+          (firstVisibleMessageTop != null && firstVisibleMessageTop < -12.0);
+      if (scrolledPastTurnTop) return k;
+      return (k - 1).clamp(0, userIndices.length - 1);
+    }
+    if (isAtBottom) {
+      return userIndices.length - 1;
+    }
+    return (k + 1).clamp(0, userIndices.length - 1);
+  }
 }

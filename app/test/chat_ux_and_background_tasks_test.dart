@@ -1298,4 +1298,138 @@ void main() {
     expect(loaded.length, 2);
     expect(loaded.last.text, 'Final response persisted cleanly');
   });
+
+  test('ChatTurnHelpers.resolveTurnNavigationTarget stays directional from viewport', () {
+    const userIndices = [0, 2, 4, 6];
+
+    // At bottom looking inside A3 (index 7): Previous goes to U3 (3), Next stays at U3 (3) never U0.
+    expect(
+      ChatTurnHelpers.resolveTurnNavigationTarget(
+        userIndices: userIndices,
+        delta: -1,
+        firstVisibleMessageIndex: 7,
+        firstVisibleMessageTop: -120,
+        isAtBottom: true,
+      ),
+      3,
+    );
+    expect(
+      ChatTurnHelpers.resolveTurnNavigationTarget(
+        userIndices: userIndices,
+        delta: 1,
+        firstVisibleMessageIndex: 7,
+        firstVisibleMessageTop: -120,
+        isAtBottom: true,
+      ),
+      3,
+    );
+
+    // Aligned cleanly at U2 (index 4, top >= -12): Previous steps to U1 (1), Next steps to U3 (3).
+    expect(
+      ChatTurnHelpers.resolveTurnNavigationTarget(
+        userIndices: userIndices,
+        delta: -1,
+        firstVisibleMessageIndex: 4,
+        firstVisibleMessageTop: 8,
+        isAtBottom: false,
+      ),
+      1,
+    );
+    expect(
+      ChatTurnHelpers.resolveTurnNavigationTarget(
+        userIndices: userIndices,
+        delta: 1,
+        firstVisibleMessageIndex: 4,
+        firstVisibleMessageTop: 8,
+        isAtBottom: false,
+      ),
+      3,
+    );
+
+    // Sequential cursor steps smoothly by delta.
+    expect(
+      ChatTurnHelpers.resolveTurnNavigationTarget(
+        userIndices: userIndices,
+        delta: -1,
+        currentCursor: 2,
+      ),
+      1,
+    );
+  });
+
+  testWidgets('ChatScreen Previous/Next user turn buttons scroll cleanly through variable-height turns',
+      (tester) async {
+    final longBody = List<String>.filled(
+      26,
+      'Detailed assistant explanation line with code symbols and context.',
+    ).join('\n');
+    final messages = List<ChatMessage>.generate(50, (i) {
+      final isUser = i.isEven;
+      final turnNum = i ~/ 2;
+      return ChatMessage(
+        id: 'nav-msg-$i',
+        role: isUser ? ChatRole.user : ChatRole.assistant,
+        text: isUser
+            ? 'User prompt #$turnNum'
+            : 'Assistant answer #$turnNum\n$longBody',
+        createdAt: DateTime(2026, 11, 27, 4, 0).add(Duration(seconds: i)),
+        completedAt: isUser
+            ? null
+            : DateTime(2026, 11, 27, 4, 0).add(Duration(seconds: i + 1)),
+      );
+    });
+
+    final container = ProviderContainer(
+      overrides: [
+        sessionsProvider.overrideWith(
+          () => _FakeSessionsNotifier(const SessionsState(activeSessionId: 's-nav')),
+        ),
+        runtimeProvider.overrideWith(
+          () => _FakeRuntimeNotifier(const RuntimeUiState()),
+        ),
+        chatProvider.overrideWith(
+          () => _FakeChatNotifier(
+            ChatThreadState(messages: messages, loadedSessionId: 's-nav'),
+          ),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(home: Scaffold(body: ChatScreen())),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final prevBtn = find.byTooltip('Previous user turn');
+    final nextBtn = find.byTooltip('Next user turn');
+    expect(prevBtn, findsOneWidget);
+    expect(nextBtn, findsOneWidget);
+
+    // Pressing Next at bottom must never jump backwards to User prompt #0.
+    await tester.tap(nextBtn);
+    await tester.pumpAndSettle();
+    expect(find.text('User prompt #0'), findsNothing);
+
+    // Stepping Previous navigates cleanly upward turn by turn.
+    await tester.tap(prevBtn);
+    await tester.pumpAndSettle();
+    expect(find.text('User prompt #24'), findsOneWidget);
+
+    await tester.tap(prevBtn);
+    await tester.pumpAndSettle();
+    expect(find.text('User prompt #23'), findsOneWidget);
+
+    await tester.tap(prevBtn);
+    await tester.pumpAndSettle();
+    expect(find.text('User prompt #22'), findsOneWidget);
+
+    // Stepping Next moves cleanly back down to User prompt #23.
+    await tester.tap(nextBtn);
+    await tester.pumpAndSettle();
+    expect(find.text('User prompt #23'), findsOneWidget);
+  });
 }
