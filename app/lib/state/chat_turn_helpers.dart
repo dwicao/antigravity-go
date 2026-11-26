@@ -143,7 +143,9 @@ class ChatTurnHelpers {
     final nameLower = step.toolName.toLowerCase();
     final p = step.parameters;
     final hasEditParams = p.containsKey('Replacement') ||
+        p.containsKey('Target') ||
         p.containsKey('ReplacementContent') ||
+        p.containsKey('TargetContent') ||
         p.containsKey('ReplacementChunks') ||
         p.containsKey('oldText') ||
         p.containsKey('newText') ||
@@ -155,6 +157,7 @@ class ChatTurnHelpers {
         p.containsKey('new_content') ||
         p.containsKey('originalContent') ||
         p.containsKey('CodeContent') ||
+        p.containsKey('Content') ||
         p.containsKey('diff') ||
         p.containsKey('patch');
     final isDeleteTool = nameLower.contains('delete_file') ||
@@ -295,6 +298,7 @@ class ChatTurnHelpers {
         final replacement = p['Replacement'] ??
             p['ReplacementContent'] ??
             p['CodeContent'] ??
+            p['Content'] ??
             p['newText'] ??
             p['new_text'] ??
             p['new_string'] ??
@@ -303,7 +307,8 @@ class ChatTurnHelpers {
             p['new_content'] ??
             p['after'] ??
             p['content'];
-        final target = p['TargetContent'] ??
+        final target = p['Target'] ??
+            p['TargetContent'] ??
             p['oldText'] ??
             p['old_text'] ??
             p['old_string'] ??
