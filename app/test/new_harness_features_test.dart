@@ -806,6 +806,64 @@ diff --git a/app/lib/main.dart b/app/lib/main.dart
     final loaded = await ChatMessageStore.instance.load(sid);
     expect(loaded.map((m) => m.id), ['m1', 'm2']);
   });
+
+  testWidgets('ChatScreen does not show mini-diff banner above composer, keeping ChangeCard only after completed chat result', (tester) async {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    final sessions = container.read(sessionsProvider.notifier);
+    final s = await sessions.createSession(title: 'No Mini Banner');
+    sessions.selectSession(s.id);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    final chatNotifier = container.read(chatProvider.notifier);
+    chatNotifier.seedStreamingTurnForTest(
+      sessionId: s.id,
+      turnId: 'turn-nobanner',
+      messages: [
+        ChatMessage(
+          id: 'u1',
+          role: ChatRole.user,
+          text: 'Edit foo.dart',
+          createdAt: DateTime(2026, 11, 26, 13, 20),
+        ),
+        ChatMessage(
+          id: 'a1',
+          role: ChatRole.assistant,
+          text: 'Editing...',
+          createdAt: DateTime(2026, 11, 26, 13, 20),
+          isStreaming: true,
+          changedFiles: const [
+            FileChangeEntry(path: 'lib/foo.dart', added: 5, removed: 2),
+          ],
+        ),
+      ],
+    );
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          theme: _theme(),
+          home: const Scaffold(body: ChatScreen()),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(WorkspaceChangesBanner), findsNothing);
+    // ChangeCard is hidden while message is streaming.
+    expect(find.textContaining('View Diff'), findsNothing);
+
+    await chatNotifier.stopStreaming(sessionId: s.id);
+    await tester.pump();
+    // After chat result completes, ChangeCard appears below the reply, and no banner above input.
+    expect(find.byType(WorkspaceChangesBanner), findsNothing);
+    expect(find.textContaining('View Diff'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(milliseconds: 500));
+  });
 }
 
 class _FakeWorkspaceDiffNotifier extends WorkspaceDiffNotifier {

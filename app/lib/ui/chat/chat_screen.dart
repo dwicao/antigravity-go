@@ -46,7 +46,6 @@ import 'chat_composer_bar.dart';
 import 'message_bubble.dart';
 import 'subagents_activity_banner.dart';
 import 'tool_approval_card.dart';
-import 'workspace_changes_banner.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
   const ChatScreen({
@@ -2076,7 +2075,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             ),
           ),
         wrapCentered(const SubagentsActivityBanner()),
-        wrapCentered(const WorkspaceChangesBanner()),
         if (settings.batteryNetworkPolicyEnabled && devicePolicy.shouldWarn)
           wrapCentered(
             Container(
