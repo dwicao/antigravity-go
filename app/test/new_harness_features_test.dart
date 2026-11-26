@@ -477,9 +477,15 @@ diff --git a/app/lib/main.dart b/app/lib/main.dart
               listeningVoice: false,
               isDesktopMode: false,
               enterToSend: false,
-              ctxSnap: HarnessContextSnapshot.fromState(
-                const HarnessState(),
+              ctxSnap: const HarnessContextSnapshot(
                 usedTokens: 1000,
+                budgetTokens: 1000000,
+                ratio: 0.001,
+                needsWarning: false,
+                shouldCompact: false,
+                statusLabel: 'Healthy',
+                compactedMessages: 0,
+                activeMessages: 1,
               ),
               onKeyEvent: (_, _) => KeyEventResult.ignored,
               onChanged: (_) {},
