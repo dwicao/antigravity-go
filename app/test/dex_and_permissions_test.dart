@@ -93,7 +93,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Settings'), findsOneWidget);
+    expect(
+      find.descendant(of: find.byType(AppBar), matching: find.text('Settings')),
+      findsOneWidget,
+    );
     await tester.scrollUntilVisible(find.text('Appearance'), 160);
     expect(find.text('Appearance'), findsOneWidget);
     await tester.scrollUntilVisible(find.text("What's New"), 160);

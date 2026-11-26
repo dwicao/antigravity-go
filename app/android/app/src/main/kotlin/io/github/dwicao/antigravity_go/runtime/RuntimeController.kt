@@ -1076,7 +1076,7 @@ am start -a android.intent.action.VIEW -d "${'$'}url" >/dev/null 2>&1 || echo "[
             }
             val collected = StringBuilder()
             val streamLock = Any()
-            @Volatile var eof = false
+            val eof = java.util.concurrent.atomic.AtomicBoolean(false)
             val readerFuture = executor.submit {
                 try {
                     BufferedReader(InputStreamReader(proc.inputStream)).use { reader ->
@@ -1089,12 +1089,12 @@ am start -a android.intent.action.VIEW -d "${'$'}url" >/dev/null 2>&1 || echo "[
                     }
                 } catch (_: Throwable) {
                 } finally {
-                    eof = true
+                    eof.set(true)
                 }
             }
             val deadline = System.currentTimeMillis() + timeoutSeconds * 1000L
             var firstQuotaSeenAt = 0L
-            while (!eof && System.currentTimeMillis() < deadline) {
+            while (!eof.get() && System.currentTimeMillis() < deadline) {
                 val snapshot = synchronized(streamLock) { collected.toString() }
                 if (hasQuotaSummary(snapshot)) {
                     if (firstQuotaSeenAt == 0L) {
