@@ -44,6 +44,7 @@ internal data class ActiveAcp(
     @Volatile var pendingEffort: String? = null,
     @Volatile var pendingModeCli: String? = null,
     @Volatile var standbyReady: Boolean = false,
+    @Volatile var onAuthRetryTurn: (() -> Boolean)? = null,
     val claimSignal: CompletableFuture<String> = CompletableFuture(),
     val configLock: Any = Any(),
     val pendingConfigReqIds: MutableSet<Int> = Collections.synchronizedSet(mutableSetOf()),

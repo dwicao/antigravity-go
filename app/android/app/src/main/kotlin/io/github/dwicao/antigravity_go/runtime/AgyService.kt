@@ -18,6 +18,9 @@ import android.os.Looper
 import android.os.PowerManager
 import io.github.dwicao.antigravity_go.MainActivity
 import io.github.dwicao.antigravity_go.R
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 
 /**
  * Foreground harness service modeled on DSH-Go's `DshService`:
@@ -28,6 +31,7 @@ class AgyService : Service() {
 
     private var wakeLock: PowerManager.WakeLock? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private var oauthKeepAliveScheduler: ScheduledExecutorService? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -82,6 +86,7 @@ class AgyService : Service() {
                         acquireWakeLock(refresh = true)
                     }
                     registerNetworkCallback(controller)
+                    startOAuthKeepAlive(controller)
                 }
                 return START_STICKY
             }
@@ -138,6 +143,7 @@ class AgyService : Service() {
                     acquireWakeLock()
                 }
                 registerNetworkCallback(controller)
+                startOAuthKeepAlive(controller)
                 return START_STICKY
             }
         }
@@ -153,6 +159,8 @@ class AgyService : Service() {
             runCatching { cm.unregisterNetworkCallback(cb) }
         }
         networkCallback = null
+        oauthKeepAliveScheduler?.shutdownNow()
+        oauthKeepAliveScheduler = null
         wakeLock?.let {
             if (it.isHeld) runCatching { it.release() }
         }
@@ -195,6 +203,22 @@ class AgyService : Service() {
         if (runCatching { cm.registerDefaultNetworkCallback(cb) }.isSuccess) {
             networkCallback = cb
         }
+    }
+
+    private fun startOAuthKeepAlive(controller: RuntimeController) {
+        if (oauthKeepAliveScheduler != null) return
+        val scheduler = Executors.newSingleThreadScheduledExecutor()
+        oauthKeepAliveScheduler = scheduler
+        scheduler.scheduleWithFixedDelay(
+            {
+                runCatching {
+                    controller.refreshOAuthSession(includeDormantAccounts = true)
+                }
+            },
+            10L,
+            35L * 60L,
+            TimeUnit.SECONDS,
+        )
     }
 
     companion object {

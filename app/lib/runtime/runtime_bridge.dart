@@ -167,6 +167,21 @@ class RuntimeBridge {
     }
   }
 
+  Future<Map<String, dynamic>> refreshOAuthSession({bool force = false}) async {
+    try {
+      final raw = await _method.invokeMethod<Map<Object?, Object?>>(
+        'refreshOAuthSession',
+        {'force': force},
+      );
+      if (raw == null) return const {'status': 'unavailable'};
+      return raw.map((k, v) => MapEntry(k.toString(), v));
+    } on MissingPluginException {
+      return const {'status': 'unavailable'};
+    } catch (_) {
+      return const {'status': 'transient_error'};
+    }
+  }
+
   Future<String> exportCredentials({
     required String passphrase,
     String? geminiApiKey,

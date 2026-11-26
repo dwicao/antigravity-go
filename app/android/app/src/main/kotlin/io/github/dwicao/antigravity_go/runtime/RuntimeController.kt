@@ -81,6 +81,7 @@ class RuntimeController private constructor(private val appContext: Context) {
         log = { msg -> log(msg) },
         onTasksChanged = { emitBackgroundTasks() },
         outputOffloadDir = File(tmpDir, "tool-outputs"),
+        onRefreshAuthBeforeRetry = { refreshOAuthSession(force = true) },
     )
 
     private val customizationsOps = CustomizationsOps(
@@ -152,6 +153,11 @@ class RuntimeController private constructor(private val appContext: Context) {
     @Volatile
     private var lastToolStatusNotifyMs: Long = 0L
 
+    private val oauthRefreshLock = Any()
+
+    @Volatile
+    private var lastKeepAliveAttemptMs: Long = 0L
+
     private val busyboxApplets = listOf(
         "sh", "ls", "cat", "find", "grep", "egrep", "fgrep", "sed", "awk",
         "head", "tail", "wc", "sort", "uniq", "cut", "tr", "xargs",
@@ -212,11 +218,24 @@ class RuntimeController private constructor(private val appContext: Context) {
     fun noteNetworkChange(note: String) {
         networkBlocked = false
         log(note)
+        scheduleKeepAliveCheck()
     }
 
     fun noteNetworkBlocked(blocked: Boolean) {
         networkBlocked = blocked
         log(if (blocked) "Android network policy blocked background access" else "Network access restored")
+        if (!blocked) {
+            scheduleKeepAliveCheck()
+        }
+    }
+
+    private fun scheduleKeepAliveCheck() {
+        val now = System.currentTimeMillis()
+        if (now - lastKeepAliveAttemptMs < 60_000L) return
+        lastKeepAliveAttemptMs = now
+        executor.submit {
+            runCatching { refreshOAuthSession(includeDormantAccounts = true) }
+        }
     }
 
     private fun handleAcpOrProcessEvent(payload: Map<String, Any?>) {
@@ -873,7 +892,67 @@ am start -a android.intent.action.VIEW -d "${'$'}url" >/dev/null 2>&1 || echo "[
         )
     }
 
+    fun refreshOAuthSession(
+        force: Boolean = false,
+        includeDormantAccounts: Boolean = false,
+    ): OAuthTokenManager.RefreshOutcome = synchronized(oauthRefreshLock) {
+        val outcome = if (includeDormantAccounts) {
+            MultiAccountVault.refreshSavedAccountsKeepAlive(
+                homeDir = homeDir,
+                accountsDir = accountsDir,
+                forceActive = force,
+            )
+        } else {
+            val res = OAuthTokenManager.ensureFreshTokenInHome(
+                homeDir = homeDir,
+                binaryFile = binaryFile,
+                force = force,
+            )
+            if (res is OAuthTokenManager.RefreshOutcome.Refreshed) {
+                MultiAccountVault.syncActiveAccount(homeDir, accountsDir)
+            }
+            res
+        }
+        when (outcome) {
+            is OAuthTokenManager.RefreshOutcome.Refreshed -> {
+                writeAuthMarker(true, email = outcome.email)
+                log("Refreshed OAuth token cleanly (${outcome.email ?: "account"})")
+            }
+            is OAuthTokenManager.RefreshOutcome.PermanentError -> {
+                log("Google OAuth refresh rejected (${outcome.errorCode}): ${outcome.description}")
+            }
+            else -> Unit
+        }
+        outcome
+    }
+
+    fun refreshOAuthSessionStatus(force: Boolean = false): Map<String, Any?> {
+        val outcome = refreshOAuthSession(force = force, includeDormantAccounts = true)
+        return when (outcome) {
+            is OAuthTokenManager.RefreshOutcome.Refreshed -> mapOf(
+                "status" to "refreshed",
+                "email" to outcome.email,
+                "expiresAtMs" to outcome.expiresAtMs,
+            )
+            OAuthTokenManager.RefreshOutcome.NotNeeded -> mapOf(
+                "status" to "fresh",
+                "expiresAtMs" to OAuthTokenManager.resolveTokenExpiryMillis(homeDir),
+            )
+            OAuthTokenManager.RefreshOutcome.NoRefreshToken -> mapOf("status" to "no_refresh_token")
+            is OAuthTokenManager.RefreshOutcome.PermanentError -> mapOf(
+                "status" to "permanent_error",
+                "error" to outcome.errorCode,
+                "description" to outcome.description,
+            )
+            is OAuthTokenManager.RefreshOutcome.TransientError -> mapOf(
+                "status" to "transient_error",
+                "error" to outcome.detail,
+            )
+        }
+    }
+
     fun verifyAuth(): Map<String, Any?> {
+        refreshOAuthSession()
         val current = checkAuthStatus()
         if (!binaryFile.exists()) return current
         return try {
@@ -926,6 +1005,7 @@ am start -a android.intent.action.VIEW -d "${'$'}url" >/dev/null 2>&1 || echo "[
 
     fun probeUsage(): String {
         if (!binaryFile.exists()) return ""
+        refreshOAuthSession()
         val sb = StringBuilder()
         val modelsOut = runCatching { runStdoutPreferringCapture(listOf("models"), 12) }.getOrDefault("")
         if (modelsOut.isNotBlank()) sb.append(modelsOut).append("\n")
@@ -1054,10 +1134,7 @@ am start -a android.intent.action.VIEW -d "${'$'}url" >/dev/null 2>&1 || echo "[
         acpManager.closeAllLiveWorkers()
         MultiAccountVault.clearActiveAccountOnLogout(homeDir, accountsDir)
         writeAuthMarker(false)
-        if (binaryFile.exists()) {
-            runCatching { runCapture(listOf("-p", "/logout", "--output-format", "text"), null, emptyMap(), 8) }
-        }
-        log("Cleared cached Google credentials")
+        log("Cleared local cached Google credentials (remote export sessions untouched)")
     }
 
     fun exportCredentials(
@@ -1353,6 +1430,7 @@ am start -a android.intent.action.VIEW -d "${'$'}url" >/dev/null 2>&1 || echo "[
         agent: String? = null,
     ) {
         if (!binaryFile.exists() || !binaryFile.canExecute()) return
+        refreshOAuthSession()
         val dir = if (!cwd.isNullOrBlank() && File(cwd).isDirectory) File(cwd) else workspaceDir
         if (!dir.exists()) runCatching { dir.mkdirs() }
         acpManager.prewarm(
@@ -1392,6 +1470,7 @@ am start -a android.intent.action.VIEW -d "${'$'}url" >/dev/null 2>&1 || echo "[
         allowNonWorkspaceAccess: Boolean,
         geminiApiKey: String?,
     ): PreparedTurnSetup {
+        refreshOAuthSession()
         val storageGranted = hasStorageAccess()
         val storageEnabled = allowNonWorkspaceAccess && storageGranted
         if (!safeMode) {

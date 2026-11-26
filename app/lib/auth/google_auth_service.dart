@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:agy_client/agy_client.dart';
@@ -116,7 +117,16 @@ class GoogleAuthService {
       lastAuthenticatedAt: DateTime.now(),
     );
     await cacheStatus(status);
+    if (!verifyWithCli &&
+        (status.method == AgyAuthMethod.googlePersonal ||
+            status.method == AgyAuthMethod.googleBusiness)) {
+      unawaited(_runtime.refreshOAuthSession(force: false));
+    }
     return status;
+  }
+
+  Future<Map<String, dynamic>> refreshOAuthSession({bool force = false}) {
+    return _runtime.refreshOAuthSession(force: force);
   }
 
   Future<void> launchGoogleSignIn({bool enterprise = false}) async {

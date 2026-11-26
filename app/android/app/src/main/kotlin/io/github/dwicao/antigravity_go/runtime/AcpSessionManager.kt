@@ -20,6 +20,7 @@ class AcpSessionManager(
     private val log: (String) -> Unit,
     private val onTasksChanged: () -> Unit = {},
     outputOffloadDir: File? = null,
+    private val onRefreshAuthBeforeRetry: (() -> OAuthTokenManager.RefreshOutcome)? = null,
 ) {
     private val sessions = ConcurrentHashMap<String, ActiveAcp>()
     private val liveWorkers = LinkedHashMap<String, ActiveAcp>(4, 0.75f, true)
@@ -79,6 +80,16 @@ class AcpSessionManager(
             return
         }
         emit(mapOf("kind" to "turn_exit", "turnId" to turnId, "exitCode" to exitCode))
+    }
+
+    private fun isAuthRequiredError(msg: JSONObject): Boolean {
+        val err = msg.optJSONObject("error") ?: return false
+        val code = err.optInt("code", 0)
+        val text = err.optString("message", "").lowercase()
+        return code == -32000 ||
+            text.contains("authentication required") ||
+            text.contains("not signed in") ||
+            text.contains("invalid_grant")
     }
 
     private fun takeLiveWorker(
@@ -382,6 +393,7 @@ class AcpSessionManager(
         var acpSessionId: String? = null
         var triedLoadFallback = false
         var triedNewFallback = false
+        var authRetryUsed = false
         var line: String?
         while (reader.readLine().also { line = it } != null) {
             val raw = line?.trim() ?: continue
@@ -397,6 +409,24 @@ class AcpSessionManager(
             val method = msg.optString("method", "")
 
             if (msgId is Number && msgId.toInt() == active.newSessionReqId) {
+                val retryCb = active.onAuthRetryTurn
+                if (msg.has("error") &&
+                    !authRetryUsed &&
+                    isAuthRequiredError(msg) &&
+                    retryCb != null
+                ) {
+                    authRetryUsed = true
+                    if (retryCb()) {
+                        active.cancelled.set(true)
+                        val oldTid = active.currentTurnId
+                        active.currentTurnId = null
+                        active.onAuthRetryTurn = null
+                        if (oldTid != null) sessions.remove(oldTid)
+                        runCatching { writer.close() }
+                        runCatching { proc.destroyForcibly() }
+                        return
+                    }
+                }
                 if (msg.has("error") && !existingSessionId.isNullOrBlank() && !triedLoadFallback) {
                     triedLoadFallback = true
                     val errObj = msg.optJSONObject("error")
@@ -586,6 +616,7 @@ class AcpSessionManager(
             if (numericMsgId != null && numericMsgId == active.promptReqId) {
                 sessions.remove(activeTid)
                 active.currentTurnId = null
+                active.onAuthRetryTurn = null
                 active.promptReqId = -1
                 emitTurnExitOnce(activeTid, 0, active)
                 val sid = active.sessionId
@@ -628,16 +659,51 @@ class AcpSessionManager(
         agent: String? = null,
         attachments: List<String> = emptyList(),
         clientVersion: String = "1.0.16",
+        authRetryAttempted: Boolean = false,
         onAuthenticated: () -> Unit,
     ) {
         executor.submit {
+            val retryWithFreshAuth: (() -> Boolean)? =
+                if (authRetryAttempted || onRefreshAuthBeforeRetry == null) {
+                    null
+                } else {
+                    {
+                        val outcome = onRefreshAuthBeforeRetry.invoke()
+                        if (outcome is OAuthTokenManager.RefreshOutcome.Refreshed) {
+                            log("OAuth token refreshed after ACP auth error; retrying turn $turnId")
+                            closeAllLiveWorkers(notifyTasks = false)
+                            startTurn(
+                                turnId = turnId,
+                                binaryPath = binaryPath,
+                                cwd = cwd,
+                                env = env,
+                                prompt = prompt,
+                                extraDirs = extraDirs,
+                                existingSessionId = existingSessionId,
+                                modelId = modelId,
+                                effort = effort,
+                                modeCli = modeCli,
+                                skipPermissions = skipPermissions,
+                                agent = agent,
+                                attachments = attachments,
+                                clientVersion = clientVersion,
+                                authRetryAttempted = true,
+                                onAuthenticated = onAuthenticated,
+                            )
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                }
             val workerSig = buildWorkerSignature(cwd, extraDirs, skipPermissions, agent)
-            val reused = takeLiveWorker(existingSessionId, agent, workerSig)
+            val reused = if (!authRetryAttempted) takeLiveWorker(existingSessionId, agent, workerSig) else null
             if (reused != null && reused.process.isAlive) {
                 try {
                     reused.promptSummary = summarizeCommand(prompt, maxLen = 64)
                     reused.cancelled.set(false)
                     reused.currentTurnId = turnId
+                    reused.onAuthRetryTurn = retryWithFreshAuth
                     reused.pendingConfigReqIds.clear()
                     reused.promptReqId = -1
                     reused.promptSent = false
@@ -694,12 +760,13 @@ class AcpSessionManager(
                 }
             }
 
-            val standby = if (existingSessionId.isNullOrBlank()) takeStandbyWorker(workerSig) else null
+            val standby = if (existingSessionId.isNullOrBlank() && !authRetryAttempted) takeStandbyWorker(workerSig) else null
             if (standby != null && standby.process.isAlive) {
                 try {
                     standby.promptSummary = summarizeCommand(prompt, maxLen = 64)
                     standby.cancelled.set(false)
                     standby.currentTurnId = turnId
+                    standby.onAuthRetryTurn = retryWithFreshAuth
                     standby.pendingConfigReqIds.clear()
                     standby.promptReqId = -1
                     standby.promptSent = false
@@ -773,6 +840,7 @@ class AcpSessionManager(
                     pendingModelId = modelId,
                     pendingEffort = effort,
                     pendingModeCli = modeCli,
+                    onAuthRetryTurn = retryWithFreshAuth,
                 )
                 activeRef = active
                 sessions[turnId] = active
@@ -847,6 +915,15 @@ class AcpSessionManager(
                         val msgId = msg.opt("id")
                         if (msgId is Number && msgId.toInt() == initId) {
                             if (msg.has("error")) {
+                                if (isAuthRequiredError(msg) &&
+                                    retryWithFreshAuth != null &&
+                                    retryWithFreshAuth()
+                                ) {
+                                    active.cancelled.set(true)
+                                    active.currentTurnId = null
+                                    sessions.remove(turnId)
+                                    return@submit
+                                }
                                 emit(
                                     mapOf(
                                         "kind" to "turn_acp_line",

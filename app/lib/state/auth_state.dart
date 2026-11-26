@@ -61,6 +61,9 @@ class AuthNotifier extends Notifier<AgyAuthStatus> {
 
   Future<void> refresh({bool verifyWithCli = false}) async {
     final svc = ref.read(authServiceProvider);
+    if (verifyWithCli) {
+      await svc.refreshOAuthSession(force: true);
+    }
     final wasTurnVerified = state.isAuthenticated;
     final loaded = await svc.loadStatus(verifyWithCli: verifyWithCli);
     if (!ref.mounted) return;
@@ -125,6 +128,13 @@ class AuthNotifier extends Notifier<AgyAuthStatus> {
           location: location,
         );
     await refresh();
+  }
+
+  Future<void> keepAliveOnResume() async {
+    if (!state.isAuthenticated && state.savedAccounts.isEmpty) return;
+    try {
+      await ref.read(authServiceProvider).refreshOAuthSession();
+    } catch (_) {}
   }
 
   Future<void> signOut() async {

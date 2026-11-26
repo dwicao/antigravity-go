@@ -8,8 +8,11 @@ import io.github.dwicao.antigravity_go.runtime.CrashRecorder
 import io.github.dwicao.antigravity_go.runtime.CredentialTransferHelper
 import io.github.dwicao.antigravity_go.runtime.CustomizationsOps
 import io.github.dwicao.antigravity_go.runtime.MultiAccountVault
+import io.github.dwicao.antigravity_go.runtime.OAuthTokenManager
 import io.github.dwicao.antigravity_go.runtime.UrlSafetyGuard
 import java.io.File
+import java.util.Base64
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -298,5 +301,118 @@ class DshAdoptFeaturesTest {
         assertEquals("skill", auditSkill?.get("kind"))
         assertEquals("Global", auditSkill?.get("scope"))
         assertEquals("Audit auth flows", auditSkill?.get("description"))
+    }
+
+    @Test
+    fun oauthTokenManagerProactivelyRefreshesExpiredAndImportedTokensSafely() {
+        val nowMs = 1_795_680_000_000L // fixed baseline
+        val homeDir = tempFolder.newFolder("oauth-home")
+        val tokenFile = File(homeDir, OAuthTokenManager.TOKEN_REL_PATH)
+        tokenFile.parentFile?.mkdirs()
+
+        // 1. Fresh token (>15m remaining) skips network refresh completely.
+        val futureIso = java.time.Instant.ofEpochMilli(nowMs + 45 * 60_000L).toString()
+        val pastIso = java.time.Instant.ofEpochMilli(nowMs - 20 * 3_600_000L).toString()
+        val freshPayload = JSONObject()
+            .put("auth_method", "consumer")
+            .put("id_token_email", "dev@gmail.com")
+            .put(
+                "token",
+                JSONObject()
+                    .put("access_token", "ya29.fresh")
+                    .put("refresh_token", "1//refresh-keep")
+                    .put("token_type", "Bearer")
+                    .put("expires_in", 3599)
+                    .put("expiry", futureIso),
+            )
+        tokenFile.writeText(freshPayload.toString())
+
+        var networkCalls = 0
+        val testCreds = OAuthTokenManager.ClientCredentials("test-client-id", "test-client-secret")
+        val freshOutcome = OAuthTokenManager.ensureFreshTokenInHome(
+            homeDir = homeDir,
+            clientCredentials = testCreds,
+            transport = { _, _ ->
+                networkCalls++
+                OAuthTokenManager.HttpResult(500, "{}")
+            },
+            nowMs = { nowMs },
+        )
+        assertTrue(freshOutcome is OAuthTokenManager.RefreshOutcome.NotNeeded)
+        assertEquals(0, networkCalls)
+
+        // 2. Expired token (exported yesterday) refreshes cleanly, preserves refresh_token, updates file + marker.
+        freshPayload.getJSONObject("token").put("access_token", "ya29.stale").put("expiry", pastIso)
+        tokenFile.writeText(freshPayload.toString())
+        val markerFile = File(homeDir, ".gemini/antigravity-go-auth.json")
+        markerFile.writeText("""{"isAuthenticated":true,"method":"oauth-personal","updatedAt":1000}""")
+
+        val refreshedOutcome = OAuthTokenManager.ensureFreshTokenInHome(
+            homeDir = homeDir,
+            clientCredentials = testCreds,
+            transport = { _, params ->
+                networkCalls++
+                assertEquals("1//refresh-keep", params["refresh_token"])
+                assertEquals("refresh_token", params["grant_type"])
+                OAuthTokenManager.HttpResult(
+                    200,
+                    """{"access_token":"ya29.new-shiny","expires_in":3599,"token_type":"Bearer"}""",
+                )
+            },
+            nowMs = { nowMs },
+        )
+        assertTrue(refreshedOutcome is OAuthTokenManager.RefreshOutcome.Refreshed)
+        assertEquals(1, networkCalls)
+        val saved = JSONObject(tokenFile.readText()).getJSONObject("token")
+        assertEquals("ya29.new-shiny", saved.getString("access_token"))
+        assertEquals("1//refresh-keep", saved.getString("refresh_token"))
+        val updatedExpiry = OAuthTokenManager.parseExpiryMillis(saved)!!
+        assertTrue(updatedExpiry > nowMs + 55 * 60_000L)
+        assertTrue(JSONObject(markerFile.readText()).getLong("updatedAt") == nowMs)
+
+        // 3. Transient failure never deletes token; PermanentError returns invalid_grant cleanly.
+        val transientRes = OAuthTokenManager.ensureFreshTokenInJson(
+            rawJson = freshPayload.toString(),
+            clientCredentials = testCreds,
+            transport = { _, _ -> OAuthTokenManager.HttpResult(503, """{"error":"temporarily_unavailable"}""") },
+            nowMs = { nowMs },
+        )
+        assertTrue(transientRes is OAuthTokenManager.RefreshOutcome.TransientError)
+
+        val permRes = OAuthTokenManager.ensureFreshTokenInJson(
+            rawJson = freshPayload.toString(),
+            clientCredentials = testCreds,
+            transport = { _, _ ->
+                OAuthTokenManager.HttpResult(
+                    400,
+                    """{"error":"invalid_grant","error_description":"Token has been expired or revoked."}""",
+                )
+            },
+            nowMs = { nowMs },
+        )
+        assertTrue(permRes is OAuthTokenManager.RefreshOutcome.PermanentError)
+
+        // 4. Export/import file-map helper upgrades stale bundled access token cleanly.
+        val staleB64 = Base64.getEncoder().encodeToString(freshPayload.toString().toByteArray(Charsets.UTF_8))
+        val mapRes = OAuthTokenManager.ensureFreshTokenInFileMap(
+            files = mapOf(OAuthTokenManager.TOKEN_REL_PATH to staleB64),
+            clientCredentials = testCreds,
+            transport = { _, _ ->
+                OAuthTokenManager.HttpResult(200, """{"access_token":"ya29.imported-fresh","expires_in":3599}""")
+            },
+            nowMs = { nowMs },
+        )
+        assertTrue(mapRes.outcome is OAuthTokenManager.RefreshOutcome.Refreshed)
+        val decodedMapToken = String(Base64.getDecoder().decode(mapRes.files[OAuthTokenManager.TOKEN_REL_PATH]!!), Charsets.UTF_8)
+        assertTrue(decodedMapToken.contains("ya29.imported-fresh"))
+
+        // 5. Runtime binary discovery extracts synthetic client metadata cleanly without hardcoding.
+        val fakeBin = File(tempFolder.newFolder("bin-probe"), "agy")
+        val mockId = "999999999999-synthclient" + ".apps.googleusercontent.com"
+        val mockSec = "GOCSPX-" + "SynthSecretToken0001"
+        fakeBin.writeBytes(("noise\u0000" + mockId + "\u0000middle\u0000" + mockSec + "\u0000end").toByteArray())
+        val discovered = OAuthTokenManager.discoverClientsFromBinary(fakeBin)
+        assertTrue(discovered.clientIds.contains(mockId))
+        assertTrue(discovered.clientSecrets.contains(mockSec))
     }
 }

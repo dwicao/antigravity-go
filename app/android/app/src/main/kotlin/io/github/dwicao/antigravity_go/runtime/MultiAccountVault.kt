@@ -148,14 +148,19 @@ object MultiAccountVault {
         }
 
         val decoded = CredentialTransferHelper.decryptPayload(bundleJson, passphrase)
-        val meta = buildMeta(
+        val refreshed = OAuthTokenManager.ensureFreshTokenInFileMap(
             files = decoded.files,
+            homeDirForClientCache = homeDir,
+            minRemainingMs = OAuthTokenManager.EXPORT_LEEWAY_MS,
+        )
+        val snapshotFiles = refreshed.files
+        val meta = buildMeta(
+            files = snapshotFiles,
             authProfileJson = decoded.authProfileJson,
             geminiApiKey = decoded.geminiApiKey,
             existingIndex = loadIndexLocked(accountsDir),
         )
 
-        val snapshotFiles = decoded.files
         writeSnapshotLocked(
             accountsDir = accountsDir,
             accountId = meta.id,
@@ -207,8 +212,25 @@ object MultiAccountVault {
             geminiApiKey = currentGeminiApiKey,
         )
 
-        val snapshot = readSnapshotLocked(accountsDir, accountId)
+        val rawSnapshot = readSnapshotLocked(accountsDir, accountId)
             ?: throw IllegalStateException("Saved credentials missing for ${target.displayName}")
+        val refreshed = OAuthTokenManager.ensureFreshTokenInFileMap(
+            files = rawSnapshot.files,
+            homeDirForClientCache = homeDir,
+            minRemainingMs = OAuthTokenManager.DEFAULT_LEEWAY_MS,
+        )
+        val snapshot = if (refreshed.outcome is OAuthTokenManager.RefreshOutcome.Refreshed) {
+            writeSnapshotLocked(
+                accountsDir = accountsDir,
+                accountId = accountId,
+                files = refreshed.files,
+                geminiApiKey = rawSnapshot.geminiApiKey,
+                authProfileJson = rawSnapshot.authProfileJson,
+            )
+            rawSnapshot.copy(files = refreshed.files)
+        } else {
+            rawSnapshot
+        }
 
         CredentialTransferHelper.clearActiveCredentialFiles(homeDir)
         val restoredCount = CredentialTransferHelper.restoreCredentialFiles(
@@ -241,10 +263,32 @@ object MultiAccountVault {
         val index = loadIndexLocked(accountsDir)
         val targetId = accountId?.takeIf { it.isNotBlank() } ?: index.activeAccountId
         if (targetId == null || targetId == index.activeAccountId) {
+            val activeOutcome = OAuthTokenManager.ensureFreshTokenInHome(
+                homeDir = homeDir,
+                minRemainingMs = OAuthTokenManager.EXPORT_LEEWAY_MS,
+            )
             val existing = targetId?.let { readSnapshotLocked(accountsDir, it) }
-            val files = CredentialTransferHelper.collectCredentialFiles(homeDir)
-            val useFiles = if (files.isNotEmpty()) files else (existing?.files ?: emptyMap())
-            return CredentialTransferHelper.encryptPayload(
+            val collected = CredentialTransferHelper.collectCredentialFiles(homeDir)
+            val baseFiles = if (collected.isNotEmpty()) collected else (existing?.files ?: emptyMap())
+            val refreshed = OAuthTokenManager.ensureFreshTokenInFileMap(
+                files = baseFiles,
+                homeDirForClientCache = homeDir,
+                minRemainingMs = OAuthTokenManager.EXPORT_LEEWAY_MS,
+            )
+            val useFiles = refreshed.files
+            if (targetId != null &&
+                (activeOutcome is OAuthTokenManager.RefreshOutcome.Refreshed ||
+                    refreshed.outcome is OAuthTokenManager.RefreshOutcome.Refreshed)
+            ) {
+                writeSnapshotLocked(
+                    accountsDir = accountsDir,
+                    accountId = targetId,
+                    files = useFiles,
+                    geminiApiKey = fallbackGeminiApiKey ?: existing?.geminiApiKey,
+                    authProfileJson = fallbackAuthProfileJson ?: existing?.authProfileJson,
+                )
+            }
+            return@synchronized CredentialTransferHelper.encryptPayload(
                 files = useFiles,
                 passphrase = passphrase,
                 geminiApiKey = fallbackGeminiApiKey ?: existing?.geminiApiKey,
@@ -253,8 +297,22 @@ object MultiAccountVault {
         }
         val snapshot = readSnapshotLocked(accountsDir, targetId)
             ?: throw IllegalStateException("Saved credentials not found for account")
-        return CredentialTransferHelper.encryptPayload(
+        val refreshed = OAuthTokenManager.ensureFreshTokenInFileMap(
             files = snapshot.files,
+            homeDirForClientCache = homeDir,
+            minRemainingMs = OAuthTokenManager.EXPORT_LEEWAY_MS,
+        )
+        if (refreshed.outcome is OAuthTokenManager.RefreshOutcome.Refreshed) {
+            writeSnapshotLocked(
+                accountsDir = accountsDir,
+                accountId = targetId,
+                files = refreshed.files,
+                geminiApiKey = snapshot.geminiApiKey,
+                authProfileJson = snapshot.authProfileJson,
+            )
+        }
+        return@synchronized CredentialTransferHelper.encryptPayload(
+            files = refreshed.files,
             passphrase = passphrase,
             geminiApiKey = snapshot.geminiApiKey,
             authProfileJson = snapshot.authProfileJson,
@@ -294,6 +352,69 @@ object MultiAccountVault {
             saveIndexLocked(accountsDir, index)
         }
         CredentialTransferHelper.clearActiveCredentialFiles(homeDir)
+    }
+
+    fun refreshSavedAccountsKeepAlive(
+        homeDir: File,
+        accountsDir: File,
+        forceActive: Boolean = false,
+        nowMs: Long = System.currentTimeMillis(),
+    ): OAuthTokenManager.RefreshOutcome {
+        val activeOutcome = OAuthTokenManager.ensureFreshTokenInHome(
+            homeDir = homeDir,
+            force = forceActive,
+            minRemainingMs = OAuthTokenManager.DEFAULT_LEEWAY_MS,
+            nowMs = { nowMs },
+        )
+        val inactiveTargets = synchronized(lock) {
+            val index = loadIndexLocked(accountsDir)
+            val activeId = index.activeAccountId
+            if (activeOutcome is OAuthTokenManager.RefreshOutcome.Refreshed && activeId != null) {
+                readSnapshotLocked(accountsDir, activeId)?.let { snap ->
+                    val refreshedFiles = CredentialTransferHelper.collectCredentialFiles(homeDir)
+                    if (refreshedFiles.isNotEmpty()) {
+                        writeSnapshotLocked(
+                            accountsDir = accountsDir,
+                            accountId = activeId,
+                            files = refreshedFiles,
+                            geminiApiKey = snap.geminiApiKey,
+                            authProfileJson = snap.authProfileJson,
+                        )
+                    }
+                }
+            }
+            index.accounts.mapNotNull { meta ->
+                if (meta.id == activeId) return@mapNotNull null
+                val snapFile = File(accountsDir, "${sanitizeId(meta.id)}/$SNAPSHOT_FILE")
+                if (!snapFile.isFile) return@mapNotNull null
+                if (nowMs - snapFile.lastModified() < OAuthTokenManager.DORMANT_ACCOUNT_REFRESH_MS) {
+                    return@mapNotNull null
+                }
+                val snap = readSnapshotLocked(accountsDir, meta.id) ?: return@mapNotNull null
+                meta.id to snap
+            }
+        }
+        for ((acctId, snap) in inactiveTargets) {
+            val res = OAuthTokenManager.ensureFreshTokenInFileMap(
+                files = snap.files,
+                homeDirForClientCache = homeDir,
+                minRemainingMs = OAuthTokenManager.DEFAULT_LEEWAY_MS,
+                nowMs = { nowMs },
+            )
+            if (res.outcome is OAuthTokenManager.RefreshOutcome.Refreshed) {
+                synchronized(lock) {
+                    val latestSnap = readSnapshotLocked(accountsDir, acctId) ?: snap
+                    writeSnapshotLocked(
+                        accountsDir = accountsDir,
+                        accountId = acctId,
+                        files = res.files,
+                        geminiApiKey = latestSnap.geminiApiKey,
+                        authProfileJson = latestSnap.authProfileJson,
+                    )
+                }
+            }
+        }
+        return activeOutcome
     }
 
     private fun syncActiveAccountLocked(

@@ -133,6 +133,10 @@ class RuntimePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChann
             }
             "authStatus" -> runAsync(result) { ctrl.checkAuthStatus() }
             "verifyAuth" -> runAsync(result) { ctrl.verifyAuth() }
+            "refreshOAuthSession" -> {
+                val force = call.argument<Boolean>("force") ?: false
+                runAsync(result) { ctrl.refreshOAuthSessionStatus(force = force) }
+            }
             "probeUsage" -> runAsync(result) { ctrl.probeUsage() }
             "startLogin" -> {
                 ctrl.startGoogleLogin(call.argument<Boolean>("enterprise") ?: false)
