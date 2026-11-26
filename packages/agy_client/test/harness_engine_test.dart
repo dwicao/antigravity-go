@@ -457,7 +457,7 @@ void main() {
       expect(claudeMax.effort, 'max');
 
       final carbonExtraFallback = HarnessTurnRouter.routeTurn(
-        prompt: '/plan migrate state management across modules',
+        prompt: '/plan migrate database layer',
         selectedModelId: 'gemini-4-carbon',
         selectedEffort: 'medium',
         speedTierName: 'regular',
@@ -495,6 +495,60 @@ void main() {
       expect(manualOnly.modelId, 'gemini-4-hydrogen');
       expect(manualOnly.effort, 'high');
       expect(manualOnly.downgraded, isFalse);
+    });
+
+    test('smart Indonesian & mixed-language prompt complexity detection', () {
+      final ping = HarnessTurnRouter.routeTurn(
+        prompt: 'tes',
+        selectedModelId: 'gemini-4-hydrogen',
+        selectedEffort: 'medium',
+        speedTierName: 'regular',
+        smartRoutingEnabled: true,
+      );
+      expect(ping.effort, 'low');
+
+      final indoQuestion = HarnessTurnRouter.routeTurn(
+        prompt: 'jelasin bedanya StatefulWidget sama StatelessWidget dong',
+        selectedModelId: 'gemini-4-hydrogen',
+        selectedEffort: 'medium',
+        speedTierName: 'regular',
+        smartRoutingEnabled: true,
+      );
+      expect(indoQuestion.modelId, 'gemini-4-hydrogen');
+      expect(indoQuestion.effort, 'medium');
+
+      final indoCausalBug = HarnessTurnRouter.routeTurn(
+        prompt:
+            'tolong benerin UI nya yang ngefreeze pas ada edit diff gede',
+        selectedModelId: 'gemini-4-hydrogen',
+        selectedEffort: 'medium',
+        speedTierName: 'regular',
+        smartRoutingEnabled: true,
+      );
+      expect(indoCausalBug.modelId, 'gemini-4-hydrogen');
+      expect(indoCausalBug.effort, 'high');
+
+      final indoCompoundConstraint = HarnessTurnRouter.routeTurn(
+        prompt:
+            'tolong ubah tampilan header sekaligus perbaiki bug scroll di chat_page.dart, jangan sampai merusak animasi yang udah jalan',
+        selectedModelId: 'gemini-4-hydrogen',
+        selectedEffort: 'medium',
+        speedTierName: 'regular',
+        smartRoutingEnabled: true,
+      );
+      expect(indoCompoundConstraint.modelId, 'gemini-4-hydrogen');
+      expect(indoCompoundConstraint.effort, 'xhigh');
+
+      final indoMaxAudit = HarnessTurnRouter.routeTurn(
+        prompt:
+            'audit keseluruhan aplikasi secara menyeluruh dan rancang ulang arsitektur autentikasi multi-file',
+        selectedModelId: 'gemini-4-hydrogen',
+        selectedEffort: 'medium',
+        speedTierName: 'regular',
+        smartRoutingEnabled: true,
+      );
+      expect(indoMaxAudit.modelId, 'gemini-4-hydrogen');
+      expect(indoMaxAudit.effort, 'max');
     });
 
     test('RepoMapBuilder uses BFS so deep early dirs do not starve sibling modules', () async {

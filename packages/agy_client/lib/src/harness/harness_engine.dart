@@ -951,6 +951,11 @@ ${pendingNote}Do NOT blindly trust prior claims. Independently inspect the works
 class HarnessTurnRouter {
   const HarnessTurnRouter._();
 
+  static final RegExp _standalonePingRe = RegExp(
+    r'^(tes+|test|ping)[!.\s]*$',
+    caseSensitive: false,
+  );
+
   static final RegExp _maxCommandRe = RegExp(
     r'^/(boost|goal|teamwork|swarm)\b',
     caseSensitive: false,
@@ -962,26 +967,48 @@ class HarnessTurnRouter {
   );
 
   static final RegExp _maxComplexWorkRe = RegExp(
-    r'\b(entire\s+codebase|keseluruhan|from\s+scratch|zero[- ]downtime|comprehensive|distributed\s+transaction|formal\s+verif|production\s+outage|critical\s+security)\b',
+    r'\b(entire\s+codebase|whole\s+codebase|entire\s+project|whole\s+project|entire\s+repo|keseluruhan\s+codebase|seluruh\s+codebase|keseluruhan\s+aplikasi|seluruh\s+aplikasi|keseluruhan\s+proyek|seluruh\s+proyek|keseluruhan\s+project|seluruh\s+project|seluruh\s+repo|from\s+scratch|dari\s+nol|dari\s+awal|zero[- ]downtime|tanpa\s+downtime|comprehensive|menyeluruh|tuntas|perombakan\s+total|audit\s+total|audit\s+keseluruhan|distributed\s+transaction|sistem\s+terdistribusi|formal\s+verif|production\s+outage|produksi\s+down|critical\s+security|keamanan\s+kritis)\b',
     caseSensitive: false,
   );
 
   static final RegExp _extraComplexWorkRe = RegExp(
-    r'\b(architect|architecture|audit|redesign|rewrite|migrate|migration|concurrency|race\s+condition|deadlock|memory\s+leak|security|cryptograph|end[- ]to[- ]end|full[- ]stack|multi[- ]?file|root\s+cause|deep\s+dive|arsitektur|migrasi|keamanan)\b',
+    r'\b(architect|architecture|arsitektur|audit|redesign|rancang\s+ulang|desain\s+ulang|rombak|rewrite|tulis\s+ulang|migrate|migration|migrasi|concurrency|konkurensi|race\s+condition|deadlock|memory\s+leak|kebocoran\s+memori|security|keamanan|cryptograph|kriptografi|enkripsi|autentikasi|otorisasi|end[- ]to[- ]end|full[- ]stack|multi[- ]?file|banyak\s+file|lintas\s+modul|antar\s+modul|root\s+cause|akar\s+masalah|deep\s+dive|mendalam|performa|skalabilitas|scalability|state\s+management|trade[- ]?off)\b',
     caseSensitive: false,
   );
 
   static final RegExp _complexWorkRe = RegExp(
-    r'\b(fix|bug|error|fail|crash|refactor|implement|build|create|add|edit|write|update|remove|delete|test|ci|deploy|release|debug|review|optimize|investigate|research|subagent|workflow|perbaiki|buat|ubah|tambah|hapus|cek)\b',
+    r'\b(fix|bug|refactor|refaktor|implement|implementasi|implementasikan|build|bangun|create|buat|buatin|bikin|bikinin|add|tambah|tambahin|tambahkan|edit|ubah|ubahin|ganti|gantiin|write|tulis|update|perbarui|remove|delete|hapus|apus|test|uji|ci|deploy|release|rilis|debug|review|tinjau|optimize|optimasi|optimalkan|investigate|investigasi|telusuri|lacak|research|riset|subagent|workflow|perbaiki|benerin|betulin|rapikan|rapihin|bersihkan|bersihin|integrasi|integrasikan|sambungkan|sambungin|periksa|analisis|analisa|cek)\b',
+    caseSensitive: false,
+  );
+
+  static final RegExp _bugSymptomRe = RegExp(
+    r'\b(error|eror|fail|failed|gagal|crash|hang|freeze|nge-?freeze|lemot|nge-?lag|lag|macet|bocor|nyangkut|stuck|rusak|mental|force\s+close|expired|kadaluarsa|kedaluwarsa|timeout|exception|anomali|bermasalah|tidak\s+jalan|tak\s+jalan|gak\s+jalan|nggak\s+jalan|ga\s+jalan|tidak\s+bisa|tak\s+bisa|gak\s+bisa|nggak\s+bisa|ga\s+bisa)\b',
+    caseSensitive: false,
+  );
+
+  static final RegExp _causalReasoningRe = RegExp(
+    r'(\b(?:kenapa|mengapa|kok|why)\b.*\b(?:padahal|sedangkan|sementara|tapi|tetapi|malah|even\s+though|whereas|instead)\b|\b(?:ketika|saat|pas|waktu|kalau|when|whenever)\b.*\b(?:malah|tiba-tiba|langsung|hilang|ngilang|nge-?hang|nge-?freeze|crash|fail|gagal|expired)\b)',
+    caseSensitive: false,
+    dotAll: true,
+  );
+
+  static final RegExp _compoundTaskRe = RegExp(
+    r'(\b(?:sekaligus|selain\s+itu|ditambah\s+lagi|termasuk\s+juga|dan\s+juga|as\s+well\s+as|additionally|furthermore|moreover)\b|(?:^|\n)\s*(?:[-*•]|\d+[.)])\s+)',
+    caseSensitive: false,
+    multiLine: true,
+  );
+
+  static final RegExp _constraintRe = RegExp(
+    r'\b(tanpa\s+merusak|jangan\s+sampai|pastikan\s+tetap|harus\s+tetap|kompatibel|tanpa\s+mengubah|without\s+breaking|backward\s+compatible|must\s+ensure|thread[- ]?safe|idempotent|atomic|zero\s+data\s+loss)\b',
     caseSensitive: false,
   );
 
   static final RegExp _pathOrCodeRe = RegExp(
-    r'(/[^\s]+|\\[^\s]+|`[^`]+`|\.[a-zA-Z0-9]{1,5}\b|\(\)|\{|\})',
+    r'(/[^\s]+|\\[^\s]+|`[^`]+`|\.[a-zA-Z0-9]{1,5}\b|\(\)|\{|\}|```)',
   );
 
   static final RegExp _codingOrLookupRe = RegExp(
-    r'\b(code|file|function|class|method|widget|state|provider|api|sql|db|git|commit|branch|diff|pr|issue|log|stack|trace|explain|why|how|what|where|which|when|compare|list|show|check|find|search|read|open|run|apa|bagaimana|kenapa|dimana|jelaskan|tolong|bantu|kode|fungsi|kelas|berkas)\b',
+    r'\b(code|file|function|class|method|widget|state|provider|api|sql|db|git|commit|branch|diff|pr|issue|log|stack|trace|explain|why|how|what|where|which|when|compare|list|show|check|find|search|read|open|run|apa|apakah|bagaimana|gimana|gmn|kenapa|knp|mengapa|kapan|dimana|dmn|siapa|jelaskan|jelasin|terangkan|maksudnya|artinya|bedanya|perbedaan|bandingkan|bandingin|ringkas|rangkum|contoh|cara|tolong|bantu|kode|fungsi|kelas|berkas|tampilan|tombol|halaman)\b',
     caseSensitive: false,
   );
 
@@ -1006,10 +1033,13 @@ class HarnessTurnRouter {
   /// True for short, non-code conversational or simple status prompts.
   static bool isTrivialPrompt(String prompt) {
     final trimmed = prompt.trim();
-    if (trimmed.isEmpty || trimmed.length > 80) return false;
+    if (trimmed.isEmpty) return true;
+    if (_standalonePingRe.hasMatch(trimmed)) return true;
+    if (trimmed.length > 80) return false;
     if (trimmed.contains('\n')) return false;
     if (_pathOrCodeRe.hasMatch(trimmed)) return false;
     if (_complexWorkRe.hasMatch(trimmed) ||
+        _bugSymptomRe.hasMatch(trimmed) ||
         _extraComplexWorkRe.hasMatch(trimmed) ||
         _maxComplexWorkRe.hasMatch(trimmed)) {
       return false;
@@ -1017,11 +1047,13 @@ class HarnessTurnRouter {
     return true;
   }
 
-  /// True for short greetings/acknowledgments (e.g. "halo", "ok", "thanks")
+  /// True for short greetings/acknowledgments (e.g. "halo", "ok", "siap", "thanks")
   /// that only need Low Thinking Effort.
   static bool isConversationalAck(String prompt) {
     final trimmed = prompt.trim();
-    if (trimmed.isEmpty || trimmed.length > 40) return false;
+    if (trimmed.isEmpty) return true;
+    if (_standalonePingRe.hasMatch(trimmed)) return true;
+    if (trimmed.length > 40) return false;
     if (!isTrivialPrompt(trimmed)) return false;
     if (trimmed.contains('?')) return false;
     if (_codingOrLookupRe.hasMatch(trimmed)) return false;
@@ -1045,6 +1077,20 @@ class HarnessTurnRouter {
     }
   }
 
+  static String _mapComplexityLevelToEffort(
+    int level, {
+    required bool supportsExtraEffort,
+    required bool supportsMaxEffort,
+  }) {
+    if (level <= 1) return 'low';
+    if (level == 2) return 'medium';
+    if (level == 3) return 'high';
+    if (level == 4) return supportsExtraEffort ? 'xhigh' : 'high';
+    if (supportsMaxEffort) return 'max';
+    if (supportsExtraEffort) return 'xhigh';
+    return 'high';
+  }
+
   /// Resolves compaction route while strictly keeping [selectedModelId] and
   /// dropping Thinking Effort to Low (or empty when the model ignores effort).
   static ({String modelId, String effort}) resolveCompactionRoute({
@@ -1057,6 +1103,138 @@ class HarnessTurnRouter {
     );
   }
 
+  /// Analyzes prompt complexity using weighted semantic + structural signals
+  /// in both English and Bahasa Indonesia, returning score, detected signals,
+  /// and target Thinking Effort (`low`, `medium`, `high`, `xhigh`, `max`).
+  static ({int score, String effort, List<String> signals})
+      analyzePromptComplexity({
+    required String prompt,
+    required bool supportsExtraEffort,
+    bool supportsMaxEffort = false,
+    bool hasAttachments = false,
+  }) {
+    final trimmed = prompt.trim();
+    if (trimmed.isEmpty) {
+      return (score: 0, effort: 'low', signals: const ['empty']);
+    }
+
+    if (!hasAttachments &&
+        trimmed.startsWith('/') &&
+        !_deepCommandRe.hasMatch(trimmed)) {
+      return (score: 0, effort: 'low', signals: const ['utility_command']);
+    }
+
+    if (!hasAttachments && isConversationalAck(trimmed)) {
+      return (score: 0, effort: 'low', signals: const ['conversational_ack']);
+    }
+
+    var score = 0;
+    final signals = <String>[];
+
+    if (_maxCommandRe.hasMatch(trimmed)) {
+      score += 12;
+      signals.add('max_command');
+    } else if (_deepCommandRe.hasMatch(trimmed)) {
+      score += 5;
+      signals.add('plan_command');
+    }
+
+    if (hasAttachments) {
+      score += 4;
+      signals.add('attachments');
+    }
+
+    final hasWorkVerb = _complexWorkRe.hasMatch(trimmed);
+    final hasSymptom = _bugSymptomRe.hasMatch(trimmed);
+    if (hasWorkVerb || hasSymptom) {
+      score += 4;
+      signals.add(hasSymptom ? 'work_or_bug' : 'engineering_task');
+    }
+
+    final extraMatches = _extraComplexWorkRe.allMatches(trimmed).length;
+    if (extraMatches > 0) {
+      score += 5 + (extraMatches >= 2 ? 2 : 0);
+      signals.add('deep_domain($extraMatches)');
+    }
+
+    if (_maxComplexWorkRe.hasMatch(trimmed)) {
+      score += 8;
+      signals.add('exhaustive_scope');
+    }
+
+    final codeMatches = _pathOrCodeRe.allMatches(trimmed).length;
+    if (codeMatches >= 2 || trimmed.contains('```')) {
+      score += 3;
+      signals.add('multi_code_refs');
+    } else if (codeMatches == 1) {
+      score += 1;
+      signals.add('code_ref');
+    }
+
+    if (_causalReasoningRe.hasMatch(trimmed)) {
+      score += 2;
+      signals.add('causal_reasoning');
+    }
+
+    final compoundMatches = _compoundTaskRe.allMatches(trimmed).length;
+    if (compoundMatches >= 2) {
+      score += 3;
+      signals.add('multi_step_list');
+    } else if (compoundMatches == 1) {
+      score += 2;
+      signals.add('compound_task');
+    }
+
+    if (_constraintRe.hasMatch(trimmed)) {
+      score += 2;
+      signals.add('constraints');
+    }
+
+    if (trimmed.length >= 450) {
+      score += 4;
+      signals.add('long_spec');
+    } else if (trimmed.length >= 260) {
+      score += 2;
+      signals.add('detailed_prompt');
+    } else if (trimmed.length >= 130) {
+      score += 1;
+      signals.add('medium_length');
+    }
+
+    final nonEmptyLines = trimmed
+        .split('\n')
+        .where((line) => line.trim().isNotEmpty)
+        .length;
+    if (nonEmptyLines >= 8) {
+      score += 2;
+      signals.add('many_lines');
+    } else if (nonEmptyLines >= 3) {
+      score += 1;
+      signals.add('multi_line');
+    }
+
+    final int level;
+    if (score >= 12) {
+      level = 5;
+    } else if (score >= 7) {
+      level = 4;
+    } else if (score >= 4) {
+      level = 3;
+    } else {
+      level = 2;
+    }
+
+    return (
+      score: score,
+      effort: _mapComplexityLevelToEffort(
+        level,
+        supportsExtraEffort: supportsExtraEffort,
+        supportsMaxEffort: supportsMaxEffort,
+      ),
+      signals: signals,
+    );
+  }
+
   /// Classifies prompt complexity into a target Thinking Effort tier
   /// (`low`, `medium`, `high`, `xhigh`, `max`), honoring model capabilities.
   static String classifyEffortForPrompt({
@@ -1065,57 +1243,12 @@ class HarnessTurnRouter {
     bool supportsMaxEffort = false,
     bool hasAttachments = false,
   }) {
-    final trimmed = prompt.trim();
-    if (trimmed.isEmpty) return 'low';
-
-    if (!hasAttachments &&
-        trimmed.startsWith('/') &&
-        !_deepCommandRe.hasMatch(trimmed)) {
-      return 'low';
-    }
-
-    if (!hasAttachments && isConversationalAck(trimmed)) {
-      return 'low';
-    }
-
-    final hasMaxSignal = _maxCommandRe.hasMatch(trimmed) ||
-        _maxComplexWorkRe.hasMatch(trimmed) ||
-        (hasAttachments && _extraComplexWorkRe.hasMatch(trimmed)) ||
-        (trimmed.length >= 450 &&
-            (trimmed.contains('\n') || hasAttachments) &&
-            (_extraComplexWorkRe.hasMatch(trimmed) ||
-                _complexWorkRe.hasMatch(trimmed)));
-
-    if (hasMaxSignal) {
-      if (supportsMaxEffort) return 'max';
-      if (supportsExtraEffort) return 'xhigh';
-      return 'high';
-    }
-
-    final hasDeepSignal = _deepCommandRe.hasMatch(trimmed) ||
-        _extraComplexWorkRe.hasMatch(trimmed) ||
-        (trimmed.length >= 240 &&
-            (_complexWorkRe.hasMatch(trimmed) || _pathOrCodeRe.hasMatch(trimmed))) ||
-        (trimmed.contains('\n') &&
-            trimmed.length >= 180 &&
-            _complexWorkRe.hasMatch(trimmed) &&
-            _pathOrCodeRe.hasMatch(trimmed));
-
-    if (hasDeepSignal) {
-      return supportsExtraEffort ? 'xhigh' : 'high';
-    }
-
-    final hasComplexSignal = hasAttachments ||
-        _complexWorkRe.hasMatch(trimmed) ||
-        trimmed.length >= 160 ||
-        (_pathOrCodeRe.hasMatch(trimmed) && trimmed.length >= 40) ||
-        (trimmed.contains('\n') && trimmed.length >= 80);
-
-    if (hasComplexSignal) {
-      return 'high';
-    }
-
-    return 'medium';
+    return analyzePromptComplexity(
+      prompt: prompt,
+      supportsExtraEffort: supportsExtraEffort,
+      supportsMaxEffort: supportsMaxEffort,
+      hasAttachments: hasAttachments,
+    ).effort;
   }
 
   static ({String modelId, String effort, bool skipRepoMap, bool downgraded})
