@@ -53,11 +53,11 @@ class UnifiedLineDiff {
     if (m == 0) {
       return [for (final l in a) DiffOp(DiffOpKind.delete, l)];
     }
-    if (n + m > 40000) {
+    if (n + m > 3000) {
       return _fallbackDiff(a, b);
     }
 
-    final maxD = math.min(n + m, 1500);
+    final maxD = math.min(n + m, 400);
     final offset = maxD;
     final v = Int32List(2 * maxD + 1);
     final trace = <Int32List>[];

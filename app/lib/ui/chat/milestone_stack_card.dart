@@ -411,52 +411,54 @@ class _MilestoneStackCardState extends State<MilestoneStackCard> {
       headerLabel = '$thoughtCount thinking step${thoughtCount == 1 ? '' : 's'}';
     }
 
-    return Card(
-      margin: EdgeInsets.zero,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          InkWell(
-            borderRadius: BorderRadius.circular(14),
-            onTap: () => setState(() => _stackOpen = !_stackOpen),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              child: Row(
-                children: [
-                  Icon(
-                    runningCount > 0 ? Icons.sync : Icons.layers_outlined,
-                    size: 16,
-                    color: theme.colorScheme.primary,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      headerLabel,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.labelMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
+    return RepaintBoundary(
+      child: Card(
+        margin: EdgeInsets.zero,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            InkWell(
+              borderRadius: BorderRadius.circular(14),
+              onTap: () => setState(() => _stackOpen = !_stackOpen),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                child: Row(
+                  children: [
+                    Icon(
+                      runningCount > 0 ? Icons.sync : Icons.layers_outlined,
+                      size: 16,
+                      color: theme.colorScheme.primary,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        headerLabel,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.labelMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                     ),
-                  ),
-                  Icon(
-                    _stackOpen
-                        ? Icons.keyboard_arrow_up
-                        : Icons.keyboard_arrow_down,
-                    size: 18,
-                    color: semantic.textSecondary,
-                  ),
-                ],
+                    Icon(
+                      _stackOpen
+                          ? Icons.keyboard_arrow_up
+                          : Icons.keyboard_arrow_down,
+                      size: 18,
+                      color: semantic.textSecondary,
+                    ),
+                  ],
+                ),
               ),
             ),
-          ),
-          if (_stackOpen) ...[
-            const Divider(height: 1),
-            for (final step in widget.steps)
-              _buildStepTile(context, step, toolsById, theme, semantic),
+            if (_stackOpen) ...[
+              const Divider(height: 1),
+              for (final step in widget.steps)
+                _buildStepTile(context, step, toolsById, theme, semantic),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
@@ -471,8 +473,10 @@ class _MilestoneStackCardState extends State<MilestoneStackCard> {
     final isOpen = _expandedSteps.contains(step.id);
 
     if (step.kind == ChatMilestoneKind.thought) {
-      final masked = AgySecretMask.mask(step.text);
-      final preview = _firstLine(masked);
+      final rawTrimmed = step.text.trimLeft();
+      final previewSrc =
+          rawTrimmed.length > 180 ? rawTrimmed.substring(0, 180) : rawTrimmed;
+      final preview = _firstLine(AgySecretMask.mask(previewSrc));
       return InkWell(
         onTap: () => setState(() {
           if (isOpen) {
@@ -516,7 +520,10 @@ class _MilestoneStackCardState extends State<MilestoneStackCard> {
               ),
               if (isOpen) ...[
                 const SizedBox(height: 6),
-                AgyMarkdown(text: masked.trim(), secondary: true),
+                AgyMarkdown(
+                  text: AgySecretMask.mask(step.text).trim(),
+                  secondary: true,
+                ),
               ],
             ],
           ),
@@ -528,7 +535,8 @@ class _MilestoneStackCardState extends State<MilestoneStackCard> {
     if (tool == null) return const SizedBox.shrink();
     final verb = _toolActionVerb(tool);
     final arg = _toolCommandOrTarget(tool);
-    final label = arg.isEmpty ? verb : '$verb — $arg';
+    final rawLabel = arg.isEmpty ? verb : '$verb — $arg';
+    final label = rawLabel.length > 220 ? rawLabel.substring(0, 220) : rawLabel;
 
     return InkWell(
       onTap: () => setState(() {

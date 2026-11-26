@@ -99,12 +99,27 @@ internal class WorkspaceOps(
             syncShadowIndexIfNeeded(dir, shadowDir)
         }
         val pathFilterArgs = shadowExcludeArgs.toTypedArray()
-        val (_, statusWithBranchRaw) = runCapturedArgs(
+        val (statusCode, statusWithBranchRaw) = runCapturedArgs(
             gitCmd(shadowDir, "status", "--short", "--branch", "-uall", *pathFilterArgs),
             dir,
             workEnv,
             20,
         )
+        if (statusCode != 0) {
+            val fallbackBranch = if (shadowDir != null) {
+                "shadow-checkpoint"
+            } else {
+                val (_, b) = runCapturedArgs(gitCmd(null, "rev-parse", "--abbrev-ref", "HEAD"), dir, emptyMap(), 15)
+                b.trim()
+            }
+            return mapOf(
+                "status" to "",
+                "diff" to "",
+                "numstat" to "",
+                "branch" to fallbackBranch,
+                "statusOk" to "false",
+            )
+        }
         val rawStatusLines = statusWithBranchRaw.lines()
         val firstLine = rawStatusLines.firstOrNull()?.trim() ?: ""
         val hasBranchHeader = firstLine.startsWith("## ")
@@ -127,6 +142,7 @@ internal class WorkspaceOps(
                 "diff" to "",
                 "numstat" to "",
                 "branch" to branch,
+                "statusOk" to "true",
             )
         }
 
@@ -232,15 +248,23 @@ internal class WorkspaceOps(
         val combinedDiff = listOf(diffText.trim(), extraDiffs.toString().trim())
             .filter { it.isNotEmpty() }
             .joinToString("\n")
+        val maxDiffChars = 512 * 1024
+        val boundedDiff = if (combinedDiff.length > maxDiffChars) {
+            val cut = combinedDiff.lastIndexOf('\n', maxDiffChars).let { if (it > 0) it else maxDiffChars }
+            combinedDiff.substring(0, cut) + "\n... (diff output truncated at 512KB for responsiveness)"
+        } else {
+            combinedDiff
+        }
         val combinedNumstat = listOf(numstatText.trim(), extraNumstat.toString().trim())
             .filter { it.isNotEmpty() }
             .joinToString("\n")
 
         return mapOf(
             "status" to statusRaw,
-            "diff" to combinedDiff,
+            "diff" to boundedDiff,
             "numstat" to combinedNumstat,
             "branch" to branch,
+            "statusOk" to "true",
         )
     }
 

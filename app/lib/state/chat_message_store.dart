@@ -1,12 +1,17 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:agy_client/agy_client.dart';
+import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'chat_models.dart';
+
+String _encodeChatMessagesJson(List<Map<String, dynamic>> raw) =>
+    jsonEncode(raw);
 
 class SessionSearchHit {
   const SessionSearchHit({
@@ -84,8 +89,47 @@ class ChatMessageStore {
     }
   }
 
-  Future<void> save(String sessionId, List<ChatMessage> msgs) async {
-    final encoded = jsonEncode(msgs.map((m) => m.toJson()).toList());
+  final Map<String, Future<void>> _activeWrites = {};
+  final Map<String, List<ChatMessage>> _queuedWrites = {};
+
+  Future<void> save(String sessionId, List<ChatMessage> msgs) {
+    final snapshot = List<ChatMessage>.unmodifiable(msgs);
+    final inFlight = _activeWrites[sessionId];
+    if (inFlight != null) {
+      _queuedWrites[sessionId] = snapshot;
+      return inFlight;
+    }
+    late final Future<void> runFuture;
+    runFuture = () async {
+      try {
+        await _writeSnapshot(sessionId, snapshot);
+        while (true) {
+          final next = _queuedWrites.remove(sessionId);
+          if (next == null) break;
+          await _writeSnapshot(sessionId, next);
+        }
+      } finally {
+        if (identical(_activeWrites[sessionId], runFuture)) {
+          _activeWrites.remove(sessionId);
+        }
+      }
+    }();
+    _activeWrites[sessionId] = runFuture;
+    return runFuture;
+  }
+
+  Future<void> _writeSnapshot(String sessionId, List<ChatMessage> msgs) async {
+    final jsonItems = msgs.map((m) => m.toJson()).toList(growable: false);
+    final offload = msgs.length > 4 ||
+        msgs.any(
+          (m) =>
+              m.text.length > 4096 ||
+              m.thoughts.length > 4096 ||
+              m.tools.length > 3,
+        );
+    final encoded = offload
+        ? await compute(_encodeChatMessagesJson, jsonItems)
+        : jsonEncode(jsonItems);
     final dir = await _sessionsDir();
     if (dir == null) {
       final prefs = await SharedPreferences.getInstance();
@@ -97,11 +141,7 @@ class ChatMessageStore {
     final tmp = File('${dir.path}/.$safeId.tmp');
     try {
       await tmp.writeAsString(encoded, flush: true);
-      if (target.existsSync()) {
-        await tmp.rename(target.path);
-      } else {
-        await tmp.rename(target.path);
-      }
+      await tmp.rename(target.path);
     } catch (_) {
       try {
         await target.writeAsString(encoded, flush: true);

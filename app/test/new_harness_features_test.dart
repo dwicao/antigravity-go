@@ -728,6 +728,84 @@ diff --git a/app/lib/main.dart b/app/lib/main.dart
     await chatNotifier.stopStreaming(sessionId: 'stream-diff-sess');
     expect(diffNotifier.hasPendingStreamingThrottleForTest, isFalse);
   });
+
+  test('WorkspaceDiffNotifier preserves active streaming paths and ChatTurnHelpers fast-paths Read tools', () async {
+    expect(
+      ChatTurnHelpers.isFileEditTool(
+        ChatToolStep(
+          id: 'r1',
+          toolName: 'read_file',
+          state: ToolCallState.completed,
+          parameters: const {'path': 'lib/main.dart'},
+          output: '---\na/\n@@ fake text inside read file @@',
+        ),
+      ),
+      isFalse,
+    );
+
+    final filtered = WorkspaceDiffNotifier.filterChatFilesAgainstCheckedRepos(
+      const [
+        FileChangeEntry(
+          path: '/sdcard/Projects/antigravity-go/app/lib/in_flight.dart',
+          added: 12,
+          removed: 3,
+        ),
+        FileChangeEntry(
+          path: '/sdcard/Projects/antigravity-go/app/lib/committed.dart',
+          added: 5,
+          removed: 1,
+        ),
+      ],
+      const [
+        (
+          cwd: '/sdcard/Projects/antigravity-go',
+          branch: 'main',
+          files: <FileChangeEntry>[],
+        ),
+      ],
+      '/sdcard/Projects/antigravity-go',
+      preservePaths: const {'/sdcard/Projects/antigravity-go/app/lib/in_flight.dart'},
+    );
+    expect(
+      filtered.map((f) => f.path),
+      ['/sdcard/Projects/antigravity-go/app/lib/in_flight.dart'],
+    );
+
+    // Concurrent ChatMessageStore.save calls serialize cleanly to the latest snapshot.
+    const sid = 'concurrent-save-test';
+    final first = [
+      ChatMessage(
+        id: 'm1',
+        role: ChatRole.assistant,
+        text: 'first',
+        createdAt: DateTime.utc(2026, 11, 26, 13, 0),
+      ),
+    ];
+    final second = [
+      ...first,
+      ChatMessage(
+        id: 'm2',
+        role: ChatRole.assistant,
+        text: 'second',
+        createdAt: DateTime.utc(2026, 11, 26, 13, 1),
+        tools: List.generate(
+          6,
+          (i) => ChatToolStep(
+            id: 't-$i',
+            toolName: 'read_file',
+            state: ToolCallState.completed,
+            output: 'line $i',
+          ),
+        ),
+      ),
+    ];
+    await Future.wait([
+      ChatMessageStore.instance.save(sid, first),
+      ChatMessageStore.instance.save(sid, second),
+    ]);
+    final loaded = await ChatMessageStore.instance.load(sid);
+    expect(loaded.map((m) => m.id), ['m1', 'm2']);
+  });
 }
 
 class _FakeWorkspaceDiffNotifier extends WorkspaceDiffNotifier {

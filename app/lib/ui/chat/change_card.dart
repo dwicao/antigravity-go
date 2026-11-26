@@ -262,25 +262,26 @@ class ChangeCard extends StatelessWidget {
               ),
               const SizedBox(height: 10),
               if (file.diff != null && file.diff!.trim().isNotEmpty)
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: 280),
-                  child: SingleChildScrollView(
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: ConstrainedBox(
-                        constraints: BoxConstraints(
-                          minWidth: MediaQuery.sizeOf(ctx).width - 32,
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            for (final line in file.diff!.split('\n'))
-                              DiffLineView(line: line, filePath: file.path),
-                          ],
+                Builder(
+                  builder: (_) {
+                    final lines = file.diff!.split('\n');
+                    return SizedBox(
+                      height: 280,
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: SizedBox(
+                          width: MediaQuery.sizeOf(ctx).width - 32 > 540
+                              ? MediaQuery.sizeOf(ctx).width - 32
+                              : 540,
+                          child: ListView.builder(
+                            itemCount: lines.length,
+                            itemBuilder: (_, i) =>
+                                DiffLineView(line: lines[i], filePath: file.path),
+                          ),
                         ),
                       ),
-                    ),
-                  ),
+                    );
+                  },
                 )
               else
                 Text(

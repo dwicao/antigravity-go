@@ -182,5 +182,63 @@ void main() {
       expect(evt.output, contains('+line_200_updated'));
       expect(evt.output, contains('+line_201_inserted'));
     });
+
+    test('caps huge ACP diff previews and skips identical diff blocks cleanly', () {
+      final codec = AcpCodec();
+      final hugeOld = List<String>.generate(4000, (i) => 'old_line_$i').join('\n');
+      final hugeNew = List<String>.generate(4000, (i) => 'new_line_$i').join('\n');
+
+      final noChangePayload = jsonEncode({
+        'jsonrpc': '2.0',
+        'method': 'session/update',
+        'params': {
+          'sessionId': 's1',
+          'update': {
+            'sessionUpdate': 'tool_call_update',
+            'toolCallId': 'tc-noop',
+            'title': 'Edit file',
+            'status': 'completed',
+            'content': [
+              {
+                'type': 'diff',
+                'path': 'lib/same.dart',
+                'oldText': hugeOld,
+                'newText': hugeOld,
+              },
+            ],
+          },
+        },
+      });
+      final noChangeEvt =
+          codec.parseNotificationOrRequest(noChangePayload)! as AgyToolCallEvent;
+      expect(noChangeEvt.output, isNull);
+
+      final hugePayload = jsonEncode({
+        'jsonrpc': '2.0',
+        'method': 'session/update',
+        'params': {
+          'sessionId': 's1',
+          'update': {
+            'sessionUpdate': 'tool_call_update',
+            'toolCallId': 'tc-huge',
+            'title': 'Edit huge file',
+            'status': 'completed',
+            'content': [
+              {
+                'type': 'diff',
+                'path': 'lib/huge.dart',
+                'oldText': hugeOld,
+                'newText': hugeNew,
+              },
+            ],
+          },
+        },
+      });
+      final hugeEvt =
+          codec.parseNotificationOrRequest(hugePayload)! as AgyToolCallEvent;
+      final outLines = hugeEvt.output!.split('\n');
+      expect(outLines.length, lessThan(260));
+      expect(hugeEvt.output, contains('more)'));
+    });
   });
 }

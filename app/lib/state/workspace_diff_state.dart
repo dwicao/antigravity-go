@@ -76,6 +76,8 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
   bool _scheduledCoalesced = false;
   bool _pendingForce = false;
   bool _refreshInFlight = false;
+  bool _pendingRefreshAfterInFlight = false;
+  bool _pendingForceAfterInFlight = false;
   Timer? _streamingThrottleTimer;
   String? _currentSessionId;
   final Map<String, WorkspaceDiffState> _sessionCache = {};
@@ -186,6 +188,10 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
     if (prevId != null && prevId.isNotEmpty) {
       _putSessionCache(prevId, state);
     }
+    _refreshToken++;
+    _refreshInFlight = false;
+    _pendingRefreshAfterInFlight = false;
+    _pendingForceAfterInFlight = false;
     _currentSessionId = nextId;
     _applyInstantSessionSnapshot(nextId);
     _scheduleRefresh();
@@ -201,12 +207,14 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
             cachedSession.cwd.isEmpty ||
             cachedSession.cwd == primaryCwd)) {
       final merged = _mergeGitAndChatFiles(cachedSession.files, chatFiles);
-      state = cachedSession.copyWith(
-        loading: false,
-        files: merged,
-        unifiedDiff: cachedSession.unifiedDiff.isNotEmpty
-            ? cachedSession.unifiedDiff
-            : _joinFileDiffs(merged),
+      _emitIfChanged(
+        cachedSession.copyWith(
+          loading: false,
+          files: merged,
+          unifiedDiff: cachedSession.unifiedDiff.isNotEmpty
+              ? cachedSession.unifiedDiff
+              : _joinFileDiffs(merged),
+        ),
       );
       return;
     }
@@ -214,21 +222,25 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
     final cachedCwd = primaryCwd.isNotEmpty ? _cwdCache[primaryCwd]?.state : null;
     if (cachedCwd != null) {
       final merged = _mergeGitAndChatFiles(cachedCwd.files, chatFiles);
-      state = cachedCwd.copyWith(
-        loading: false,
-        files: merged,
-        unifiedDiff: cachedCwd.unifiedDiff.isNotEmpty
-            ? cachedCwd.unifiedDiff
-            : _joinFileDiffs(merged),
+      _emitIfChanged(
+        cachedCwd.copyWith(
+          loading: false,
+          files: merged,
+          unifiedDiff: cachedCwd.unifiedDiff.isNotEmpty
+              ? cachedCwd.unifiedDiff
+              : _joinFileDiffs(merged),
+        ),
       );
       return;
     }
 
-    state = WorkspaceDiffState(
-      loading: false,
-      cwd: primaryCwd,
-      files: chatFiles,
-      unifiedDiff: _joinFileDiffs(chatFiles),
+    _emitIfChanged(
+      WorkspaceDiffState(
+        loading: false,
+        cwd: primaryCwd,
+        files: chatFiles,
+        unifiedDiff: _joinFileDiffs(chatFiles),
+      ),
     );
   }
 
@@ -236,10 +248,11 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
     final sid = ref.read(sessionsProvider).activeSessionId ?? _currentSessionId;
     final chatFiles = _sessionChatResultFiles(sessionId: sid);
     if (chatFiles.isEmpty) {
-      if (state.branch.isEmpty &&
+      if (!ref.read(chatProvider).isStreaming &&
+          state.branch.isEmpty &&
           state.status.isEmpty &&
           state.files.isNotEmpty) {
-        state = state.copyWith(files: const [], unifiedDiff: '');
+        _emitIfChanged(state.copyWith(files: const [], unifiedDiff: ''));
       }
       return;
     }
@@ -491,8 +504,9 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
   static List<FileChangeEntry> filterChatFilesAgainstCheckedRepos(
     List<FileChangeEntry> chatFiles,
     List<({String cwd, String branch, List<FileChangeEntry> files})> checkedRepos,
-    String primaryCwd,
-  ) {
+    String primaryCwd, {
+    Set<String> preservePaths = const {},
+  }) {
     if (chatFiles.isEmpty || checkedRepos.isEmpty) return chatFiles;
     final realRepos = checkedRepos
         .where((r) => r.branch.isNotEmpty && r.branch != 'shadow-checkpoint')
@@ -500,6 +514,10 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
     if (realRepos.isEmpty) return chatFiles;
     return chatFiles.where((cf) {
       final normPath = _normalizePath(cf.path);
+      if (preservePaths.isNotEmpty &&
+          preservePaths.any((p) => _pathsReferToSameFile(p, normPath))) {
+        return true;
+      }
       final isRelative = !normPath.startsWith('/');
       for (final repo in realRepos) {
         final covers = isRelative
@@ -568,6 +586,11 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
 
   Future<void> refresh({bool showLoading = false, bool force = false}) async {
     if (!ref.mounted) return;
+    if (_refreshInFlight) {
+      _pendingRefreshAfterInFlight = true;
+      if (force) _pendingForceAfterInFlight = true;
+      return;
+    }
     final token = ++_refreshToken;
     _refreshInFlight = true;
     final activeSid =
@@ -657,7 +680,7 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
               diff.isNotEmpty ? diff : _joinFileDiffs(effectiveFiles),
           files: effectiveFiles,
         );
-        state = nextState;
+        _emitIfChanged(nextState);
         if (activeSid != null) _putSessionCache(activeSid, nextState);
         return;
       }
@@ -674,9 +697,18 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
       chosenStatus = primaryRes.status.trimRight();
       chosenDiff = primaryRes.diff.trim();
       chosenFiles = primaryRes.files;
+      if (!primaryRes.statusOk &&
+          chosenFiles.isEmpty &&
+          state.cwd == primaryCwd &&
+          state.files.isNotEmpty) {
+        chosenBranch = state.branch;
+        chosenStatus = state.status;
+        chosenDiff = state.unifiedDiff;
+        chosenFiles = state.files;
+      }
       final checkedRepos =
           <({String cwd, String branch, List<FileChangeEntry> files})>[
-        if (primaryCwd.isNotEmpty)
+        if (primaryCwd.isNotEmpty && primaryRes.statusOk)
           (cwd: primaryCwd, branch: chosenBranch, files: chosenFiles),
       ];
 
@@ -712,9 +744,11 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
             final branch = item.res.branch.trim();
             final status = item.res.status.trimRight();
             final diff = item.res.diff.trim();
-            checkedRepos.add(
-              (cwd: item.cwd, branch: branch, files: item.res.files),
-            );
+            if (item.res.statusOk) {
+              checkedRepos.add(
+                (cwd: item.cwd, branch: branch, files: item.res.files),
+              );
+            }
             if (chosenBranch.isEmpty && branch.isNotEmpty) {
               chosenCwd = item.cwd;
               chosenBranch = branch;
@@ -744,10 +778,14 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
         }
       }
 
+      final preserveStreamingPaths = ref.read(chatProvider).isStreaming
+          ? latestChatFiles.map((f) => _normalizePath(f.path)).toSet()
+          : const <String>{};
       final effectiveChatFiles = filterChatFilesAgainstCheckedRepos(
         latestChatFiles,
         checkedRepos,
         primaryCwd,
+        preservePaths: preserveStreamingPaths,
       );
       final effectiveFiles =
           _mergeGitAndChatFiles(chosenFiles, effectiveChatFiles);
@@ -797,17 +835,30 @@ class WorkspaceDiffNotifier extends Notifier<WorkspaceDiffState> {
     } catch (_) {
       if (!ref.mounted || token != _refreshToken) return;
       final latestChatFiles = _sessionChatResultFiles(sessionId: activeSid);
+      final preserved =
+          state.cwd == primaryCwd ? state.files : const <FileChangeEntry>[];
+      final effective = _mergeGitAndChatFiles(preserved, latestChatFiles);
       final nextState = WorkspaceDiffState(
         loading: false,
         cwd: primaryCwd,
-        files: latestChatFiles,
-        unifiedDiff: _joinFileDiffs(latestChatFiles),
+        branch: state.cwd == primaryCwd ? state.branch : '',
+        status: state.cwd == primaryCwd ? state.status : '',
+        files: effective,
+        unifiedDiff: (state.cwd == primaryCwd && state.unifiedDiff.isNotEmpty)
+            ? state.unifiedDiff
+            : _joinFileDiffs(effective),
       );
       _emitIfChanged(nextState);
       if (activeSid != null) _putSessionCache(activeSid, nextState);
     } finally {
       if (token == _refreshToken) {
         _refreshInFlight = false;
+        if (_pendingRefreshAfterInFlight && ref.mounted) {
+          final replayForce = _pendingForceAfterInFlight;
+          _pendingRefreshAfterInFlight = false;
+          _pendingForceAfterInFlight = false;
+          _scheduleRefresh(force: replayForce);
+        }
       }
     }
   }

@@ -219,10 +219,12 @@ class AcpCodec {
         final path = m['path']?.toString() ?? '';
         final oldText = m['oldText']?.toString() ?? '';
         final newText = m['newText']?.toString() ?? '';
+        if (oldText == newText) continue;
         final computed = UnifiedLineDiff.compute(
           path: path,
           oldText: oldText,
           newText: newText,
+          maxBodyLines: 240,
         );
         if (computed.diff.isNotEmpty) {
           diffParts.add(computed.diff);

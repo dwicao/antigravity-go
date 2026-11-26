@@ -552,6 +552,7 @@ class RuntimeBridge {
         String status,
         String diff,
         String branch,
+        bool statusOk,
         List<FileChangeEntry> files,
       })> gitDiffDetailed(String cwd) async {
     try {
@@ -563,6 +564,7 @@ class RuntimeBridge {
       final diff = raw?['diff']?.toString() ?? '';
       final branch = raw?['branch']?.toString() ?? '';
       final numstat = raw?['numstat']?.toString() ?? '';
+      final statusOk = raw != null && raw['statusOk']?.toString() != 'false';
       final files = diff.length > 48 * 1024
           ? await compute(
               _parseGitDiffOutputs,
@@ -577,6 +579,7 @@ class RuntimeBridge {
         status: status,
         diff: diff,
         branch: branch,
+        statusOk: statusOk,
         files: files,
       );
     } on MissingPluginException {
@@ -584,6 +587,7 @@ class RuntimeBridge {
         status: '',
         diff: '',
         branch: '',
+        statusOk: false,
         files: const <FileChangeEntry>[],
       );
     } on PlatformException {
@@ -591,6 +595,7 @@ class RuntimeBridge {
         status: '',
         diff: '',
         branch: '',
+        statusOk: false,
         files: const <FileChangeEntry>[],
       );
     }

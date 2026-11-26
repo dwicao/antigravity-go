@@ -139,6 +139,15 @@ class ChatTurnHelpers {
     return (added: added, removed: removed);
   }
 
+  static bool hasDiffOutput(String? rawOutput) {
+    if (rawOutput == null || rawOutput.isEmpty) return false;
+    final trimmedLeft = rawOutput.trimLeft();
+    if (trimmedLeft.startsWith('--- a/') || trimmedLeft.startsWith('@@ ')) {
+      return true;
+    }
+    return rawOutput.contains('\n@@ ');
+  }
+
   static bool isFileEditTool(ChatToolStep step) {
     final nameLower = step.toolName.toLowerCase();
     final p = step.parameters;
@@ -166,19 +175,25 @@ class ChatTurnHelpers {
         nameLower == 'delete' ||
         p['Deleted'] == true ||
         p['deleted'] == true;
-    final outStr = step.output?.trim() ?? '';
-    final hasOutputDiff = outStr.contains('\n@@ ') ||
-        outStr.startsWith('--- a/') ||
-        outStr.startsWith('@@ ');
-    return nameLower.contains('write') ||
+    if (nameLower.contains('write') ||
         nameLower.contains('edit') ||
         nameLower.contains('replace') ||
         nameLower.contains('patch') ||
         nameLower.contains('create_file') ||
         isDeleteTool ||
-        ((nameLower == 'file' || nameLower.startsWith('file ')) &&
-            (hasEditParams || hasOutputDiff)) ||
-        hasOutputDiff;
+        hasEditParams) {
+      return true;
+    }
+    if (nameLower.contains('read') ||
+        nameLower.contains('view') ||
+        nameLower.contains('grep') ||
+        nameLower.contains('find') ||
+        nameLower.contains('list') ||
+        nameLower.contains('search') ||
+        nameLower.contains('fetch')) {
+      return false;
+    }
+    return hasDiffOutput(step.output);
   }
 
   static bool hasSuccessfulGitCommit(ChatToolStep step) {
@@ -247,10 +262,8 @@ class ChatTurnHelpers {
           nameLower == 'delete' ||
           p['Deleted'] == true ||
           p['deleted'] == true;
-      final outStr = step.output?.trim() ?? '';
-      final hasOutputDiff = outStr.contains('\n@@ ') ||
-          outStr.startsWith('--- a/') ||
-          outStr.startsWith('@@ ');
+      final hasOutputDiff = hasDiffOutput(step.output);
+      final outStr = hasOutputDiff ? step.output!.trim() : '';
 
       var path = (p['TargetFile'] ??
                   p['AbsolutePath'] ??
@@ -323,10 +336,26 @@ class ChatTurnHelpers {
         final tgtStr = target?.toString();
         if (tgtStr != null || repStr != null) {
           hadTargetText = tgtStr != null;
-          final res = _buildDiffWithStats(path, tgtStr, repStr);
-          added = res.added;
-          removed = res.removed;
-          diffSnippet = res.diff.isEmpty ? null : res.diff;
+          if (!hadTargetText && hasOutputDiff) {
+            final outCounts = _countPatchLines(outStr);
+            if (outCounts.added > 0 || outCounts.removed > 0) {
+              diffSnippet = outStr.startsWith('@@ ')
+                  ? '--- a/$path\n+++ b/$path\n$outStr'
+                  : outStr;
+              added = outCounts.added;
+              removed = outCounts.removed;
+            } else {
+              final res = _buildDiffWithStats(path, tgtStr, repStr);
+              added = res.added;
+              removed = res.removed;
+              diffSnippet = res.diff.isEmpty ? null : res.diff;
+            }
+          } else {
+            final res = _buildDiffWithStats(path, tgtStr, repStr);
+            added = res.added;
+            removed = res.removed;
+            diffSnippet = res.diff.isEmpty ? null : res.diff;
+          }
         } else if (rawPatch is String && rawPatch.trim().isNotEmpty) {
           hadTargetText = true;
           diffSnippet = rawPatch.trimRight();
@@ -355,7 +384,7 @@ class ChatTurnHelpers {
               ((nameLower.contains('write_to_file') ||
                       nameLower.contains('write_file')) &&
                   removed == 0));
-      final deleted = isDeleteTool || outStr.contains('+++ /dev/null');
+      final deleted = isDeleteTool || (step.output?.contains('+++ /dev/null') ?? false);
       final prev = byPath[path];
       final combinedDiff = [
         if (prev?.diff != null && prev!.diff!.trim().isNotEmpty) prev.diff!.trimRight(),

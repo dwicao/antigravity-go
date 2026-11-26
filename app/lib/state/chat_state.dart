@@ -77,6 +77,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
   final Map<String, _SessionTurnRuntime> _sessionRuntimes = {};
   final Map<String, String> _wakeupAssistantIds = {};
   final Map<String, Timer> _wakeupFinalizeTimers = {};
+  final Map<String, Timer> _persistTimers = {};
   final Set<String> _completedAssistantIds = <String>{};
   final List<String> _completedAssistantOrder = <String>[];
   static const int _maxCompletedAssistantHistory = 400;
@@ -323,6 +324,10 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         timer.cancel();
       }
       _wakeupFinalizeTimers.clear();
+      for (final timer in _persistTimers.values) {
+        timer.cancel();
+      }
+      _persistTimers.clear();
       _wakeupAssistantIds.clear();
       _wakeupSub?.cancel();
       _notifPermSub?.cancel();
@@ -668,8 +673,46 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     );
   }
 
-  Future<void> _persistMessages(String sessionId, List<ChatMessage> msgs) =>
-      ChatMessageStore.instance.save(sessionId, msgs);
+  Future<void> _persistMessages(String sessionId, List<ChatMessage> msgs) {
+    _persistTimers.remove(sessionId)?.cancel();
+    return ChatMessageStore.instance.save(sessionId, msgs);
+  }
+
+  void _schedulePersistMessages(String sessionId) {
+    if (_persistTimers[sessionId]?.isActive == true) return;
+    _persistTimers[sessionId] = Timer(const Duration(seconds: 2), () {
+      _persistTimers.remove(sessionId);
+      if (!ref.mounted) return;
+      final latest = _messagesForSession(sessionId);
+      if (latest.isNotEmpty) {
+        unawaited(ChatMessageStore.instance.save(sessionId, latest));
+      }
+    });
+  }
+
+  static String? _boundToolOutput(String? raw) {
+    if (raw == null ||
+        raw.length <= 8192 ||
+        ChatTurnHelpers.hasDiffOutput(raw)) {
+      return raw;
+    }
+    return '${raw.substring(0, 8192)}\n… [truncated ${raw.length - 8192} chars]';
+  }
+
+  static String _compactLoopParamsJson(Map<String, dynamic> params) {
+    if (params.isEmpty) return '{}';
+    final compact = <String, dynamic>{};
+    for (final entry in params.entries) {
+      final v = entry.value;
+      if (v is String && v.length > 240) {
+        compact[entry.key] =
+            '${v.substring(0, 120)}...[len=${v.length},h=${v.hashCode}]';
+      } else {
+        compact[entry.key] = v;
+      }
+    }
+    return jsonEncode(compact);
+  }
 
   List<ChatMessage> _messagesForSession(String sessionId) {
     return _inFlightMessages[sessionId] ??
@@ -701,15 +744,15 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       return;
     }
 
-    // Leading-edge immediate emit + 33ms trailing coalesce (~30fps) so rapid
-    // streaming token bursts never choke Markdown layout on long histories.
+    // Leading-edge immediate emit + 48ms trailing coalesce (~21fps) so rapid
+    // streaming token and tool bursts never choke Markdown/milestone layout.
     if (rt.uiEmitTimer == null) {
       state = state.copyWith(
         messages: next,
         tokensPerSecond: tokensPerSecond ?? rt.latestTokensPerSec,
       );
       rt.pendingUiEmit = false;
-      rt.uiEmitTimer = Timer(const Duration(milliseconds: 33), () {
+      rt.uiEmitTimer = Timer(const Duration(milliseconds: 48), () {
         rt.uiEmitTimer = null;
         if (!ref.mounted || _loadedSessionId != sessionId) return;
         if (rt.pendingUiEmit) {
@@ -1425,17 +1468,12 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         if (tIdx >= 0) {
           final prev = tools[tIdx];
           final prevOut = prev.output;
-          final nextOut = evt.output;
-          final prevHasDiff = prevOut != null &&
-              (prevOut.contains('\n@@ ') ||
-                  prevOut.startsWith('--- a/') ||
-                  prevOut.startsWith('@@ '));
+          final nextOut = _boundToolOutput(evt.output);
+          final prevHasDiff = ChatTurnHelpers.hasDiffOutput(prevOut);
+          final nextHasDiff = ChatTurnHelpers.hasDiffOutput(nextOut);
           final mergedOutput = switch ((prevHasDiff, nextOut)) {
             (_, null) => prevOut,
-            (true, final String nxt)
-                when !nxt.contains('\n@@ ') &&
-                    !nxt.startsWith('--- a/') &&
-                    !nxt.startsWith('@@ ') =>
+            (true, final String nxt) when !nextHasDiff =>
               nxt.trim().isEmpty ? prevOut : '${nxt.trim()}\n\n$prevOut',
             _ => nextOut,
           };
@@ -1444,7 +1482,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
             toolName: resolvedToolName,
             state: evt.state,
             parameters: mergedParams,
-            output: mergedOutput,
+            output: _boundToolOutput(mergedOutput),
             error: evt.errorMessage ?? prev.error,
             durationSeconds: evt.durationSeconds ?? prev.durationSeconds,
             startedAt: prev.startedAt,
@@ -1456,7 +1494,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
               toolName: resolvedToolName,
               state: evt.state,
               parameters: evt.parameters,
-              output: evt.output,
+              output: _boundToolOutput(evt.output),
               error: evt.errorMessage,
               durationSeconds: evt.durationSeconds,
               startedAt:
@@ -1475,6 +1513,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           session.id,
           idx,
           current.copyWith(tools: tools, steps: nextSteps),
+          coalesceUi: true,
         );
         final prevSubagents = _activeSubagentsBySession[session.id] ?? const [];
         final nextSubagents = ChatTurnHelpers.applySubagentToolEvent(
@@ -1507,7 +1546,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           if (rt.seenLoopCallIds.add(effCallId) || evt.parameters.isNotEmpty) {
             loopHit = rt.loopDetector.recordToolCall(
               name: resolvedToolName,
-              input: jsonEncode(mergedParams),
+              input: _compactLoopParamsJson(mergedParams),
               isError: isFailed,
               callId: effCallId,
             );
@@ -1528,7 +1567,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           }
         }
         if (evt.state != ToolCallState.running) {
-          unawaited(_persistMessages(session.id, _messagesForSession(session.id)));
+          _schedulePersistMessages(session.id);
         }
       case AgyPermissionRequestEvent():
         _pendingPermissionsBySession[session.id] = evt;
