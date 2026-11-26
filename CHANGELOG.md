@@ -2,6 +2,14 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.54] - 2026-11-26
+
+### Added & Improved
+- **User-Configurable Category Effort Profiles (`EffortCategory`, `EffortCategoryProfile`):**
+  - Replaced opaque automatic effort overrides with explicit per-category Thinking Effort configuration (`Simple Chat / Q&A` = `Low`, `Normal Task` = `Medium`, `Refactor & Debug` = `High`, `Deep & Audit` = `XHigh`, `Compaction` = `Low` by default).
+  - Added the **Effort Per Category** editor and **Reset defaults** control under **Category Effort Routing** in `HarnessPage`, persisted via `HarnessNotifier` (`SharedPreferences`) and applied cleanly to both prompt routing and manual/auto compaction.
+  - Updated `ChatComposerBar` effort pill to show live `<Category> · <Effort>` previews (e.g. `Chat · Low`, `Normal · Medium`, `Refactor · High`, `Deep · XHigh`) instead of generic `Auto` labels, while preserving 1-tap per-turn pins (`Pin · <Effort>`) and inline `!low`–`!max` tags.
+
 ## [1.0.53] - 2026-11-26
 
 ### Added & Improved
