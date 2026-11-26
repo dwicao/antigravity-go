@@ -31,7 +31,9 @@ class CustomizationsNotifier extends Notifier<List<CustomizationItem>> {
     return projDir.isNotEmpty ? projDir : runtimeRoot;
   }
 
-  Future<void> refresh({bool force = false}) {
+  Future<void> refresh() => _refreshImpl();
+
+  Future<void> _refreshImpl({bool force = false}) {
     final cwd = _resolveCwd();
     final now = DateTime.now();
     if (!force &&
@@ -63,7 +65,7 @@ class CustomizationsNotifier extends Notifier<List<CustomizationItem>> {
 
   Future<bool> saveFile(String path, String content) async {
     final ok = await RuntimeBridge.instance.writeWorkspaceFile(path, content);
-    if (ok) await refresh(force: true);
+    if (ok) await _refreshImpl(force: true);
     return ok;
   }
 
@@ -80,7 +82,7 @@ class CustomizationsNotifier extends Notifier<List<CustomizationItem>> {
       cwd: _resolveCwd(),
       content: content,
     );
-    if (path != null) await refresh(force: true);
+    if (path != null) await _refreshImpl(force: true);
     return path;
   }
 

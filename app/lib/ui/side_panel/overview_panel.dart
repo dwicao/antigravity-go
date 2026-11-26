@@ -43,7 +43,7 @@ class _OverviewChatSummary {
     required this.artifacts,
   });
 
-  factory _OverviewChatSummary.fromState(ChatState chat) {
+  factory _OverviewChatSummary.fromState(ChatThreadState chat) {
     final modified = <String>{};
     final artifacts = <_OverviewArtifactSummary>[];
     for (final m in chat.messages) {

@@ -234,6 +234,8 @@ class _WorkspacePageState extends ConsumerState<WorkspacePage> {
   Widget build(BuildContext context) {
     final extRoot =
         ref.watch(permissionsProvider.select((p) => p.externalStorageRoot));
+    final allFilesAccess =
+        ref.watch(permissionsProvider.select((p) => p.allFilesAccess));
     final runtimeRoot =
         ref.watch(runtimeProvider.select((r) => r.status.workspaceRoot)) ?? '';
     final downloadsPath = '$extRoot/Download';
@@ -300,7 +302,7 @@ class _WorkspacePageState extends ConsumerState<WorkspacePage> {
       ),
       body: Column(
         children: [
-          if (!perms.allFilesAccess)
+          if (!allFilesAccess)
             Container(
               margin: const EdgeInsets.fromLTRB(14, 6, 14, 6),
               padding: const EdgeInsets.all(12),
@@ -342,7 +344,7 @@ class _WorkspacePageState extends ConsumerState<WorkspacePage> {
                     avatar: const Icon(Icons.sd_storage_outlined, size: 16),
                     label: const Text('Internal Storage'),
                     onPressed: () async {
-                      if (!perms.allFilesAccess) {
+                      if (!allFilesAccess) {
                         await ref
                             .read(permissionsProvider.notifier)
                             .requestAllFilesAccess();
@@ -355,7 +357,7 @@ class _WorkspacePageState extends ConsumerState<WorkspacePage> {
                     avatar: const Icon(Icons.download_outlined, size: 16),
                     label: const Text('Downloads'),
                     onPressed: () async {
-                      if (!perms.allFilesAccess) {
+                      if (!allFilesAccess) {
                         await ref
                             .read(permissionsProvider.notifier)
                             .requestAllFilesAccess();
