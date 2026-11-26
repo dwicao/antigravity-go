@@ -810,6 +810,31 @@ diff --git a/app/lib/main.dart b/app/lib/main.dart
   });
 
   testWidgets('ChatScreen does not show mini-diff banner above composer, keeping ChangeCard only after completed chat result', (tester) async {
+    final streamingMsgs = [
+      ChatMessage(
+        id: 'u1',
+        role: ChatRole.user,
+        text: 'Edit foo.dart',
+        createdAt: DateTime(2026, 11, 26, 13, 20),
+      ),
+      ChatMessage(
+        id: 'a1',
+        role: ChatRole.assistant,
+        text: 'Editing...',
+        createdAt: DateTime(2026, 11, 26, 13, 20),
+        isStreaming: true,
+        changedFiles: const [
+          FileChangeEntry(path: 'lib/foo.dart', added: 5, removed: 2),
+        ],
+      ),
+    ];
+    final fakeChat = _FakeChatNotifier(
+      ChatThreadState(
+        isStreaming: true,
+        loadedSessionId: 's-nobanner',
+        messages: streamingMsgs,
+      ),
+    );
     final container = ProviderContainer(
       overrides: [
         sessionsProvider.overrideWith(
@@ -818,11 +843,11 @@ diff --git a/app/lib/main.dart b/app/lib/main.dart
         runtimeProvider.overrideWith(
           () => _FakeRuntimeNotifier(const RuntimeUiState()),
         ),
+        chatProvider.overrideWith(() => fakeChat),
       ],
     );
     addTearDown(container.dispose);
 
-    final chatNotifier = container.read(chatProvider.notifier);
     await tester.pumpWidget(
       UncontrolledProviderScope(
         container: container,
@@ -833,37 +858,21 @@ diff --git a/app/lib/main.dart b/app/lib/main.dart
       ),
     );
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 20));
-
-    chatNotifier.seedStreamingTurnForTest(
-      sessionId: 's-nobanner',
-      turnId: 'turn-nobanner',
-      messages: [
-        ChatMessage(
-          id: 'u1',
-          role: ChatRole.user,
-          text: 'Edit foo.dart',
-          createdAt: DateTime(2026, 11, 26, 13, 20),
-        ),
-        ChatMessage(
-          id: 'a1',
-          role: ChatRole.assistant,
-          text: 'Editing...',
-          createdAt: DateTime(2026, 11, 26, 13, 20),
-          isStreaming: true,
-          changedFiles: const [
-            FileChangeEntry(path: 'lib/foo.dart', added: 5, removed: 2),
-          ],
-        ),
-      ],
-    );
-    await tester.pump();
 
     expect(find.byType(WorkspaceChangesBanner), findsNothing);
     // ChangeCard is hidden while message is streaming.
     expect(find.textContaining('View Diff'), findsNothing);
 
-    await chatNotifier.stopStreaming(sessionId: 's-nobanner');
+    fakeChat.setThreadState(
+      ChatThreadState(
+        isStreaming: false,
+        loadedSessionId: 's-nobanner',
+        messages: [
+          streamingMsgs[0],
+          streamingMsgs[1].copyWith(isStreaming: false, text: 'Done editing.'),
+        ],
+      ),
+    );
     await tester.pump();
     // After chat result completes, ChangeCard appears below the reply, and no banner above input.
     expect(find.byType(WorkspaceChangesBanner), findsNothing);
@@ -872,6 +881,17 @@ diff --git a/app/lib/main.dart b/app/lib/main.dart
     await tester.pumpWidget(const SizedBox());
     await tester.pump(const Duration(milliseconds: 500));
   });
+}
+
+class _FakeChatNotifier extends ChatNotifier {
+  _FakeChatNotifier(this._initial);
+
+  final ChatThreadState _initial;
+
+  @override
+  ChatThreadState build() => _initial;
+
+  void setThreadState(ChatThreadState next) => state = next;
 }
 
 class _FakeSessionsNotifier extends SessionsNotifier {
