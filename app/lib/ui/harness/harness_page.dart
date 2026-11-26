@@ -291,7 +291,7 @@ class _HarnessPageState extends ConsumerState<HarnessPage> {
                   secondary: const Icon(Icons.alt_route_rounded, size: 20),
                   title: const Text('Smart Effort Routing'),
                   subtitle: const Text(
-                    'Adapts Thinking Effort (Low–Max) to prompt complexity while keeping your selected model',
+                    'Adapts Thinking Effort (Low–Max) using prompt, session context, loop escalation & !low–!max tags',
                   ),
                   value: harness.smartRoutingEnabled,
                   onChanged: (v) =>

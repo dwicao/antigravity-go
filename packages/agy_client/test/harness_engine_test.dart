@@ -551,6 +551,80 @@ void main() {
       expect(indoMaxAudit.effort, 'max');
     });
 
+    test('supports inline effort tags, session-aware routing, and forceEscalate', () {
+      final tagged = HarnessTurnRouter.extractInlineEffortOverride(
+        '!max tolong audit file ini',
+      );
+      expect(tagged.effortOverride, 'max');
+      expect(tagged.cleanPrompt, 'tolong audit file ini');
+
+      final codePreserved = HarnessTurnRouter.extractInlineEffortOverride(
+        'Explain why `!max` appears in markdown code',
+      );
+      expect(codePreserved.effortOverride, isNull);
+      expect(codePreserved.cleanPrompt, 'Explain why `!max` appears in markdown code');
+
+      final inlineRouted = HarnessTurnRouter.routeTurn(
+        prompt: 'ok lanjut !xhigh',
+        selectedModelId: 'gemini-4-hydrogen',
+        selectedEffort: 'medium',
+        speedTierName: 'regular',
+        smartRoutingEnabled: true,
+      );
+      expect(inlineRouted.modelId, 'gemini-4-hydrogen');
+      expect(inlineRouted.effort, 'xhigh');
+
+      // Short follow-up task in a heavy failing multi-file session escalates.
+      final sessionHeavy = HarnessTurnRouter.routeTurn(
+        prompt: 'coba periksa lagi bagian auth ini',
+        selectedModelId: 'gemini-4-hydrogen',
+        selectedEffort: 'medium',
+        speedTierName: 'regular',
+        smartRoutingEnabled: true,
+        sessionToolCalls: 14,
+        sessionChangedFiles: 4,
+        sessionHasRecentFailure: true,
+      );
+      expect(sessionHeavy.effort, 'xhigh');
+
+      // Simple ack stays Low even during a heavy session.
+      final sessionAck = HarnessTurnRouter.routeTurn(
+        prompt: 'oke makasih',
+        selectedModelId: 'gemini-4-hydrogen',
+        selectedEffort: 'medium',
+        speedTierName: 'regular',
+        smartRoutingEnabled: true,
+        sessionToolCalls: 14,
+        sessionChangedFiles: 4,
+        sessionHasRecentFailure: true,
+      );
+      expect(sessionAck.effort, 'low');
+
+      // Loop/pivot escalation steps effort up one supported tier.
+      final loopEscalateHydrogen = HarnessTurnRouter.routeTurn(
+        prompt: 'Retry with a different approach',
+        selectedModelId: 'gemini-4-hydrogen',
+        selectedEffort: 'medium',
+        speedTierName: 'regular',
+        smartRoutingEnabled: true,
+        previousTurnEffort: 'high',
+        forceEscalate: true,
+      );
+      expect(loopEscalateHydrogen.effort, 'xhigh');
+
+      final loopEscalateClaude = HarnessTurnRouter.routeTurn(
+        prompt: 'Retry with a different approach',
+        selectedModelId: 'claude-opus-5-5-medium',
+        selectedEffort: 'medium',
+        speedTierName: 'regular',
+        smartRoutingEnabled: true,
+        previousTurnEffort: 'high',
+        forceEscalate: true,
+      );
+      expect(loopEscalateClaude.modelId, 'claude-opus-5-5-medium');
+      expect(loopEscalateClaude.effort, 'max');
+    });
+
     test('RepoMapBuilder uses BFS so deep early dirs do not starve sibling modules', () async {
       final tmp = await Directory.systemTemp.createTemp('agy_bfs_map_');
       addTearDown(() async {

@@ -109,7 +109,9 @@ class ChatNotifier extends Notifier<ChatThreadState> {
   final Map<String, LoopDetectionResult> _sessionLoopWarnings = {};
   final Map<String, String> _sessionStallWarnings = {};
   final Map<String, int> _sessionTurnTokens = {};
-  final Map<String, List<({String prompt, List<String> attachments})>>
+  final Map<
+      String,
+      List<({String prompt, List<String> attachments, String? effortOverride})>>
       _queuedItemsBySession = {};
   final Map<String, List<ActiveSubagent>> _activeSubagentsBySession = {};
   final Set<String> _wakeupSpawnedSubagentSessions = <String>{};
@@ -877,14 +879,87 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     } catch (_) {}
   }
 
+  /// Summarizes active session history since the last compaction boundary so
+  /// adaptive Thinking Effort can factor in real runtime complexity.
+  static ({
+    int toolCalls,
+    int changedFiles,
+    bool hasRecentFailure,
+    String? previousEffort,
+  }) summarizeSessionRoutingContext(
+    List<ChatMessage> messages, {
+    bool hasLoopWarning = false,
+  }) {
+    if (messages.isEmpty) {
+      return (
+        toolCalls: 0,
+        changedFiles: 0,
+        hasRecentFailure: hasLoopWarning,
+        previousEffort: null,
+      );
+    }
+    final lastCompactIdx = messages.lastIndexWhere((m) => m.isCompactionSummary);
+    final active = lastCompactIdx >= 0 ? messages.sublist(lastCompactIdx) : messages;
+    var toolCalls = 0;
+    final changedPaths = <String>{};
+    String? previousEffort;
+    var hasRecentFailure = hasLoopWarning;
+
+    for (final m in active) {
+      toolCalls += m.tools.length;
+      for (final f in m.changedFiles) {
+        if (f.path.isNotEmpty) changedPaths.add(f.path);
+      }
+      if (m.role == ChatRole.assistant &&
+          m.reasoningEffort != null &&
+          m.reasoningEffort!.isNotEmpty) {
+        previousEffort = m.reasoningEffort;
+      }
+    }
+
+    if (!hasRecentFailure) {
+      final lastAssistantIdx =
+          active.lastIndexWhere((m) => m.role == ChatRole.assistant);
+      if (lastAssistantIdx >= 0) {
+        final lastAssistant = active[lastAssistantIdx];
+        hasRecentFailure = lastAssistant.isError ||
+            lastAssistant.tools.any(
+              (t) =>
+                  t.state == ToolCallState.failed ||
+                  (t.errorMessage?.isNotEmpty ?? false),
+            );
+      }
+    }
+
+    return (
+      toolCalls: toolCalls,
+      changedFiles: changedPaths.length,
+      hasRecentFailure: hasRecentFailure,
+      previousEffort: previousEffort,
+    );
+  }
+
   Future<void> sendPrompt(
     String rawText, {
     List<String> attachments = const [],
     bool force = false,
     AgySessionSummary? targetSession,
+    String? effortOverride,
+    bool forceEscalate = false,
   }) async {
-    final prompt = rawText.trim();
-    if (prompt.isEmpty && attachments.isEmpty) return;
+    final trimmedRaw = rawText.trim();
+    if (trimmedRaw.isEmpty && attachments.isEmpty) return;
+
+    final inlineOverride = HarnessTurnRouter.extractInlineEffortOverride(
+      trimmedRaw,
+    );
+    final prompt = inlineOverride.cleanPrompt.isNotEmpty
+        ? inlineOverride.cleanPrompt
+        : trimmedRaw;
+    final effectiveEffortOverride = (effortOverride != null &&
+            effortOverride.trim().isNotEmpty)
+        ? effortOverride.trim()
+        : inlineOverride.effortOverride;
 
     var session = targetSession ?? ref.read(sessionsProvider).activeSession;
     final targetSid = session?.id ?? _loadedSessionId;
@@ -906,9 +981,18 @@ class ChatNotifier extends Notifier<ChatThreadState> {
             hasBgTaskForTarget;
     if (!force && sessionBusy) {
       final queueSid = targetSid ?? 'default';
-      final nextQueue = <({String prompt, List<String> attachments})>[
+      final nextQueue = <
+          ({
+            String prompt,
+            List<String> attachments,
+            String? effortOverride,
+          })>[
         ...(_queuedItemsBySession[queueSid] ?? const []),
-        (prompt: prompt, attachments: List<String>.from(attachments)),
+        (
+          prompt: prompt,
+          attachments: List<String>.from(attachments),
+          effortOverride: effectiveEffortOverride,
+        ),
       ];
       _queuedItemsBySession[queueSid] = nextQueue;
       if (_loadedSessionId == queueSid) {
@@ -922,6 +1006,11 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     session ??= await ref.read(sessionsProvider.notifier).createSession();
     if (!ref.mounted) return;
 
+    final priorMsgs = _messagesForSession(session.id);
+    final sessionRoutingCtx = summarizeSessionRoutingContext(
+      priorMsgs,
+      hasLoopWarning: _sessionLoopWarnings.containsKey(session.id),
+    );
     final settings = ref.read(settingsProvider);
     final harness = ref.read(harnessProvider);
     final activeCustom = ref.read(activeCustomProviderProvider);
@@ -934,6 +1023,12 @@ class ChatNotifier extends Notifier<ChatThreadState> {
             smartRoutingEnabled: harness.smartRoutingEnabled,
             quotaSaverEnabled: harness.quotaSaverEnabled,
             hasAttachments: attachments.isNotEmpty,
+            sessionToolCalls: sessionRoutingCtx.toolCalls,
+            sessionChangedFiles: sessionRoutingCtx.changedFiles,
+            sessionHasRecentFailure: sessionRoutingCtx.hasRecentFailure,
+            previousTurnEffort: sessionRoutingCtx.previousEffort,
+            forceEscalate: forceEscalate,
+            explicitEffortOverride: effectiveEffortOverride,
           )
         : (
             modelId: activeCustom.modelId,
@@ -957,7 +1052,6 @@ class ChatNotifier extends Notifier<ChatThreadState> {
             : 'Analyze the attached image(s).');
     final now = DateTime.now();
 
-    final priorMsgs = _messagesForSession(session.id);
     final prevCompactIdx =
         priorMsgs.lastIndexWhere((m) => m.isCompactionSummary);
     final hasPostCompactUserTurn = prevCompactIdx >= 0 &&
@@ -2103,6 +2197,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         attachments: nextItem.attachments,
         force: true,
         targetSession: _latestSession(session),
+        effortOverride: nextItem.effortOverride,
       );
     } else if (isViewingSession && state.queuedPrompts.isNotEmpty) {
       final nextPrompt = state.queuedPrompts.first;
@@ -2342,6 +2437,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         nextItem.prompt,
         attachments: nextItem.attachments,
         force: true,
+        effortOverride: nextItem.effortOverride,
       );
       return;
     }
@@ -2377,6 +2473,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
   Future<void> steerNow(
     String prompt, {
     List<String> attachments = const [],
+    String? effortOverride,
   }) async {
     final trimmed = prompt.trim();
     if (trimmed.isEmpty) return;
@@ -2385,7 +2482,12 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       await stopStreaming(sessionId: sid);
       if (!ref.mounted) return;
     }
-    await sendPrompt(trimmed, attachments: attachments, force: true);
+    await sendPrompt(
+      trimmed,
+      attachments: attachments,
+      force: true,
+      effortOverride: effortOverride,
+    );
   }
 
   Future<void> regenerateLastTurn() async {
@@ -2822,7 +2924,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       await stopStreaming(sessionId: activeId);
     }
     if (!ref.mounted) return;
-    await sendPrompt(pivot, force: true);
+    await sendPrompt(pivot, force: true, forceEscalate: true);
   }
 
   Future<({bool ok, String message, String? restoredPrompt})> rewindToMessage(

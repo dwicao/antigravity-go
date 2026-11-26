@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../state/chat_state.dart';
 import '../../state/custom_providers_state.dart';
+import '../../state/harness_state.dart';
 import '../../state/hosts_state.dart';
 import '../../state/settings_state.dart';
 import '../../state/update_state.dart';
@@ -87,6 +88,13 @@ class ChatComposerBar extends ConsumerWidget {
     required this.onSubmit,
     required this.onSteerSubmit,
     required this.onToggleEnterToSend,
+    this.nextTurnEffortOverride,
+    this.onEffortOverrideChanged,
+    this.hasAttachments = false,
+    this.sessionToolCalls = 0,
+    this.sessionChangedFiles = 0,
+    this.sessionHasRecentFailure = false,
+    this.previousTurnEffort,
   });
 
   final TextEditingController inputController;
@@ -107,12 +115,22 @@ class ChatComposerBar extends ConsumerWidget {
   final VoidCallback onSubmit;
   final VoidCallback onSteerSubmit;
   final ValueChanged<bool> onToggleEnterToSend;
+  final String? nextTurnEffortOverride;
+  final ValueChanged<String?>? onEffortOverrideChanged;
+  final bool hasAttachments;
+  final int sessionToolCalls;
+  final int sessionChangedFiles;
+  final bool sessionHasRecentFailure;
+  final String? previousTurnEffort;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final semantic = AgySemanticColors.of(context);
     final settings = ref.watch(settingsProvider);
+    final smartRoutingEnabled = ref.watch(
+      harnessProvider.select((h) => h.smartRoutingEnabled),
+    );
     final hosts = ref.watch(hostsProvider);
     final customState = ref.watch(customProvidersProvider);
     final activeCustom = customState.activeProfile;
@@ -418,21 +436,142 @@ class ChatComposerBar extends ConsumerWidget {
                   ),
                   if (activeCustom == null && activeModel.supportsEffort) ...[
                     const SizedBox(width: 6),
-                    ChatPickerPill<String>(
-                      icon: Icons.psychology_outlined,
-                      label: ReasoningEffort.fromString(
-                        settings.reasoningEffort,
-                      ).label,
-                      items: activeModel.availableEfforts
-                          .map(
-                            (e) => PopupMenuItem(
-                              value: e.cliValue,
-                              child: Text(e.label),
-                            ),
-                          )
-                          .toList(),
-                      onSelected: (v) =>
-                          ref.read(settingsProvider.notifier).setEffort(v),
+                    ValueListenableBuilder<TextEditingValue>(
+                      valueListenable: inputController,
+                      builder: (context, textVal, _) {
+                        final inline =
+                            HarnessTurnRouter.extractInlineEffortOverride(
+                          textVal.text,
+                        );
+                        final autoRoute = HarnessTurnRouter.routeTurn(
+                          prompt: textVal.text,
+                          selectedModelId: settings.selectedModelId,
+                          selectedEffort: settings.reasoningEffort,
+                          speedTierName: settings.speedTier.name,
+                          smartRoutingEnabled: smartRoutingEnabled,
+                          hasAttachments: hasAttachments,
+                          sessionToolCalls: sessionToolCalls,
+                          sessionChangedFiles: sessionChangedFiles,
+                          sessionHasRecentFailure: sessionHasRecentFailure,
+                          previousTurnEffort: previousTurnEffort,
+                        );
+                        final effectiveLabel =
+                            ReasoningEffort.fromString(autoRoute.effort).label;
+                        final pinned = nextTurnEffortOverride != null &&
+                            nextTurnEffortOverride!.isNotEmpty;
+                        final pillLabel = pinned
+                            ? 'Pin · ${ReasoningEffort.fromString(nextTurnEffortOverride!).label}'
+                            : inline.effortOverride != null
+                                ? 'Tag · $effectiveLabel'
+                                : smartRoutingEnabled
+                                    ? (textVal.text.trim().isEmpty &&
+                                            !hasAttachments &&
+                                            sessionToolCalls == 0 &&
+                                            !sessionHasRecentFailure
+                                        ? 'Auto'
+                                        : 'Auto · $effectiveLabel')
+                                    : ReasoningEffort.fromString(
+                                        settings.reasoningEffort,
+                                      ).label;
+                        final pillIcon = pinned
+                            ? Icons.push_pin_rounded
+                            : Icons.psychology_outlined;
+
+                        return ChatPickerPill<String>(
+                          icon: pillIcon,
+                          label: pillLabel,
+                          items: smartRoutingEnabled
+                              ? [
+                                  PopupMenuItem<String>(
+                                    value: '__auto__',
+                                    child: Row(
+                                      children: [
+                                        Icon(
+                                          Icons.auto_awesome_rounded,
+                                          size: 15,
+                                          color: theme.colorScheme.primary,
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            'Auto ($effectiveLabel)',
+                                            style: TextStyle(
+                                              fontWeight: !pinned
+                                                  ? FontWeight.w700
+                                                  : FontWeight.w500,
+                                            ),
+                                          ),
+                                        ),
+                                        if (!pinned)
+                                          Icon(
+                                            Icons.check_rounded,
+                                            size: 16,
+                                            color: theme.colorScheme.primary,
+                                          ),
+                                      ],
+                                    ),
+                                  ),
+                                  const PopupMenuDivider(height: 6),
+                                  ...activeModel.availableEfforts.map(
+                                    (e) => PopupMenuItem<String>(
+                                      value: e.cliValue,
+                                      child: Row(
+                                        children: [
+                                          Expanded(
+                                            child: Text(
+                                              '${e.label} (next message)',
+                                              style: TextStyle(
+                                                fontWeight:
+                                                    nextTurnEffortOverride ==
+                                                            e.cliValue
+                                                        ? FontWeight.w700
+                                                        : FontWeight.w500,
+                                              ),
+                                            ),
+                                          ),
+                                          if (nextTurnEffortOverride ==
+                                              e.cliValue)
+                                            Icon(
+                                              Icons.check_rounded,
+                                              size: 16,
+                                              color: theme.colorScheme.primary,
+                                            ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ]
+                              : activeModel.availableEfforts
+                                  .map(
+                                    (e) => PopupMenuItem<String>(
+                                      value: e.cliValue,
+                                      child: Row(
+                                        children: [
+                                          Expanded(child: Text(e.label)),
+                                          if (settings.reasoningEffort ==
+                                              e.cliValue)
+                                            Icon(
+                                              Icons.check_rounded,
+                                              size: 16,
+                                              color: theme.colorScheme.primary,
+                                            ),
+                                        ],
+                                      ),
+                                    ),
+                                  )
+                                  .toList(),
+                          onSelected: (v) {
+                            if (smartRoutingEnabled &&
+                                onEffortOverrideChanged != null) {
+                              onEffortOverrideChanged!(
+                                v == '__auto__' ? null : v,
+                              );
+                            } else if (v != '__auto__') {
+                              ref.read(settingsProvider.notifier).setEffort(v);
+                            }
+                          },
+                        );
+                      },
                     ),
                   ],
                   const SizedBox(width: 6),

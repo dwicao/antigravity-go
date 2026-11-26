@@ -89,6 +89,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   bool _draftAppliedForSession = false;
   bool _compactBannerDismissed = false;
   String? _quotedText;
+  String? _nextTurnEffortOverride;
 
   @override
   void initState() {
@@ -619,15 +620,23 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     final files = List<String>.from(_attachments);
     final quote = _quotedText?.trim();
+    final effortOverride = _nextTurnEffortOverride;
     final outgoing = (quote != null && quote.isNotEmpty)
         ? '> ${quote.replaceAll('\n', '\n> ')}\n\n$text'
         : text;
     _clearInputMenus(clearAttachments: true);
-    if (_quotedText != null && mounted) {
-      setState(() => _quotedText = null);
+    if ((_quotedText != null || _nextTurnEffortOverride != null) && mounted) {
+      setState(() {
+        _quotedText = null;
+        _nextTurnEffortOverride = null;
+      });
     }
     WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
-    await ref.read(chatProvider.notifier).sendPrompt(outgoing, attachments: files);
+    await ref.read(chatProvider.notifier).sendPrompt(
+          outgoing,
+          attachments: files,
+          effortOverride: effortOverride,
+        );
   }
 
   void _clearInputMenus({bool clearAttachments = false}) {
@@ -666,6 +675,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       return;
     }
     final files = List<String>.from(_attachments);
+    final effortOverride = _nextTurnEffortOverride;
     final sessionId =
         ref.read(sessionsProvider).activeSessionId ?? 'new_session';
     ref.read(draftStoreProvider.notifier).clear(sessionId);
@@ -674,9 +684,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       _attachments.clear();
       _showSlashMenu = false;
       _showMentionMenu = false;
+      _nextTurnEffortOverride = null;
     });
     WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
-    await ref.read(chatProvider.notifier).steerNow(text, attachments: files);
+    await ref.read(chatProvider.notifier).steerNow(
+          text,
+          attachments: files,
+          effortOverride: effortOverride,
+        );
   }
 
   Future<void> _pickFile() async {
@@ -2150,30 +2165,46 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             ),
           ),
         wrapCentered(
-          ChatComposerBar(
-            inputController: _inputController,
-            isBusy: isCurrentSessionBusy,
-            isStreamingCurrentSession: chat.isStreaming,
-            listeningVoice: _listeningVoice,
-            isDesktopMode: widget.isDesktopMode,
-            enterToSend: _enterToSend,
-            ctxSnap: ctxSnap,
-            onKeyEvent: _handleComposerKey,
-            onChanged: _onChanged,
-            onPickFile: _pickFile,
-            onPickImage: _pickImage,
-            onPasteClipboardImage: _pasteClipboardImage,
-            onContentInserted: _handleKeyboardInsertedContent,
-            onDictateVoice: _dictateVoice,
-            onTriggerSlash: () {
-              _inputController.text = '/';
-              _inputController.selection =
-                  const TextSelection.collapsed(offset: 1);
-              _onChanged('/');
+          Builder(
+            builder: (_) {
+              final routingCtx = ChatNotifier.summarizeSessionRoutingContext(
+                chat.messages,
+                hasLoopWarning: chat.loopWarning != null,
+              );
+              return ChatComposerBar(
+                inputController: _inputController,
+                isBusy: isCurrentSessionBusy,
+                isStreamingCurrentSession: chat.isStreaming,
+                listeningVoice: _listeningVoice,
+                isDesktopMode: widget.isDesktopMode,
+                enterToSend: _enterToSend,
+                ctxSnap: ctxSnap,
+                onKeyEvent: _handleComposerKey,
+                onChanged: _onChanged,
+                onPickFile: _pickFile,
+                onPickImage: _pickImage,
+                onPasteClipboardImage: _pasteClipboardImage,
+                onContentInserted: _handleKeyboardInsertedContent,
+                onDictateVoice: _dictateVoice,
+                onTriggerSlash: () {
+                  _inputController.text = '/';
+                  _inputController.selection =
+                      const TextSelection.collapsed(offset: 1);
+                  _onChanged('/');
+                },
+                onSubmit: _submit,
+                onSteerSubmit: _steerSubmit,
+                onToggleEnterToSend: (v) => setState(() => _enterToSend = v),
+                nextTurnEffortOverride: _nextTurnEffortOverride,
+                onEffortOverrideChanged: (v) =>
+                    setState(() => _nextTurnEffortOverride = v),
+                hasAttachments: _attachments.isNotEmpty,
+                sessionToolCalls: routingCtx.toolCalls,
+                sessionChangedFiles: routingCtx.changedFiles,
+                sessionHasRecentFailure: routingCtx.hasRecentFailure,
+                previousTurnEffort: routingCtx.previousEffort,
+              );
             },
-            onSubmit: _submit,
-            onSteerSubmit: _steerSubmit,
-            onToggleEnterToSend: (v) => setState(() => _enterToSend = v),
           ),
         ),
       ],

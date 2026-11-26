@@ -664,6 +664,143 @@ diff --git a/app/lib/main.dart b/app/lib/main.dart
     expect(updated.autoPivotLoopEnabled, isFalse);
   });
 
+  test('ChatNotifier.summarizeSessionRoutingContext extracts tool, file, and error signals', () {
+    final now = DateTime.now();
+    final ctx = ChatNotifier.summarizeSessionRoutingContext([
+      ChatMessage(
+        id: 'c1',
+        role: ChatRole.system,
+        text: 'Summary',
+        createdAt: now,
+        isCompactionSummary: true,
+        tools: [
+          AgyToolCallEvent(
+            turnId: 'old',
+            callId: 't0',
+            toolName: 'Read',
+            state: ToolCallState.completed,
+            parameters: const {},
+            timestamp: now,
+          ),
+        ],
+      ),
+      ChatMessage(
+        id: 'u1',
+        role: ChatRole.user,
+        text: 'Refactor login',
+        createdAt: now,
+      ),
+      ChatMessage(
+        id: 'a1',
+        role: ChatRole.assistant,
+        text: 'Failed',
+        createdAt: now,
+        reasoningEffort: 'high',
+        changedFiles: const [
+          ChangedFileSummary(path: 'a.dart', added: 2, removed: 1),
+          ChangedFileSummary(path: 'b.dart', added: 3, removed: 0),
+          ChangedFileSummary(path: 'c.dart', added: 1, removed: 1),
+        ],
+        tools: [
+          AgyToolCallEvent(
+            turnId: 't1',
+            callId: 'c1',
+            toolName: 'Edit',
+            state: ToolCallState.failed,
+            parameters: const {},
+            errorMessage: 'compile error',
+            timestamp: now,
+          ),
+          AgyToolCallEvent(
+            turnId: 't1',
+            callId: 'c2',
+            toolName: 'Read',
+            state: ToolCallState.completed,
+            parameters: const {},
+            timestamp: now,
+          ),
+        ],
+      ),
+    ]);
+
+    expect(ctx.toolCalls, 2);
+    expect(ctx.changedFiles, 3);
+    expect(ctx.hasRecentFailure, isTrue);
+    expect(ctx.previousEffort, 'high');
+  });
+
+  testWidgets('ChatComposerBar shows live Auto effort preview, !tag preview, and 1-tap pin override',
+      (tester) async {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    await container.read(settingsProvider.notifier).setModel('gemini-4-hydrogen');
+
+    final ctrl = TextEditingController();
+    addTearDown(ctrl.dispose);
+    String? pinnedOverride;
+
+    Widget buildHarness(StateSetter setLocalState) {
+      return UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          theme: _theme(),
+          home: Scaffold(
+            body: ChatComposerBar(
+              inputController: ctrl,
+              isBusy: false,
+              isStreamingCurrentSession: false,
+              listeningVoice: false,
+              isDesktopMode: false,
+              enterToSend: false,
+              ctxSnap: const HarnessContextSnapshot(
+                usedTokens: 1000,
+                budgetTokens: 1000000,
+                ratio: 0.001,
+                needsWarning: false,
+                shouldCompact: false,
+                statusLabel: 'Healthy',
+                compactedMessages: 0,
+                activeMessages: 1,
+              ),
+              onKeyEvent: (_, _) => KeyEventResult.ignored,
+              onChanged: (_) {},
+              onPickFile: () {},
+              onPickImage: () {},
+              onDictateVoice: () {},
+              onTriggerSlash: () {},
+              onSubmit: () {},
+              onSteerSubmit: () {},
+              onToggleEnterToSend: (_) {},
+              nextTurnEffortOverride: pinnedOverride,
+              onEffortOverrideChanged: (v) =>
+                  setLocalState(() => pinnedOverride = v),
+            ),
+          ),
+        ),
+      );
+    }
+
+    await tester.pumpWidget(StatefulBuilder(builder: (_, s) => buildHarness(s)));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Auto'), findsOneWidget);
+
+    ctrl.text = 'tolong benerin UI nya ngefreeze';
+    await tester.pump();
+    expect(find.text('Auto · High'), findsOneWidget);
+
+    ctrl.text = 'tolong cek ini !max';
+    await tester.pump();
+    expect(find.text('Tag · Max'), findsOneWidget);
+
+    await tester.tap(find.text('Tag · Max'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Low (next message)'));
+    await tester.pumpAndSettle();
+    expect(pinnedOverride, 'low');
+    expect(find.text('Pin · Low'), findsOneWidget);
+  });
+
   testWidgets('HarnessPage exposes Inference Speed Tier selector and updates settings', (tester) async {
     final container = ProviderContainer();
     addTearDown(container.dispose);

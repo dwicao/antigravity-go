@@ -956,6 +956,11 @@ class HarnessTurnRouter {
     caseSensitive: false,
   );
 
+  static final RegExp _inlineEffortTagRe = RegExp(
+    r'(?:^|\s)!(low|med|medium|high|xhigh|extra|max)(?=$|\s|[.,;:!?])',
+    caseSensitive: false,
+  );
+
   static final RegExp _maxCommandRe = RegExp(
     r'^/(boost|goal|teamwork|swarm)\b',
     caseSensitive: false,
@@ -1103,15 +1108,132 @@ class HarnessTurnRouter {
     );
   }
 
-  /// Analyzes prompt complexity using weighted semantic + structural signals
-  /// in both English and Bahasa Indonesia, returning score, detected signals,
-  /// and target Thinking Effort (`low`, `medium`, `high`, `xhigh`, `max`).
+  static String _normalizeEffortToken(String raw) {
+    switch (raw.trim().toLowerCase()) {
+      case 'low':
+        return 'low';
+      case 'med':
+      case 'medium':
+        return 'medium';
+      case 'high':
+        return 'high';
+      case 'xhigh':
+      case 'extra':
+      case 'extra_high':
+        return 'xhigh';
+      case 'max':
+        return 'max';
+      default:
+        return 'medium';
+    }
+  }
+
+  /// Parses and removes inline per-turn effort tags (`!low`, `!med`, `!high`,
+  /// `!xhigh`/`!extra`, `!max`) while preserving fenced/inline code spans.
+  static ({String cleanPrompt, String? effortOverride})
+      extractInlineEffortOverride(String prompt) {
+    final trimmed = prompt.trim();
+    if (!trimmed.contains('!')) {
+      return (cleanPrompt: trimmed, effortOverride: null);
+    }
+
+    // Protect inline code spans and fenced code blocks so literal `!max` in
+    // snippets is never stripped or interpreted as an override tag.
+    final codeSpans = <String>[];
+    final masked = trimmed.replaceAllMapped(
+      RegExp(r'```[\s\S]*?```|`[^`\n]+`'),
+      (m) {
+        final idx = codeSpans.length;
+        codeSpans.add(m.group(0)!);
+        return '\u0000CODE$idx\u0000';
+      },
+    );
+
+    String? detected;
+    var withoutTag = masked.replaceAllMapped(_inlineEffortTagRe, (m) {
+      detected = _normalizeEffortToken(m.group(1)!);
+      final leading = m.group(0)!.startsWith(RegExp(r'\s')) ? ' ' : '';
+      return leading;
+    });
+    if (detected == null) {
+      return (cleanPrompt: trimmed, effortOverride: null);
+    }
+
+    for (var i = 0; i < codeSpans.length; i++) {
+      withoutTag = withoutTag.replaceFirst('\u0000CODE$i\u0000', codeSpans[i]);
+    }
+    final cleaned = withoutTag
+        .split('\n')
+        .map((line) => line.replaceAll(RegExp(r' {2,}'), ' ').trim())
+        .join('\n')
+        .trim();
+    return (cleanPrompt: cleaned, effortOverride: detected);
+  }
+
+  static String _clampOverrideToModel(
+    String rawEffort, {
+    required AgyModelInfo modelInfo,
+  }) {
+    final norm = _normalizeEffortToken(rawEffort);
+    final supportsMax =
+        modelInfo.supportsMaxEffort || modelInfo.supportsExtraEffort;
+    switch (norm) {
+      case 'low':
+        return 'low';
+      case 'medium':
+        return 'medium';
+      case 'high':
+        return 'high';
+      case 'xhigh':
+        if (modelInfo.supportsExtraEffort) return 'xhigh';
+        return supportsMax ? 'max' : 'high';
+      case 'max':
+        if (supportsMax) return 'max';
+        if (modelInfo.supportsExtraEffort) return 'xhigh';
+        return 'high';
+      default:
+        return 'medium';
+    }
+  }
+
+  /// Steps effort up one supported tier for runtime loop/retry escalation.
+  static String stepUpEffort(
+    String currentEffort, {
+    required AgyModelInfo modelInfo,
+  }) {
+    if (!modelInfo.supportsEffort) return currentEffort;
+    final supportsMax =
+        modelInfo.supportsMaxEffort || modelInfo.supportsExtraEffort;
+    switch (currentEffort.trim().toLowerCase()) {
+      case '':
+      case 'low':
+        return 'medium';
+      case 'medium':
+        return 'high';
+      case 'high':
+        if (modelInfo.supportsExtraEffort) return 'xhigh';
+        return supportsMax ? 'max' : 'high';
+      case 'xhigh':
+        return supportsMax ? 'max' : 'xhigh';
+      case 'max':
+        return 'max';
+      default:
+        return 'high';
+    }
+  }
+
+  /// Analyzes prompt complexity using weighted semantic, structural, and active
+  /// session context signals in both English and Bahasa Indonesia, returning
+  /// score, detected signals, and target Thinking Effort.
   static ({int score, String effort, List<String> signals})
       analyzePromptComplexity({
     required String prompt,
     required bool supportsExtraEffort,
     bool supportsMaxEffort = false,
     bool hasAttachments = false,
+    int sessionToolCalls = 0,
+    int sessionChangedFiles = 0,
+    bool sessionHasRecentFailure = false,
   }) {
     final trimmed = prompt.trim();
     if (trimmed.isEmpty) {
@@ -1213,6 +1335,22 @@ class HarnessTurnRouter {
       signals.add('multi_line');
     }
 
+    if (sessionChangedFiles >= 3) {
+      score += 2;
+      signals.add('multi_file_session');
+    }
+    if (sessionToolCalls >= 20) {
+      score += 2;
+      signals.add('deep_session_history');
+    } else if (sessionToolCalls >= 8) {
+      score += 1;
+      signals.add('active_session_history');
+    }
+    if (sessionHasRecentFailure) {
+      score += 2;
+      signals.add('prior_failure_recovery');
+    }
+
     final int level;
     if (score >= 12) {
       level = 5;
@@ -1242,12 +1380,18 @@ class HarnessTurnRouter {
     required bool supportsExtraEffort,
     bool supportsMaxEffort = false,
     bool hasAttachments = false,
+    int sessionToolCalls = 0,
+    int sessionChangedFiles = 0,
+    bool sessionHasRecentFailure = false,
   }) {
     return analyzePromptComplexity(
       prompt: prompt,
       supportsExtraEffort: supportsExtraEffort,
       supportsMaxEffort: supportsMaxEffort,
       hasAttachments: hasAttachments,
+      sessionToolCalls: sessionToolCalls,
+      sessionChangedFiles: sessionChangedFiles,
+      sessionHasRecentFailure: sessionHasRecentFailure,
     ).effort;
   }
 
@@ -1260,8 +1404,17 @@ class HarnessTurnRouter {
     required bool smartRoutingEnabled,
     bool quotaSaverEnabled = false,
     bool hasAttachments = false,
+    int sessionToolCalls = 0,
+    int sessionChangedFiles = 0,
+    bool sessionHasRecentFailure = false,
+    String? previousTurnEffort,
+    bool forceEscalate = false,
+    String? explicitEffortOverride,
   }) {
-    final skipRepoMap = !hasAttachments && shouldSkipRepoMap(prompt);
+    final inline = extractInlineEffortOverride(prompt);
+    final effectivePrompt =
+        inline.cleanPrompt.isNotEmpty ? inline.cleanPrompt : prompt;
+    final skipRepoMap = !hasAttachments && shouldSkipRepoMap(effectivePrompt);
     final modelInfo = AgyModelCatalog.resolve(selectedModelId);
     final tier = speedTierName.trim().toLowerCase();
 
@@ -1274,7 +1427,50 @@ class HarnessTurnRouter {
       );
     }
 
+    final manualOverride = (explicitEffortOverride != null &&
+            explicitEffortOverride.trim().isNotEmpty)
+        ? explicitEffortOverride
+        : inline.effortOverride;
+    if (manualOverride != null) {
+      final pinnedEffort = _clampOverrideToModel(
+        manualOverride,
+        modelInfo: modelInfo,
+      );
+      return (
+        modelId: selectedModelId,
+        effort: pinnedEffort,
+        skipRepoMap: skipRepoMap,
+        downgraded: _effortRank(pinnedEffort) < _effortRank(selectedEffort),
+      );
+    }
+
     final normalizedSelected = selectedEffort.trim().toLowerCase();
+    final supportsMax =
+        modelInfo.supportsMaxEffort || modelInfo.supportsExtraEffort;
+
+    if (forceEscalate) {
+      final classified = classifyEffortForPrompt(
+        prompt: effectivePrompt,
+        supportsExtraEffort: modelInfo.supportsExtraEffort,
+        supportsMaxEffort: supportsMax,
+        hasAttachments: hasAttachments,
+        sessionToolCalls: sessionToolCalls,
+        sessionChangedFiles: sessionChangedFiles,
+        sessionHasRecentFailure: true,
+      );
+      final baseline =
+          _effortRank(previousTurnEffort ?? '') > _effortRank(classified)
+              ? previousTurnEffort!
+              : classified;
+      final escalated = stepUpEffort(baseline, modelInfo: modelInfo);
+      return (
+        modelId: selectedModelId,
+        effort: escalated,
+        skipRepoMap: false,
+        downgraded: _effortRank(escalated) < _effortRank(selectedEffort),
+      );
+    }
+
     final String nextEffort;
 
     if (tier == 'ultrafast') {
@@ -1282,11 +1478,13 @@ class HarnessTurnRouter {
     } else if (tier == 'fast') {
       if (smartRoutingEnabled) {
         final classified = classifyEffortForPrompt(
-          prompt: prompt,
+          prompt: effectivePrompt,
           supportsExtraEffort: modelInfo.supportsExtraEffort,
-          supportsMaxEffort:
-              modelInfo.supportsMaxEffort || modelInfo.supportsExtraEffort,
+          supportsMaxEffort: supportsMax,
           hasAttachments: hasAttachments,
+          sessionToolCalls: sessionToolCalls,
+          sessionChangedFiles: sessionChangedFiles,
+          sessionHasRecentFailure: sessionHasRecentFailure,
         );
         nextEffort = classified == 'low' ? 'low' : 'medium';
       } else {
@@ -1294,11 +1492,13 @@ class HarnessTurnRouter {
       }
     } else if (smartRoutingEnabled) {
       nextEffort = classifyEffortForPrompt(
-        prompt: prompt,
+        prompt: effectivePrompt,
         supportsExtraEffort: modelInfo.supportsExtraEffort,
-        supportsMaxEffort:
-            modelInfo.supportsMaxEffort || modelInfo.supportsExtraEffort,
+        supportsMaxEffort: supportsMax,
         hasAttachments: hasAttachments,
+        sessionToolCalls: sessionToolCalls,
+        sessionChangedFiles: sessionChangedFiles,
+        sessionHasRecentFailure: sessionHasRecentFailure,
       );
     } else {
       nextEffort = selectedEffort;
