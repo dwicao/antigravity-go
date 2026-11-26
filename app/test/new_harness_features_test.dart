@@ -673,14 +673,11 @@ diff --git a/app/lib/main.dart b/app/lib/main.dart
         text: 'Summary',
         createdAt: now,
         isCompactionSummary: true,
-        tools: [
-          AgyToolCallEvent(
-            turnId: 'old',
-            callId: 't0',
+        tools: const [
+          ChatToolStep(
+            id: 't0',
             toolName: 'Read',
             state: ToolCallState.completed,
-            parameters: const {},
-            timestamp: now,
           ),
         ],
       ),
@@ -697,27 +694,21 @@ diff --git a/app/lib/main.dart b/app/lib/main.dart
         createdAt: now,
         reasoningEffort: 'high',
         changedFiles: const [
-          ChangedFileSummary(path: 'a.dart', added: 2, removed: 1),
-          ChangedFileSummary(path: 'b.dart', added: 3, removed: 0),
-          ChangedFileSummary(path: 'c.dart', added: 1, removed: 1),
+          FileChangeEntry(path: 'a.dart', added: 2, removed: 1),
+          FileChangeEntry(path: 'b.dart', added: 3, removed: 0),
+          FileChangeEntry(path: 'c.dart', added: 1, removed: 1),
         ],
-        tools: [
-          AgyToolCallEvent(
-            turnId: 't1',
-            callId: 'c1',
+        tools: const [
+          ChatToolStep(
+            id: 'c1',
             toolName: 'Edit',
             state: ToolCallState.failed,
-            parameters: const {},
-            errorMessage: 'compile error',
-            timestamp: now,
+            error: 'compile error',
           ),
-          AgyToolCallEvent(
-            turnId: 't1',
-            callId: 'c2',
+          ChatToolStep(
+            id: 'c2',
             toolName: 'Read',
             state: ToolCallState.completed,
-            parameters: const {},
-            timestamp: now,
           ),
         ],
       ),

@@ -922,11 +922,10 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           active.lastIndexWhere((m) => m.role == ChatRole.assistant);
       if (lastAssistantIdx >= 0) {
         final lastAssistant = active[lastAssistantIdx];
-        hasRecentFailure = lastAssistant.isError ||
-            lastAssistant.tools.any(
+        hasRecentFailure = lastAssistant.tools.any(
               (t) =>
                   t.state == ToolCallState.failed ||
-                  (t.errorMessage?.isNotEmpty ?? false),
+                  (t.error?.isNotEmpty ?? false),
             );
       }
     }
