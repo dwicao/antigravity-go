@@ -678,7 +678,10 @@ diff --git a/app/lib/main.dart b/app/lib/main.dart
     await tester.pumpAndSettle();
 
     final tierLabel = find.text('Ultrafast');
+    await tester.drag(find.byType(ListView), const Offset(0, -300));
+    await tester.pumpAndSettle();
     await tester.ensureVisible(tierLabel);
+    await tester.pumpAndSettle();
     await tester.tap(tierLabel);
     await tester.pumpAndSettle();
 
