@@ -619,6 +619,9 @@ class ChatBackupService {
       }
       return _backupDirectoryOverride;
     }
+    if (Platform.environment.containsKey('FLUTTER_TEST')) {
+      return null;
+    }
     try {
       final support = await getApplicationSupportDirectory();
       final dir = Directory('${support.path}/agy_chat_backups');
