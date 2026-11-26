@@ -2,6 +2,19 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.50] - 2026-11-26
+
+### Performance & Reliability
+- **Android Native Runtime Offloading & Battery Efficiency:**
+  - Offloaded shell toolchain provisioning and ACP/subprocess turn preparation off the Main Thread in `RuntimeController`, plus moved heavy `RuntimePlugin` and `PhonePlugin` IPC calls (runtime lifecycle, terminal session ops, clipboard image decoding, Shizuku commands, and browser automation) onto dedicated background executors.
+  - Throttled foreground notification updates (`1500ms`) with text deduplication in `AgyService`, restricted `PARTIAL_WAKE_LOCK` to active turns only, throttled `RuntimeInstaller` progress callbacks (`>= 2%`), capped `WorkspaceOps.listWorkspace` at `600` entries, switched `PhoneControlCoordinator` history to synchronized `ArrayDeque`, and bounded `LifecycleHooksManager` / `DeviceGatewayHelper` process stdout collection with strict timeouts.
+- **Flutter UI & Rendering Optimizations:**
+  - Narrowed Riverpod `ref.watch` subscriptions via `.select(...)` across `app.dart`, `HomeShell`, `ChatScreen`, `OverviewPanel`, `QuickPanel`, `WorkspacePage`, and `backgroundTasksProvider` so streaming token deltas and background logs no longer trigger unrelated subtree rebuilds.
+  - Added image decode bounds (`cacheWidth`/`cacheHeight`), virtualized `AttachmentPreviewStrip`, `SessionsDrawer`, and `GitHubDiffViewer` (`<= 8` files), isolated `CircularProgressIndicator` animations in `RepaintBoundary`, cached `GptMarkdownThemeData`, added 100ms console batching + async `file.exists()` in `WebPreviewPage`, and added a zero-allocation fast-path pre-check to `AgySecretMask.mask`.
+- **Dart State, Persistence & Remote Runner Speedups:**
+  - Buffered streaming text/thought deltas in `ChatNotifier` via `StringBuffer` within the 48ms UI coalescing window (eliminating $O(L^2)$ string/list allocations), added `HarnessContextSnapshot` value equality and `Expando`-memoized tool string token estimation in `contextBudgetProvider`, and deduplicated cold-start prewarm/customization refreshes.
+  - Converted synchronous file I/O to async + background isolate JSON decoding (`>16KB`) in `ChatMessageStore`, eliminated duplicate JSON decoding via `AcpCodec.parseDecodedMessage` + capped stderr in `SshAgyRunner`, reused `http.Client` connections across tool rounds in `OpenAiCompatRunner`, and parallelized `RepoMapBuilder` file reads in batches of 8.
+
 ## [1.0.49] - 2026-11-26
 
 ### Improved
