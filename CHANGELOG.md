@@ -2,6 +2,14 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.57] - 2026-11-27
+
+### Added
+- **Stats & Spend Analytics (`StatsPage`, `UsageStatsAggregator`, `LifetimeUsageStats`):**
+  - Added a dedicated **Stats & Spend** screen reachable from Settings, Quick Panel (`Stats · $...`), Usage Limits AppBar, Sessions Drawer, and Command Palette (`Stats & Spend Analytics`).
+  - Added timeframe switching (`5h`, `24h`, `7d`, `14d`, `All` lifetime), 2x2 KPI cards (Total Spend, Total Tokens, Requests, Cache Savings + Hit Rate), `Token & Cost Breakdown` stacked distribution bar + detailed category table (Uncached Input, Cache Read, Cache Write, Output, Thinking), interactive `Daily Activity` chart (`Spend`, `Tokens`, `Requests`), sortable `Models Used` breakdown, `Workspace & Account Data` summary, Markdown report copy, and reset confirmation dialog.
+  - Added monotonic `LifetimeUsageStats` persistence (`agy_lifetime_usage_stats_v1`) with 90-day daily buckets and automatic seeding from existing 14-day ledger records so historical usage survives 14-day ledger pruning.
+
 ## [1.0.56] - 2026-11-27
 
 ### Improved & Optimized
