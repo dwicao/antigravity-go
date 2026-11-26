@@ -14,6 +14,7 @@ import 'package:antigravity_go/ui/chat/message_bubble.dart';
 import 'package:antigravity_go/ui/chat/message_metrics_footer.dart';
 import 'package:antigravity_go/ui/chat/workspace_changes_banner.dart';
 import 'package:antigravity_go/ui/workspace/diff_review_view.dart';
+import 'package:antigravity_go/ui/workspace/diff_syntax_highlighter.dart';
 import 'package:antigravity_go/ui/workspace/github_diff_viewer.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -363,6 +364,43 @@ diff --git a/app/lib/main.dart b/app/lib/main.dart
           .any((f) => f.path == 'app/lib/chat_sync_test.dart'),
       isFalse,
     );
+  });
+
+  test('DiffSyntaxHighlighter tokenizes GitHub colors and intraline word ranges', () {
+    final dartLang = DiffSyntaxHighlighter.detectLanguage('app/lib/main.dart');
+    expect(dartLang, DiffSyntaxLanguage.cLike);
+    expect(
+      DiffSyntaxHighlighter.detectLanguage('scripts/deploy.sh'),
+      DiffSyntaxLanguage.shell,
+    );
+    expect(
+      DiffSyntaxHighlighter.detectLanguage('package.json'),
+      DiffSyntaxLanguage.json,
+    );
+
+    const code = "final title = 'hello'; // note";
+    final spans = DiffSyntaxHighlighter.highlightLine(
+      code: code,
+      language: dartLang,
+      palette: DiffSyntaxPalette.dark,
+    );
+    expect(spans.map((s) => s.text).join(), code);
+    expect(spans.first.style?.color, DiffSyntaxPalette.dark.keyword);
+    expect(
+      spans.any((s) => s.style?.color == DiffSyntaxPalette.dark.string),
+      isTrue,
+    );
+    expect(
+      spans.any((s) => s.style?.color == DiffSyntaxPalette.dark.comment),
+      isTrue,
+    );
+
+    final wordRange = DiffSyntaxHighlighter.computeIntralineRange(
+      "print('hello');",
+      "print('hi');",
+    );
+    expect(wordRange, isNotNull);
+    expect("print('hello');".substring(wordRange!.start, wordRange.end), 'hello');
   });
 }
 

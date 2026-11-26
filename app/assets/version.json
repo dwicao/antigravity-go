@@ -1,7 +1,7 @@
 {
-  "version": "1.0.41",
+  "version": "1.0.42",
   "buildNumber": 1,
-  "tag": "v1.0.41",
+  "tag": "v1.0.42",
   "changelogUrl": "https://github.com/dwicao/antigravity-go/blob/main/CHANGELOG.md",
-  "releaseNotes": "### Fixed\n- **Sync Chat-Result File Changes to Bottom Mini-View:** `WorkspaceDiffNotifier` now merges uncommitted live Git changes with `changedFiles` / tool-edit outputs from the active chat's result (checking matched tool directories when unmatched and combining unified diffs), updates immediately as chat results arrive, and clears committed entries cleanly via `markCommitted` after Commit & Push."
+  "releaseNotes": "### Added\n- **GitHub-Style Diff Syntax Highlighter & Intraline Word Emphasis:** Added `DiffSyntaxHighlighter` & `DiffSyntaxPalette` (GitHub Light & Dark color tokens across Dart/Kotlin/JS/TS/Go/Rust/Python/Shell/JSON/YAML/SQL/XML/Markdown) inside `GitHubDiffViewer` (Unified & Split views) and `DiffLineView`, complete with GitHub-style intraline substring highlight on paired removal/addition lines."
 }

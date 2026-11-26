@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 
 import '../../theme/app_theme.dart';
 import '../chat/change_card.dart' show DiffCountsBadge;
+import 'diff_syntax_highlighter.dart';
 
 enum GitHubDiffStatusFilter {
   all('All'),
@@ -1012,6 +1013,7 @@ class _GitHubDiffFileCard extends StatelessWidget {
             else if (splitMode)
               SelectionArea(
                 child: _SplitHunksView(
+                  filePath: item.path,
                   hunks: item.hunks,
                   onRevertHunk: onRevertHunk,
                 ),
@@ -1019,6 +1021,7 @@ class _GitHubDiffFileCard extends StatelessWidget {
             else
               SelectionArea(
                 child: _UnifiedHunksView(
+                  filePath: item.path,
                   hunks: item.hunks,
                   onRevertHunk: onRevertHunk,
                 ),
@@ -1032,17 +1035,53 @@ class _GitHubDiffFileCard extends StatelessWidget {
 
 class _UnifiedHunksView extends StatelessWidget {
   const _UnifiedHunksView({
+    required this.filePath,
     required this.hunks,
     this.onRevertHunk,
   });
 
+  final String filePath;
   final List<DiffHunk> hunks;
   final Future<void> Function(DiffHunk hunk)? onRevertHunk;
+
+  static List<({DiffLineRow row, String? counterpart})> _pairRows(
+    DiffHunk hunk,
+  ) {
+    final rows = hunk.toNumberedRows();
+    final counterparts = List<String?>.filled(rows.length, null);
+    var i = 0;
+    while (i < rows.length) {
+      if (rows[i].kind != DiffRowKind.deletion) {
+        i++;
+        continue;
+      }
+      final delStart = i;
+      while (i < rows.length && rows[i].kind == DiffRowKind.deletion) {
+        i++;
+      }
+      final delCount = i - delStart;
+      final addStart = i;
+      while (i < rows.length && rows[i].kind == DiffRowKind.addition) {
+        i++;
+      }
+      final addCount = i - addStart;
+      final pairCount = delCount < addCount ? delCount : addCount;
+      for (var k = 0; k < pairCount; k++) {
+        counterparts[delStart + k] = rows[addStart + k].text;
+        counterparts[addStart + k] = rows[delStart + k].text;
+      }
+    }
+    return [
+      for (var j = 0; j < rows.length; j++)
+        (row: rows[j], counterpart: counterparts[j]),
+    ];
+  }
 
   @override
   Widget build(BuildContext context) {
     final semantic = AgySemanticColors.of(context);
     final theme = Theme.of(context);
+    final language = DiffSyntaxHighlighter.detectLanguage(filePath);
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -1055,8 +1094,8 @@ class _UnifiedHunksView extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   for (final hunk in hunks)
-                    for (final row in hunk.toNumberedRows())
-                      if (row.kind == DiffRowKind.hunkHeader)
+                    for (final item in _pairRows(hunk))
+                      if (item.row.kind == DiffRowKind.hunkHeader)
                         Container(
                           color: theme.colorScheme.primary.withOpacity(0.08),
                           padding: const EdgeInsets.symmetric(
@@ -1067,7 +1106,7 @@ class _UnifiedHunksView extends StatelessWidget {
                             children: [
                               Expanded(
                                 child: Text(
-                                  row.text,
+                                  item.row.text,
                                   style: TextStyle(
                                     fontFamily: 'monospace',
                                     fontSize: 11,
@@ -1098,7 +1137,11 @@ class _UnifiedHunksView extends StatelessWidget {
                           ),
                         )
                       else
-                        _UnifiedDiffCodeRow(row: row),
+                        _UnifiedDiffCodeRow(
+                          row: item.row,
+                          language: language,
+                          counterpartText: item.counterpart,
+                        ),
                 ],
               ),
             ),
@@ -1110,13 +1153,21 @@ class _UnifiedHunksView extends StatelessWidget {
 }
 
 class _UnifiedDiffCodeRow extends StatelessWidget {
-  const _UnifiedDiffCodeRow({required this.row});
+  const _UnifiedDiffCodeRow({
+    required this.row,
+    required this.language,
+    this.counterpartText,
+  });
 
   final DiffLineRow row;
+  final DiffSyntaxLanguage language;
+  final String? counterpartText;
 
   @override
   Widget build(BuildContext context) {
     final semantic = AgySemanticColors.of(context);
+    final syntaxPalette = DiffSyntaxPalette.of(context);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final isAdd = row.kind == DiffRowKind.addition;
     final isDel = row.kind == DiffRowKind.deletion;
     final bg = isAdd
@@ -1129,6 +1180,14 @@ class _UnifiedDiffCodeRow extends StatelessWidget {
         : isDel
             ? semantic.diffDelFg
             : semantic.textPrimary;
+    final wordBg = isAdd
+        ? semantic.success.withOpacity(isDark ? 0.34 : 0.28)
+        : isDel
+            ? semantic.danger.withOpacity(isDark ? 0.36 : 0.26)
+            : null;
+    final wordRange = (isAdd || isDel)
+        ? DiffSyntaxHighlighter.computeIntralineRange(row.text, counterpartText)
+        : null;
     final gutterAccent = isAdd
         ? semantic.success
         : isDel
@@ -1189,14 +1248,17 @@ class _UnifiedDiffCodeRow extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 4),
-          Text(
-            row.text.isEmpty ? ' ' : row.text,
-            softWrap: false,
-            style: TextStyle(
-              fontFamily: 'monospace',
-              fontSize: 11.5,
-              color: fg,
+          Text.rich(
+            TextSpan(
+              children: DiffSyntaxHighlighter.highlightLine(
+                code: row.text,
+                language: language,
+                palette: syntaxPalette,
+                wordHighlightBg: wordBg,
+                wordRange: wordRange,
+              ),
             ),
+            softWrap: false,
           ),
           const SizedBox(width: 14),
         ],
@@ -1207,10 +1269,12 @@ class _UnifiedDiffCodeRow extends StatelessWidget {
 
 class _SplitHunksView extends StatelessWidget {
   const _SplitHunksView({
+    required this.filePath,
     required this.hunks,
     this.onRevertHunk,
   });
 
+  final String filePath;
   final List<DiffHunk> hunks;
   final Future<void> Function(DiffHunk hunk)? onRevertHunk;
 
@@ -1218,6 +1282,7 @@ class _SplitHunksView extends StatelessWidget {
   Widget build(BuildContext context) {
     final semantic = AgySemanticColors.of(context);
     final theme = Theme.of(context);
+    final language = DiffSyntaxHighlighter.detectLanguage(filePath);
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -1276,11 +1341,13 @@ class _SplitHunksView extends StatelessWidget {
                             child: _SplitHalfCell(
                               row: pair.left,
                               isLeft: true,
+                              language: language,
+                              counterpartText: pair.right?.text,
                             ),
                           ),
                           Container(
                             width: 1,
-                            height: 18,
+                            height: 22,
                             color: semantic.codeWellBorder,
                           ),
                           SizedBox(
@@ -1288,6 +1355,8 @@ class _SplitHunksView extends StatelessWidget {
                             child: _SplitHalfCell(
                               row: pair.right,
                               isLeft: false,
+                              language: language,
+                              counterpartText: pair.left?.text,
                             ),
                           ),
                         ],
@@ -1305,18 +1374,24 @@ class _SplitHalfCell extends StatelessWidget {
   const _SplitHalfCell({
     required this.row,
     required this.isLeft,
+    required this.language,
+    this.counterpartText,
   });
 
   final DiffLineRow? row;
   final bool isLeft;
+  final DiffSyntaxLanguage language;
+  final String? counterpartText;
 
   @override
   Widget build(BuildContext context) {
     final semantic = AgySemanticColors.of(context);
+    final syntaxPalette = DiffSyntaxPalette.of(context);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final r = row;
     if (r == null) {
       return Container(
-        height: 18,
+        height: 22,
         color: Theme.of(context)
             .colorScheme
             .surfaceContainerHighest
@@ -1336,6 +1411,14 @@ class _SplitHalfCell extends StatelessWidget {
         : isAdd
             ? semantic.diffAddFg
             : semantic.textPrimary;
+    final wordBg = isDel
+        ? semantic.danger.withOpacity(isDark ? 0.36 : 0.26)
+        : isAdd
+            ? semantic.success.withOpacity(isDark ? 0.34 : 0.28)
+            : null;
+    final wordRange = (isDel || isAdd)
+        ? DiffSyntaxHighlighter.computeIntralineRange(r.text, counterpartText)
+        : null;
     final gutterAccent = isDel
         ? semantic.danger
         : isAdd
@@ -1386,15 +1469,18 @@ class _SplitHalfCell extends StatelessWidget {
           ),
           const SizedBox(width: 4),
           Expanded(
-            child: Text(
-              r.text.isEmpty ? ' ' : r.text,
+            child: Text.rich(
+              TextSpan(
+                children: DiffSyntaxHighlighter.highlightLine(
+                  code: r.text,
+                  language: language,
+                  palette: syntaxPalette,
+                  wordHighlightBg: wordBg,
+                  wordRange: wordRange,
+                ),
+              ),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontFamily: 'monospace',
-                fontSize: 11.5,
-                color: fg,
-              ),
             ),
           ),
         ],

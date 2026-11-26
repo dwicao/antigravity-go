@@ -2,6 +2,11 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.42] - 2026-11-26
+
+### Added
+- **GitHub-Style Diff Syntax Highlighter & Intraline Word Emphasis:** Added `DiffSyntaxHighlighter` & `DiffSyntaxPalette` (GitHub Light & Dark color tokens across Dart/Kotlin/JS/TS/Go/Rust/Python/Shell/JSON/YAML/SQL/XML/Markdown) inside `GitHubDiffViewer` (Unified & Split views) and `DiffLineView`, complete with GitHub-style intraline substring highlight on paired removal/addition lines.
+
 ## [1.0.41] - 2026-11-26
 
 ### Fixed

@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 
 import '../../theme/app_theme.dart';
 import '../workspace/diff_review_view.dart';
+import '../workspace/diff_syntax_highlighter.dart';
 
 /// Compact card modeled on `dsh-Go`'s `ChangeCard` showing files changed during
 /// a turn or after a Git commit/push, with `+N -M` counts and a tap-to-inspect sheet.
@@ -264,7 +265,7 @@ class ChangeCard extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             for (final line in file.diff!.split('\n'))
-                              DiffLineView(line: line),
+                              DiffLineView(line: line, filePath: file.path),
                           ],
                         ),
                       ),
@@ -332,9 +333,10 @@ class DiffCountsBadge extends StatelessWidget {
 }
 
 class DiffLineView extends StatelessWidget {
-  const DiffLineView({super.key, required this.line});
+  const DiffLineView({super.key, required this.line, this.filePath});
 
   final String line;
+  final String? filePath;
 
   @override
   Widget build(BuildContext context) {
@@ -346,6 +348,7 @@ class DiffLineView extends StatelessWidget {
         line.startsWith('index ') ||
         line.startsWith('+++') ||
         line.startsWith('---');
+    final isCode = isAdd || isDel || (!isHunk && !isMeta && line.startsWith(' '));
 
     final bg = isAdd
         ? semantic.diffAddBg
@@ -362,18 +365,44 @@ class DiffLineView extends StatelessWidget {
                     ? semantic.textSecondary
                     : semantic.textPrimary;
 
+    final baseStyle = TextStyle(
+      fontFamily: 'monospace',
+      fontSize: 11.5,
+      color: fg,
+      fontWeight: isHunk || isMeta ? FontWeight.w600 : FontWeight.w400,
+    );
+
+    if (isCode && line.isNotEmpty) {
+      final prefix = line.substring(0, 1);
+      final body = line.substring(1);
+      final lang = DiffSyntaxHighlighter.detectLanguage(filePath);
+      final palette = DiffSyntaxPalette.of(context);
+      return Container(
+        color: bg,
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+        child: SelectableText.rich(
+          TextSpan(
+            children: [
+              TextSpan(
+                text: prefix,
+                style: baseStyle.copyWith(fontWeight: FontWeight.w700),
+              ),
+              ...DiffSyntaxHighlighter.highlightLine(
+                code: body,
+                language: lang,
+                palette: palette,
+                baseStyle: baseStyle,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Container(
       color: bg,
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-      child: SelectableText(
-        line,
-        style: TextStyle(
-          fontFamily: 'monospace',
-          fontSize: 11.5,
-          color: fg,
-          fontWeight: isHunk || isMeta ? FontWeight.w600 : FontWeight.w400,
-        ),
-      ),
+      child: SelectableText(line, style: baseStyle),
     );
   }
 }
