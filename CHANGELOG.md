@@ -2,6 +2,14 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.60] - 2026-11-27
+
+### Added
+- **Universal Recursive Self-Improvement Loop (`/rsi`):**
+  - Added a bounded AlphaEvolve + Evaluator-Optimizer + RSP-inspired `/rsi` loop (`RsiEngine`, `RsiProjectProfile`, `RsiLoopNotifier`, `RsiControlSheet`, `RsiStatusBanner`) usable across **any Git project** directly from chat (`/rsi [objective | status | stop]`, `/self-improve`, `/evolve`), `HarnessPage`, and `CommandPaletteDialog`.
+  - Auto-detects the project's active Git branch, version manifest (`app/pubspec.yaml + sync_version.py`, `pubspec.yaml`, `package.json`, `Cargo.toml`, `pyproject.toml`, or Git tags), local verification command (`flutter test`, `dart test`, `npm test`, `pytest`, `cargo test`, `go test`, `./gradlew test`), GitHub Actions CI workflows, and optional tag/APK release workflows.
+  - Supports three `RsiReleaseMode` policies (`Auto (Detect Repo)`, `Tag + Release`, `CI / Verify Only`), bounded self-heal retries on CI or local test failures, evolutionary lineage persistence (`agy_rsi_loop_v1`), and automatic progression across generations after green CI and release verification.
+
 ## [1.0.59] - 2026-11-27
 
 ### Fixed

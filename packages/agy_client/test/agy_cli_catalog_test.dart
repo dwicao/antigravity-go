@@ -14,6 +14,7 @@ void main() {
       '/fast',
       '/compact',
       '/context',
+      '/rsi',
       '/btw',
       '/clear',
       '/rewind',

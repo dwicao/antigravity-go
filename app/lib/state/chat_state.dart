@@ -22,6 +22,7 @@ import 'harness_state.dart';
 import 'hosts_state.dart';
 import 'permissions_state.dart';
 import 'projects_state.dart';
+import 'rsi_loop_state.dart';
 import 'runtime_state.dart';
 import 'sessions_state.dart';
 import 'settings_state.dart';
@@ -96,6 +97,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
   final Map<String, Timer> _wakeupFinalizeTimers = {};
   final Map<String, Timer> _persistTimers = {};
   final Set<String> _completedAssistantIds = <String>{};
+  final Set<String> _erroredAssistantIds = <String>{};
   final List<String> _completedAssistantOrder = <String>[];
   static const int _maxCompletedAssistantHistory = 400;
   final AcpCodec _wakeupCodec = AcpCodec();
@@ -1994,6 +1996,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
             requiresAuth: !current.isCompactionSummary && evt.requiresAuth,
           ),
         );
+        _erroredAssistantIds.add(assistantId);
         if (_sessionRuntimes.containsKey(session.id)) {
           unawaited(_completeStreaming(session, assistantId));
         }
@@ -2163,17 +2166,34 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       if (completedMsg != null && completedMsg.changedFiles.isNotEmpty) {
         RepoMapBuilder.invalidateCache(fallbackCwd);
       }
-      final pushCwd = extractGitPushCwd(
-        completedMsg?.tools ?? const [],
-        fallbackCwd: fallbackCwd,
-      );
-      if (pushCwd != null && pushCwd.isNotEmpty && ref.mounted) {
+      final rsiOwnedTurn =
+          ref.read(rsiLoopProvider.notifier).ownsTurn(session.id);
+      final recordedError = _erroredAssistantIds.remove(assistantId);
+      if (rsiOwnedTurn) {
+        final hasErr = recordedError ||
+            (completedMsg != null &&
+                completedMsg.text.trimLeft().startsWith('Agent error:'));
         unawaited(
-          ref.read(ciWatchProvider.notifier).watchLatestRun(
-                cwd: pushCwd,
+          ref.read(rsiLoopProvider.notifier).onChatTurnFinished(
                 sessionId: session.id,
+                assistantText: completedMsg?.text ?? '',
+                hasError: hasErr,
+                errorText: hasErr ? completedMsg?.text : null,
               ),
         );
+      } else {
+        final pushCwd = extractGitPushCwd(
+          completedMsg?.tools ?? const [],
+          fallbackCwd: fallbackCwd,
+        );
+        if (pushCwd != null && pushCwd.isNotEmpty && ref.mounted) {
+          unawaited(
+            ref.read(ciWatchProvider.notifier).watchLatestRun(
+                  cwd: pushCwd,
+                  sessionId: session.id,
+                ),
+          );
+        }
       }
       final harnessSnap = ref.read(harnessProvider);
       final verifyCmd = harnessSnap.effectiveVerifyCommand?.trim() ?? '';
@@ -2417,8 +2437,9 @@ class ChatNotifier extends Notifier<ChatThreadState> {
     List<FileChangeEntry> changedFiles = const [],
     bool isCompactionSummary = false,
     List<ChatToolStep> tools = const [],
+    AgySessionSummary? targetSession,
   }) async {
-    var session = ref.read(sessionsProvider).activeSession;
+    var session = targetSession ?? ref.read(sessionsProvider).activeSession;
     session ??= await ref.read(sessionsProvider.notifier).createSession();
     final msg = ChatMessage(
       id: const Uuid().v4(),

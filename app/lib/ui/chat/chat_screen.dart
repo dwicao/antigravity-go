@@ -27,6 +27,7 @@ import '../../state/harness_state.dart';
 import '../../state/hosts_state.dart';
 import '../../state/permissions_state.dart';
 import '../../state/projects_state.dart';
+import '../../state/rsi_loop_state.dart';
 import '../../state/runtime_state.dart';
 import '../../state/sessions_state.dart';
 import '../../state/settings_state.dart';
@@ -45,6 +46,7 @@ import 'chat_banners_and_sheets.dart';
 import 'attachment_preview.dart';
 import 'chat_composer_bar.dart';
 import 'message_bubble.dart';
+import 'rsi_sheet.dart';
 import 'subagents_activity_banner.dart';
 import 'tool_approval_card.dart';
 
@@ -596,6 +598,61 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       await Navigator.of(context).push(
         MaterialPageRoute<void>(builder: (_) => const HarnessPage()),
       );
+      return;
+    }
+
+    if (firstWord == '/rsi' ||
+        firstWord == '/self-improve' ||
+        firstWord == '/evolve') {
+      final arg = text.length > firstWord.length
+          ? text.substring(firstWord.length).trim()
+          : '';
+      _clearInputMenus();
+      final argLower = arg.toLowerCase();
+      if (argLower == 'stop' || argLower == 'cancel') {
+        await ref
+            .read(rsiLoopProvider.notifier)
+            .stop(cancelStreamingTurn: true);
+        return;
+      }
+      if (argLower == 'status') {
+        final rsi = ref.read(rsiLoopProvider);
+        final buf = StringBuffer(
+          '### RSI Loop Status\n- **Phase:** ${rsi.phase.label}\n'
+          '- **Generation:** ${rsi.currentGeneration}/${rsi.config.maxGenerations}\n',
+        );
+        if (rsi.statusDetail.isNotEmpty) {
+          buf.writeln('- **Detail:** ${rsi.statusDetail}');
+        }
+        if (rsi.archive.isNotEmpty) {
+          buf.writeln('\n**Recent Lineage:**');
+          for (final e in rsi.archive.take(5)) {
+            buf.writeln(
+              '- Gen ${e.generation} [${e.status}]${e.tag != null ? ' `${e.tag}`' : ''}: ${e.summary}',
+            );
+          }
+        }
+        await ref.read(chatProvider.notifier).appendSystemFeedback(buf.toString());
+        return;
+      }
+      if (arg.isNotEmpty) {
+        final sessions = ref.read(sessionsProvider);
+        final active = sessions.activeSession ??
+            await ref.read(sessionsProvider.notifier).createSession();
+        final project = ref.read(projectsProvider).activeProject;
+        final cwd = active.workspacePath.isNotEmpty
+            ? active.workspacePath
+            : project.primaryFolder;
+        await ref.read(rsiLoopProvider.notifier).start(
+              sessionId: active.id,
+              cwd: cwd,
+              config: ref.read(rsiLoopProvider).config.copyWith(objective: arg),
+            );
+        return;
+      }
+      if (mounted) {
+        await RsiControlSheet.show(context, ref);
+      }
       return;
     }
 
@@ -2022,6 +2079,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               messages: chat.messages,
             ),
           ),
+        wrapCentered(
+          RsiStatusBanner(
+            onOpenSheet: () => RsiControlSheet.show(context, ref),
+          ),
+        ),
         if (chat.stallWarning != null)
           wrapCentered(
             Container(

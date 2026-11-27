@@ -17,7 +17,11 @@ class CiWatchItem {
     required this.startedAt,
     this.runId,
     this.branch,
+    this.headSha,
+    this.workflowNameFilter,
     this.htmlUrl,
+    this.failedLog,
+    this.suppressDefaultAutoFix = false,
   });
 
   final String id;
@@ -28,14 +32,22 @@ class CiWatchItem {
   final DateTime startedAt;
   final String? runId;
   final String? branch;
+  final String? headSha;
+  final String? workflowNameFilter;
   final String? htmlUrl;
+  final String? failedLog;
+  final bool suppressDefaultAutoFix;
 
   CiWatchItem copyWith({
     String? workflowName,
     String? status,
     String? runId,
     String? branch,
+    String? headSha,
+    String? workflowNameFilter,
     String? htmlUrl,
+    String? failedLog,
+    bool? suppressDefaultAutoFix,
   }) {
     return CiWatchItem(
       id: id,
@@ -46,7 +58,12 @@ class CiWatchItem {
       startedAt: startedAt,
       runId: runId ?? this.runId,
       branch: branch ?? this.branch,
+      headSha: headSha ?? this.headSha,
+      workflowNameFilter: workflowNameFilter ?? this.workflowNameFilter,
       htmlUrl: htmlUrl ?? this.htmlUrl,
+      failedLog: failedLog ?? this.failedLog,
+      suppressDefaultAutoFix:
+          suppressDefaultAutoFix ?? this.suppressDefaultAutoFix,
     );
   }
 }
@@ -73,6 +90,8 @@ class CiWatchNotifier extends Notifier<List<CiWatchItem>> {
   final Map<String, Timer> _timers = {};
   final Map<String, int> _missCounts = {};
   final Set<String> _inFlightPolls = {};
+  final Map<String, Future<void> Function(CiWatchItem watch, bool passed, String summaryMarkdown)>
+      _customWatchCallbacks = {};
   CiShellRunner? shellRunnerOverride;
   CiCompletionCallback? onCompletedCallback;
 
@@ -85,6 +104,7 @@ class CiWatchNotifier extends Notifier<List<CiWatchItem>> {
       _timers.clear();
       _missCounts.clear();
       _inFlightPolls.clear();
+      _customWatchCallbacks.clear();
     });
     return const [];
   }
@@ -141,22 +161,38 @@ class CiWatchNotifier extends Notifier<List<CiWatchItem>> {
     }
   }
 
-  Future<void> watchLatestRun({
+  Future<String> watchLatestRun({
     required String cwd,
     required String sessionId,
     String? branch,
+    String? headSha,
+    String? workflowNameFilter,
+    bool suppressDefaultAutoFix = false,
+    Future<void> Function(
+      CiWatchItem watch,
+      bool passed,
+      String summaryMarkdown,
+    )? onDone,
   }) async {
-    if (cwd.trim().isEmpty) return;
-    final watchId = 'ci:${DateTime.now().millisecondsSinceEpoch}';
+    if (cwd.trim().isEmpty) return '';
+    final watchId = 'ci:${DateTime.now().microsecondsSinceEpoch}';
     final initial = CiWatchItem(
       id: watchId,
       cwd: cwd,
       sessionId: sessionId,
-      workflowName: 'GitHub Actions CI',
+      workflowName: workflowNameFilter?.trim().isNotEmpty == true
+          ? workflowNameFilter!.trim()
+          : 'GitHub Actions CI',
       status: 'queued',
       branch: branch,
+      headSha: headSha,
+      workflowNameFilter: workflowNameFilter,
+      suppressDefaultAutoFix: suppressDefaultAutoFix,
       startedAt: DateTime.now(),
     );
+    if (onDone != null) {
+      _customWatchCallbacks[watchId] = onDone;
+    }
     state = [...state, initial];
 
     // Poll cleanly without leaking if provider is disposed.
@@ -166,6 +202,7 @@ class CiWatchNotifier extends Notifier<List<CiWatchItem>> {
       (_) => pollOnce(watchId),
     );
     await pollOnce(watchId);
+    return watchId;
   }
 
   Future<void> pollOnce(String watchId) async {
@@ -188,8 +225,8 @@ class CiWatchNotifier extends Notifier<List<CiWatchItem>> {
           RegExp(r'^\d+$').hasMatch(rawRunId) ? rawRunId : '';
       final hasRunId = safeRunId.isNotEmpty;
       final cmd = hasRunId
-          ? 'gh run view $safeRunId --json databaseId,workflowName,status,conclusion,url,headBranch 2>/dev/null || echo "{}"'
-          : 'gh run list -L 5 --json databaseId,workflowName,status,conclusion,url,headBranch 2>/dev/null || echo "[]"';
+          ? 'gh run view $safeRunId --json databaseId,workflowName,status,conclusion,url,headBranch,headSha 2>/dev/null || echo "{}"'
+          : 'gh run list -L 8 --json databaseId,workflowName,status,conclusion,url,headBranch,headSha 2>/dev/null || echo "[]"';
       final raw = await _exec(cmd, watch.cwd);
       if (!ref.mounted) return;
 
@@ -198,13 +235,54 @@ class CiWatchNotifier extends Notifier<List<CiWatchItem>> {
       if (decoded is Map<String, dynamic> && decoded.isNotEmpty) {
         latest = decoded;
       } else if (decoded is List<dynamic> && decoded.isNotEmpty) {
-        final candidates = decoded.whereType<Map<String, dynamic>>().toList();
+        var candidates = decoded.whereType<Map<String, dynamic>>().toList();
+        final wfFilter = watch.workflowNameFilter?.trim().toLowerCase() ?? '';
+        if (wfFilter.isNotEmpty) {
+          final wfMatches = candidates
+              .where(
+                (r) => (r['workflowName']?.toString() ?? '')
+                    .toLowerCase()
+                    .contains(wfFilter),
+              )
+              .toList();
+          if (wfMatches.isNotEmpty) {
+            candidates = wfMatches;
+          } else {
+            candidates = const [];
+          }
+        }
+        final shaFilter = watch.headSha?.trim().toLowerCase() ?? '';
+        if (candidates.isNotEmpty && shaFilter.isNotEmpty) {
+          final shaMatches = candidates
+              .where(
+                (r) {
+                  final s = (r['headSha']?.toString() ?? '').toLowerCase();
+                  return s.isNotEmpty &&
+                      (s == shaFilter ||
+                          s.startsWith(shaFilter) ||
+                          shaFilter.startsWith(s));
+                },
+              )
+              .toList();
+          if (shaMatches.isNotEmpty) {
+            candidates = shaMatches;
+          } else if (candidates.any(
+            (r) => (r['headSha']?.toString() ?? '').isNotEmpty,
+          )) {
+            // Wait for the pushed commit's run to appear rather than latching onto an older run.
+            candidates = const [];
+          }
+        }
         if (candidates.isNotEmpty) {
           if (watch.branch != null && watch.branch!.isNotEmpty) {
-            latest = candidates
-                    .where((r) => r['headBranch']?.toString() == watch.branch)
-                    .firstOrNull ??
-                candidates.first;
+            final branchMatches = candidates
+                .where((r) => r['headBranch']?.toString() == watch.branch)
+                .toList();
+            if (branchMatches.isNotEmpty) {
+              latest = branchMatches.first;
+            } else if (wfFilter.isEmpty) {
+              latest = candidates.first;
+            }
           } else {
             latest = candidates.first;
           }
@@ -247,6 +325,7 @@ class CiWatchNotifier extends Notifier<List<CiWatchItem>> {
       // Run finished! Stop watching immediately and surface result / auto-fix trigger.
       _timers.remove(watchId)?.cancel();
       _missCounts.remove(watchId);
+      final customCb = _customWatchCallbacks.remove(watchId);
       state = state.where((w) => w.id != watchId).toList();
 
       final normalizedConclusion =
@@ -267,19 +346,24 @@ class CiWatchNotifier extends Notifier<List<CiWatchItem>> {
       final summary = passed
           ? 'CI passed: **$workflow** run `$runId`$linkText.'
           : 'CI failed ($normalizedConclusion): **$workflow** run `$runId`$linkText.\n```\n${failedLog ?? "Check GitHub Actions logs."}\n```';
-      final autoFixPrompt = passed
+      final autoFixPrompt = (passed || watch.suppressDefaultAutoFix)
           ? null
           : '[Auto CI Watch] GitHub Actions CI run `$runId` ($workflow) failed on `${headBranch ?? "main"}`. Diagnose and fix the failure cleanly:\n\n```\n${failedLog ?? "gh run view $runId --log-failed"}\n```';
 
-      if (onCompletedCallback != null) {
+      final finalWatch = watch.copyWith(
+        runId: runId,
+        workflowName: workflow,
+        status: normalizedConclusion,
+        branch: headBranch,
+        htmlUrl: url,
+        failedLog: failedLog,
+      );
+
+      if (customCb != null) {
+        await customCb(finalWatch, passed, summary);
+      } else if (onCompletedCallback != null) {
         await onCompletedCallback!(
-          watch: watch.copyWith(
-            runId: runId,
-            workflowName: workflow,
-            status: normalizedConclusion,
-            branch: headBranch,
-            htmlUrl: url,
-          ),
+          watch: finalWatch,
           passed: passed,
           summaryMarkdown: summary,
           autoFixPrompt: autoFixPrompt,
@@ -299,6 +383,7 @@ class CiWatchNotifier extends Notifier<List<CiWatchItem>> {
     _timers.remove(watchId)?.cancel();
     _missCounts.remove(watchId);
     _inFlightPolls.remove(watchId);
+    _customWatchCallbacks.remove(watchId);
     state = state.where((w) => w.id != watchId).toList();
   }
 
@@ -309,6 +394,7 @@ class CiWatchNotifier extends Notifier<List<CiWatchItem>> {
     _timers.clear();
     _missCounts.clear();
     _inFlightPolls.clear();
+    _customWatchCallbacks.clear();
     state = const [];
   }
 }

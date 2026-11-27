@@ -4,8 +4,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../state/chat_state.dart';
 import '../../state/harness_state.dart';
+import '../../state/rsi_loop_state.dart';
 import '../../state/settings_state.dart';
 import '../../theme/app_theme.dart';
+import '../chat/rsi_sheet.dart';
 
 /// Modern Agent Harness Dashboard:
 /// - Context saturation gauge & proactive `/compact` trigger
@@ -719,6 +721,18 @@ class _HarnessPageState extends ConsumerState<HarnessPage> {
                         ),
                         icon: const Icon(Icons.policy_outlined, size: 17),
                         label: const Text('Adversarial Diff Review'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: () {
+                          final activeRsi = ref.read(rsiLoopProvider);
+                          RsiControlSheet.show(
+                            context,
+                            ref,
+                            initialObjective: activeRsi.config.objective,
+                          );
+                        },
+                        icon: const Icon(Icons.autorenew_rounded, size: 17),
+                        label: const Text('RSI Loop (/rsi)'),
                       ),
                     ],
                   ),

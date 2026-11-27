@@ -29,3 +29,4 @@ export 'src/voice/voice_prompt_normalizer.dart';
 export 'src/harness/harness_engine.dart';
 export 'src/harness/lifecycle_hooks.dart';
 export 'src/harness/repo_map_builder.dart';
+export 'src/harness/rsi_engine.dart';

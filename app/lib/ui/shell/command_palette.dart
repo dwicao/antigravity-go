@@ -6,6 +6,7 @@ import '../../state/sessions_state.dart';
 import '../../state/side_panel_state.dart';
 import '../automations/automations_page.dart';
 import '../backup/chat_backup_page.dart';
+import '../chat/rsi_sheet.dart';
 import '../cli/cli_manager_page.dart';
 import '../customizations/customizations_page.dart';
 import '../harness/harness_page.dart';
@@ -98,6 +99,15 @@ class _CommandPaletteDialogState extends ConsumerState<CommandPaletteDialog> {
           Navigator.of(context).push(
             MaterialPageRoute<void>(builder: (_) => const HarnessPage()),
           );
+        },
+      ),
+      (
+        'Recursive Self-Improvement (/rsi)',
+        'Bounded propose → CI watch → APK release evolutionary loop',
+        Icons.autorenew_rounded,
+        () {
+          Navigator.of(context).pop();
+          RsiControlSheet.show(context, ref);
         },
       ),
       (

@@ -93,6 +93,14 @@ class AgyCliCatalog {
       handledLocally: true,
     ),
     AgySlashCommand(
+      command: '/rsi',
+      aliases: ['/self-improve', '/evolve'],
+      argHint: '[objective | status | stop]',
+      description:
+          'Auto recursive self-improve → CI watch → GitHub APK release loop',
+      handledLocally: true,
+    ),
+    AgySlashCommand(
       command: '/btw',
       argHint: '<side question>',
       description: 'Ask a quick side question without cluttering the thread',
