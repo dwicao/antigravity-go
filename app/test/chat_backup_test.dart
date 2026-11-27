@@ -295,7 +295,12 @@ void main() {
     );
 
     final restoreBtn = find.widgetWithText(FilledButton, 'Restore').first;
-    await tester.ensureVisible(restoreBtn);
+    await tester.scrollUntilVisible(
+      restoreBtn,
+      160,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
     await tester.tap(restoreBtn);
     await tester.pumpAndSettle();
 
