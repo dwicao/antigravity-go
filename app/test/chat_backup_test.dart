@@ -285,6 +285,11 @@ void main() {
     expect(tester.takeException(), isNull);
     expect((await service.listLocalSnapshots()).length, 1);
 
+    // Dismiss the confirmation SnackBar so it does not cover bottom controls on 360x720.
+    ScaffoldMessenger.of(tester.element(find.byType(ChatBackupPage)))
+        .clearSnackBars();
+    await tester.pumpAndSettle();
+
     // Delete the session locally, then restore from the snapshot row
     await container.read(sessionsProvider.notifier).deleteSession('ui-s1');
     await container.read(draftStoreProvider.notifier).flush();
