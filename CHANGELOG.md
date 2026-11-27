@@ -2,6 +2,15 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.61] - 2026-11-27
+
+### Added
+- **Agent Pass-by-Reference Tool Output Variables (`$v_*`, `ToolVariableStore`, `SessionVariableStore`):**
+  - Automatically stores large tool outputs across both **OpenAI-compatible `/v1`** (`OpenAiCompatRunner`) and **Native `agy acp` / `PhoneMcpServer`** (`SessionVariableStore.kt`, `AcpFsTerminalHandler.kt`) as named session variables (`$v_read_*`, `$v_cmd_*`, `$v_term_*`, `$v_phone_*`, `$v_last`, or custom `save_as`) so agents pass data by reference instead of re-typing thousands of tokens.
+  - Returns compact `[VAR STORED: $name | <summary>]` cards with head/tail previews for large outputs while supporting `$var`, `${var}`, `$var.field`, `$var[0].id`, `$var[1:50]`, `.length`, `.lines`, `.keys`, `inspect_var` / `var_inspect` (line slices & regex grep), and live chunk-safe expansion during streaming via `StreamingVariableExpander`.
+  - Added parallelizable `delegate_subagent` and `run_command` `stdin` piping (with base64 safe transport) in `OpenAiCompatRunner` so multi-agent fan-outs share `$v_*` context effortlessly without token duplication.
+  - Added a persisted **Tool Output Variables (`$var`)** toggle in `HarnessPage` (`HarnessNotifier`) synced natively to the Android runtime bridge.
+
 ## [1.0.60] - 2026-11-27
 
 ### Added
