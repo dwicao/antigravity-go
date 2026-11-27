@@ -58,4 +58,33 @@ class SessionVariableStoreTest {
         assertTrue(compact.length < regular.length)
         assertTrue(compact.length < 1_500)
     }
+
+    @Test
+    fun readCacheDeduplicatesUnchangedFilesAndInvalidatesOnWrite() {
+        val store = SessionVariableStore(inlineThresholdChars = 100)
+        val content = "line\n".repeat(60)
+        val entry = store.save(toolName = "read_file", rawOutput = content, explicitName = "r1")
+        store.recordFileRead(
+            path = "/repo/Main.kt",
+            content = content,
+            varName = entry.name,
+            modifiedMs = 5000L,
+        )
+        val hit = store.checkFileRead(
+            path = "/repo/Main.kt",
+            currentContent = content,
+            modifiedMs = 5000L,
+        )
+        assertEquals("r1", hit?.varName)
+
+        store.invalidateFilePath("/repo/Main.kt")
+        val afterWrite = store.checkFileRead(
+            path = "/repo/Main.kt",
+            currentContent = content,
+            modifiedMs = 5000L,
+        )
+        assertEquals(null, afterWrite)
+        assertTrue(SessionVariableStore.isLockOrGeneratedFile("/repo/pubspec.lock"))
+        assertTrue(SessionVariableStore.isLockOrGeneratedFile("/repo/model.g.dart"))
+    }
 }

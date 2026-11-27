@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:agy_client/agy_client.dart';
 import 'package:test/test.dart';
@@ -204,6 +205,88 @@ void main() {
       expect(compact.length, lessThan(regular.length));
       expect(compact, contains('ChatNotifier:90'));
       expect(compact, contains('sendPrompt:980'));
+    });
+
+    test('compressTerminalOutput strips ANSI/OSC, collapses spinners and duplicate lines', () {
+      const noisy =
+          '\x1B[32mPASS\x1B[0m test_a.dart   \n'
+          'Downloading 10%\rDownloading 50%\rDownloading 100%\n'
+          'ok line\n'
+          'ok line\n'
+          'ok line\n'
+          'ok line\n'
+          '\n\n\n\n'
+          'done';
+      final cleaned = ToolVariableStore.compressTerminalOutput(noisy);
+      expect(cleaned, isNot(contains('\x1B')));
+      expect(cleaned, isNot(contains('Downloading 10%')));
+      expect(cleaned, contains('Downloading 100%'));
+      expect(cleaned, contains('... [repeated 3 more times]'));
+      expect(cleaned.endsWith('done'), isTrue);
+    });
+
+    test('Read-Once deduplication hits on unchanged file and invalidates on write/change', () {
+      final store = ToolVariableStore(inlineThresholdChars: 100);
+      final body = 'Line\n' * 100;
+      final entry = store.save(
+        toolName: 'read_file',
+        target: '/repo/a.dart',
+        rawOutput: body,
+      );
+      store.recordFileRead(
+        path: '/repo/a.dart',
+        content: body,
+        varName: entry.name,
+        modifiedMs: 1000,
+      );
+
+      final hit = store.checkFileRead(
+        path: '/repo/a.dart',
+        currentContent: body,
+        modifiedMs: 1000,
+      );
+      expect(hit, isNotNull);
+      expect(hit!.varName, entry.name);
+      expect(store.readDedupHits, 1);
+
+      expect(
+        store.checkFileRead(
+          path: '/repo/a.dart',
+          currentContent: '$body\nchanged',
+          modifiedMs: 1001,
+        ),
+        isNull,
+      );
+
+      store.invalidateFilePath('/repo/a.dart');
+      expect(
+        store.checkFileRead(
+          path: '/repo/a.dart',
+          currentContent: body,
+          modifiedMs: 1000,
+        ),
+        isNull,
+      );
+    });
+
+    test('RepoMapBuilder skips lockfiles and respects .agyignore patterns', () async {
+      final tmp = await Directory.systemTemp.createTemp('agy_ignore_test_');
+      try {
+        await File('${tmp.path}/.agyignore').writeAsString('generated/\n*.gen.dart\n');
+        await File('${tmp.path}/pubspec.lock').writeAsString('packages: {}');
+        await Directory('${tmp.path}/generated').create();
+        await File('${tmp.path}/generated/big.dart').writeAsString('class GeneratedBig {}');
+        await File('${tmp.path}/app.gen.dart').writeAsString('class GenModel {}');
+        await File('${tmp.path}/main.dart').writeAsString('class MainApp {}');
+
+        final map = await RepoMapBuilder.buildFromDirectory(tmp.path, useCache: false);
+        expect(map, contains('main.dart'));
+        expect(map, isNot(contains('pubspec.lock')));
+        expect(map, isNot(contains('GeneratedBig')));
+        expect(map, isNot(contains('GenModel')));
+      } finally {
+        await tmp.delete(recursive: true);
+      }
     });
   });
 }

@@ -59,6 +59,28 @@ class ToolVarEntry {
   }
 }
 
+class FileReadRecord {
+  const FileReadRecord({
+    required this.path,
+    required this.startLine,
+    required this.limit,
+    required this.modifiedMs,
+    required this.byteSize,
+    required this.contentHash,
+    required this.varName,
+    required this.lineCount,
+  });
+
+  final String path;
+  final int startLine;
+  final int limit;
+  final int modifiedMs;
+  final int byteSize;
+  final int contentHash;
+  final String varName;
+  final int lineCount;
+}
+
 /// Per-session registry of tool output variables (`$var_name` / `$var.field` /
 /// `$var[0]` / `$var[1:50]`).
 ///
@@ -80,22 +102,169 @@ class ToolVariableStore {
 
   final Map<String, ToolVarEntry> _vars = <String, ToolVarEntry>{};
   final List<String> _insertionOrder = <String>[];
+  final Map<String, FileReadRecord> _readCache = <String, FileReadRecord>{};
   String? _latestName;
   int _counter = 0;
   int _totalChars = 0;
   int _resolvedCount = 0;
   int _savedOutputChars = 0;
+  int _readDedupHits = 0;
 
   static final RegExp _validNameRe = RegExp(r'^[A-Za-z_][A-Za-z0-9_]*$');
   static final RegExp _exprRe = RegExp(
     r'\\?\$(\{([A-Za-z_][A-Za-z0-9_]*(?:(?:\.[A-Za-z_][A-Za-z0-9_]*)|(?:\[(?:-?\d+(?::\d*)?|:\d+)\]))*)\}|([A-Za-z_][A-Za-z0-9_]*(?:(?:\.[A-Za-z_][A-Za-z0-9_]*)|(?:\[(?:-?\d+(?::\d*)?|:\d+)\]))*))',
   );
+  static final RegExp _ansiCsiOscRe = RegExp(
+    r'\x1B(?:\][^\x07\x1B]*(?:\x07|\x1B\\)|\[[0-?]*[ -/]*[@-~]|[@-Z\\-_])',
+  );
+
+  /// RTK-style deterministic terminal output compression:
+  /// strips ANSI/OSC escape sequences, collapses `\r` progress/spinner
+  /// overwrites, trims trailing spaces, limits consecutive blank lines, and
+  /// deduplicates long runs of identical consecutive output lines.
+  static String compressTerminalOutput(String raw) {
+    if (raw.isEmpty) return raw;
+    var cleaned = raw.replaceAll(_ansiCsiOscRe, '');
+    cleaned = cleaned.replaceAll('\r\n', '\n');
+    final rawLines = cleaned.split('\n');
+    final outLines = <String>[];
+    String? prevLine;
+    var repeatCount = 0;
+    var blankRun = 0;
+
+    void flushRepeats() {
+      if (repeatCount > 1) {
+        outLines.add('... [repeated $repeatCount more times]');
+      } else if (repeatCount == 1 && prevLine != null) {
+        outLines.add(prevLine);
+      }
+      repeatCount = 0;
+    }
+
+    for (final rawLine in rawLines) {
+      // Collapse `\r` spinner / progress bar overwrites by keeping the final segment.
+      final crIdx = rawLine.lastIndexOf('\r');
+      final resolved = (crIdx >= 0 ? rawLine.substring(crIdx + 1) : rawLine)
+          .replaceFirst(RegExp(r'[ \t]+$'), '');
+      if (resolved.isEmpty) {
+        flushRepeats();
+        prevLine = null;
+        blankRun++;
+        if (blankRun <= 2) {
+          outLines.add('');
+        }
+        continue;
+      }
+      blankRun = 0;
+      if (prevLine == resolved) {
+        repeatCount++;
+        continue;
+      }
+      flushRepeats();
+      outLines.add(resolved);
+      prevLine = resolved;
+    }
+    flushRepeats();
+    return outLines.join('\n').trimRight();
+  }
+
+  static bool isLockOrGeneratedFile(String path) {
+    final lower = path.trim().replaceAll('\\', '/').toLowerCase();
+    final name = lower.split('/').last;
+    if (name == 'package-lock.json' ||
+        name == 'pnpm-lock.yaml' ||
+        name == 'yarn.lock' ||
+        name == 'cargo.lock' ||
+        name == 'pubspec.lock' ||
+        name == 'composer.lock' ||
+        name == 'gemfile.lock' ||
+        name == 'poetry.lock' ||
+        name == 'pods.manifest.lock') {
+      return true;
+    }
+    return name.endsWith('.g.dart') ||
+        name.endsWith('.freezed.dart') ||
+        name.endsWith('.min.js') ||
+        name.endsWith('.min.css') ||
+        name.endsWith('.bundle.js') ||
+        name.endsWith('.js.map') ||
+        name.endsWith('.css.map');
+  }
+
+  static int _quickHash(String text) {
+    var h = 0x811c9dc5;
+    for (var i = 0; i < text.length; i++) {
+      h ^= text.codeUnitAt(i);
+      h = (h * 0x01000193) & 0xffffffff;
+    }
+    return h;
+  }
+
+  static String _readKey(String path, int startLine, int limit) =>
+      '${path.trim().replaceAll('\\', '/')}|$startLine|$limit';
 
   int get length => _vars.length;
   int get totalChars => _totalChars;
   int get resolvedCount => _resolvedCount;
   int get savedOutputChars => _savedOutputChars;
+  int get readDedupHits => _readDedupHits;
   String? get latestName => _latestName;
+
+  /// Checks if an unchanged read of `(path, startLine, limit)` was already
+  /// recorded in this session, returning a tiny cache-hit reference if so.
+  FileReadRecord? checkFileRead({
+    required String path,
+    int startLine = 0,
+    int limit = 0,
+    required String currentContent,
+    int modifiedMs = 0,
+  }) {
+    if (!enabled || currentContent.length <= inlineThresholdChars) return null;
+    final key = _readKey(path, startLine, limit);
+    final rec = _readCache[key];
+    if (rec == null) return null;
+    if (rec.varName.isNotEmpty && !containsRoot(rec.varName)) {
+      _readCache.remove(key);
+      return null;
+    }
+    final hash = _quickHash(currentContent);
+    if (rec.byteSize == currentContent.length &&
+        rec.contentHash == hash &&
+        (modifiedMs == 0 || rec.modifiedMs == 0 || rec.modifiedMs == modifiedMs)) {
+      _readDedupHits++;
+      _savedOutputChars += currentContent.length;
+      return rec;
+    }
+    return null;
+  }
+
+  void recordFileRead({
+    required String path,
+    int startLine = 0,
+    int limit = 0,
+    required String content,
+    required String varName,
+    int modifiedMs = 0,
+  }) {
+    if (content.length <= inlineThresholdChars) return;
+    final key = _readKey(path, startLine, limit);
+    final lines = content.isEmpty ? 0 : '\n'.allMatches(content).length + 1;
+    _readCache[key] = FileReadRecord(
+      path: path.trim().replaceAll('\\', '/'),
+      startLine: startLine,
+      limit: limit,
+      modifiedMs: modifiedMs,
+      byteSize: content.length,
+      contentHash: _quickHash(content),
+      varName: varName,
+      lineCount: lines,
+    );
+  }
+
+  void invalidateFilePath(String path) {
+    final norm = path.trim().replaceAll('\\', '/');
+    _readCache.removeWhere((_, rec) => rec.path == norm);
+  }
 
   List<ToolVarEntry> get entries => [
         for (final name in _insertionOrder)
@@ -115,11 +284,13 @@ class ToolVariableStore {
   void clear() {
     _vars.clear();
     _insertionOrder.clear();
+    _readCache.clear();
     _latestName = null;
     _totalChars = 0;
     _counter = 0;
     _resolvedCount = 0;
     _savedOutputChars = 0;
+    _readDedupHits = 0;
   }
 
   /// Stores a raw tool result and returns its assigned [ToolVarEntry].

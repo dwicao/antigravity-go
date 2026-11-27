@@ -29,6 +29,17 @@ class SessionVariableStore(
         val summary: String,
     )
 
+    data class CachedFileRead(
+        val path: String,
+        val startLine: Int,
+        val limit: Int,
+        val modifiedMs: Long,
+        val byteSize: Int,
+        val contentHash: Int,
+        val varName: String,
+        val lineCount: Int,
+    )
+
     companion object {
         @Volatile
         var enabled: Boolean = true
@@ -37,6 +48,40 @@ class SessionVariableStore(
         var compactPreviewMode: Boolean = true
 
         val shared = SessionVariableStore()
+
+        private val LOCK_NAMES = setOf(
+            "package-lock.json",
+            "pnpm-lock.yaml",
+            "yarn.lock",
+            "cargo.lock",
+            "pubspec.lock",
+            "composer.lock",
+            "gemfile.lock",
+            "poetry.lock",
+            "pods.manifest.lock",
+        )
+
+        fun isLockOrGeneratedFile(path: String): Boolean {
+            val norm = path.trim().replace('\\', '/').lowercase()
+            val name = norm.substringAfterLast('/')
+            if (name in LOCK_NAMES) return true
+            return name.endsWith(".g.dart") ||
+                name.endsWith(".freezed.dart") ||
+                name.endsWith(".min.js") ||
+                name.endsWith(".min.css") ||
+                name.endsWith(".bundle.js") ||
+                name.endsWith(".js.map") ||
+                name.endsWith(".css.map")
+        }
+
+        private fun quickHash(text: String): Int {
+            var h = 0x811c9dc5.toInt()
+            for (i in text.indices) {
+                h = h xor text[i].code
+                h *= 0x01000193
+            }
+            return h
+        }
 
         private val VALID_NAME_RE = Regex("""^[A-Za-z_][A-Za-z0-9_]*$""")
         private val EXPR_RE = Regex(
@@ -70,6 +115,7 @@ class SessionVariableStore(
     }
 
     private val vars = ConcurrentHashMap<String, Entry>()
+    private val readCache = ConcurrentHashMap<String, CachedFileRead>()
     private val insertionOrder = ArrayDeque<String>()
     private val lock = Any()
     private val counter = AtomicInteger(0)
@@ -78,9 +124,65 @@ class SessionVariableStore(
     private var latestName: String? = null
     private var totalChars: Int = 0
 
+    private fun readKey(path: String, startLine: Int, limit: Int): String =
+        "${path.trim().replace('\\', '/')}|$startLine|$limit"
+
+    fun checkFileRead(
+        path: String,
+        startLine: Int = 0,
+        limit: Int = 0,
+        currentContent: String,
+        modifiedMs: Long = 0L,
+    ): CachedFileRead? {
+        if (!enabled || currentContent.length <= inlineThresholdChars) return null
+        val key = readKey(path, startLine, limit)
+        val rec = readCache[key] ?: return null
+        if (rec.varName.isNotEmpty() && get(rec.varName) == null) {
+            readCache.remove(key)
+            return null
+        }
+        val hash = quickHash(currentContent)
+        if (rec.byteSize == currentContent.length &&
+            rec.contentHash == hash &&
+            (modifiedMs == 0L || rec.modifiedMs == 0L || rec.modifiedMs == modifiedMs)
+        ) {
+            return rec
+        }
+        return null
+    }
+
+    fun recordFileRead(
+        path: String,
+        startLine: Int = 0,
+        limit: Int = 0,
+        content: String,
+        varName: String,
+        modifiedMs: Long = 0L,
+    ) {
+        if (content.length <= inlineThresholdChars) return
+        val norm = path.trim().replace('\\', '/')
+        val lines = if (content.isEmpty()) 0 else content.count { it == '\n' } + 1
+        readCache[readKey(path, startLine, limit)] = CachedFileRead(
+            path = norm,
+            startLine = startLine,
+            limit = limit,
+            modifiedMs = modifiedMs,
+            byteSize = content.length,
+            contentHash = quickHash(content),
+            varName = varName,
+            lineCount = lines,
+        )
+    }
+
+    fun invalidateFilePath(path: String) {
+        val norm = path.trim().replace('\\', '/')
+        readCache.entries.removeIf { it.value.path == norm }
+    }
+
     fun clear() {
         synchronized(lock) {
             vars.clear()
+            readCache.clear()
             insertionOrder.clear()
             latestName = null
             totalChars = 0

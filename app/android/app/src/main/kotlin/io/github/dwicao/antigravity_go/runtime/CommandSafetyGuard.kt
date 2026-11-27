@@ -238,4 +238,57 @@ object CommandSafetyGuard {
             )
         }
     }
+
+    private val ansiEscapeRegex = Regex(
+        """\u001B(?:\][^\u0007\u001B]*(?:\u0007|\u001B\\)|\[[0-?]*[ -/]*[@-~]|[@-Z\\-_])""",
+    )
+
+    /**
+     * RTK-style deterministic terminal output compression:
+     * strips ANSI/OSC escape sequences, collapses carriage-return spinner overwrites,
+     * trims trailing spaces, limits consecutive blank lines, and deduplicates repeated
+     * consecutive lines.
+     */
+    fun compressTerminalOutput(raw: String): String {
+        if (raw.isEmpty()) return raw
+        val cleaned = ansiEscapeRegex.replace(raw, "").replace("\r\n", "\n")
+        val lines = cleaned.split('\n')
+        val out = ArrayList<String>(lines.size)
+        var prevLine: String? = null
+        var repeatCount = 0
+        var blankRun = 0
+
+        fun flushRepeats() {
+            if (repeatCount > 1) {
+                out.add("... [repeated $repeatCount more times]")
+            } else if (repeatCount == 1 && prevLine != null) {
+                out.add(prevLine!!)
+            }
+            repeatCount = 0
+        }
+
+        for (rawLine in lines) {
+            val crIdx = rawLine.lastIndexOf('\r')
+            val resolved = (if (crIdx >= 0) rawLine.substring(crIdx + 1) else rawLine).trimEnd(' ', '\t')
+            if (resolved.isEmpty()) {
+                flushRepeats()
+                prevLine = null
+                blankRun++
+                if (blankRun <= 2) {
+                    out.add("")
+                }
+                continue
+            }
+            blankRun = 0
+            if (prevLine == resolved) {
+                repeatCount++
+                continue
+            }
+            flushRepeats()
+            out.add(resolved)
+            prevLine = resolved
+        }
+        flushRepeats()
+        return out.joinToString("\n").trimEnd()
+    }
 }

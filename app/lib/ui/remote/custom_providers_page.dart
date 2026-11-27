@@ -165,7 +165,7 @@ class CustomProvidersPage extends ConsumerWidget {
                 leading: const Icon(Icons.hub_outlined),
                 title: Text(p.name),
                 subtitle: Text(
-                  '${p.modelId} · ${p.normalizedBaseUrl}\nContext: ${(p.contextWindowTokens / 1000).round()}K${p.supportsTools ? " · Tools" : ""}${p.supportsVision ? " · Vision" : ""}',
+                  '${p.modelId}${p.subagentModelId.trim().isNotEmpty ? " (sub: ${p.subagentModelId.trim()})" : ""} · ${p.normalizedBaseUrl}\nContext: ${(p.contextWindowTokens / 1000).round()}K${p.supportsTools ? " · Tools" : ""}${p.supportsVision ? " · Vision" : ""}',
                 ),
                 isThreeLine: true,
                 trailing: Row(
@@ -249,6 +249,9 @@ class CustomProvidersPage extends ConsumerWidget {
     );
     final modelCtrl = TextEditingController(
       text: existing?.modelId ?? preset?.modelId ?? 'gpt-4.1',
+    );
+    final subModelCtrl = TextEditingController(
+      text: existing?.subagentModelId ?? '',
     );
     final ctxCtrl = TextEditingController(
       text: '${existing?.contextWindowTokens ?? preset?.ctx ?? 128000}',
@@ -417,6 +420,14 @@ class CustomProvidersPage extends ConsumerWidget {
                 ],
                 const SizedBox(height: 8),
                 TextField(
+                  controller: subModelCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Subagent Model ID (optional, cheaper)',
+                    hintText: 'e.g. gpt-4o-mini / deepseek-chat / qwen2.5:7b',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextField(
                   controller: ctxCtrl,
                   keyboardType: TextInputType.number,
                   decoration: const InputDecoration(
@@ -487,6 +498,7 @@ class CustomProvidersPage extends ConsumerWidget {
                   : nameCtrl.text.trim(),
               baseUrl: urlCtrl.text.trim(),
               modelId: modelCtrl.text.trim(),
+              subagentModelId: subModelCtrl.text.trim(),
               contextWindowTokens: ctxTokens.clamp(2048, 4000000),
               supportsTools: supportsTools,
               supportsVision: supportsVision,
@@ -500,6 +512,7 @@ class CustomProvidersPage extends ConsumerWidget {
     nameCtrl.dispose();
     urlCtrl.dispose();
     modelCtrl.dispose();
+    subModelCtrl.dispose();
     ctxCtrl.dispose();
     sysCtrl.dispose();
     keyCtrl.dispose();

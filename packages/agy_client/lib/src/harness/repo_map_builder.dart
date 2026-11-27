@@ -76,6 +76,66 @@ class RepoMapBuilder {
     'Pods',
   };
 
+  static bool shouldIgnoreRelativePath(
+    String relativePath, {
+    List<String> extraIgnorePatterns = const [],
+  }) {
+    final norm = relativePath.replaceAll('\\', '/').toLowerCase();
+    final name = norm.split('/').last;
+    if (name == 'package-lock.json' ||
+        name == 'pnpm-lock.yaml' ||
+        name == 'yarn.lock' ||
+        name == 'cargo.lock' ||
+        name == 'pubspec.lock' ||
+        name == 'composer.lock' ||
+        name == 'gemfile.lock' ||
+        name == 'poetry.lock' ||
+        name == 'pods.manifest.lock' ||
+        name.endsWith('.g.dart') ||
+        name.endsWith('.freezed.dart') ||
+        name.endsWith('.min.js') ||
+        name.endsWith('.min.css') ||
+        name.endsWith('.bundle.js') ||
+        name.endsWith('.map')) {
+      return true;
+    }
+    for (final raw in extraIgnorePatterns) {
+      final pat = raw.trim().toLowerCase();
+      if (pat.isEmpty || pat.startsWith('#')) continue;
+      final clean = pat.startsWith('/') ? pat.substring(1) : pat;
+      final trimmedSlash = clean.endsWith('/') ? clean.substring(0, clean.length - 1) : clean;
+      if (trimmedSlash.isEmpty) continue;
+      if (trimmedSlash.startsWith('*.')) {
+        if (name.endsWith(trimmedSlash.substring(1))) return true;
+      } else if (norm == trimmedSlash ||
+          norm.startsWith('$trimmedSlash/') ||
+          norm.contains('/$trimmedSlash/') ||
+          name == trimmedSlash) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static Future<List<String>> _loadIgnorePatterns(Directory root) async {
+    final out = <String>[];
+    for (final fileName in const ['.agyignore', '.claudeignore', '.aiderignore']) {
+      final f = File('${root.path}${Platform.pathSeparator}$fileName');
+      try {
+        if (await f.exists()) {
+          final lines = await f.readAsLines();
+          for (final l in lines) {
+            final t = l.trim();
+            if (t.isNotEmpty && !t.startsWith('#') && !t.startsWith('!')) {
+              out.add(t);
+            }
+          }
+        }
+      } catch (_) {}
+    }
+    return out;
+  }
+
   static final RegExp _typeDeclRe = RegExp(
     r'^(?:export\s+)?(?:abstract\s+|sealed\s+|final\s+|base\s+|open\s+|data\s+|pub(?:\([^)]*\))?\s+|public\s+|private\s+|internal\s+)*'
     r'(class|interface|enum|mixin|extension|struct|trait|impl|object)\s+([A-Za-z_][A-Za-z0-9_<>,\s]*)',
@@ -354,6 +414,10 @@ class RepoMapBuilder {
     }
     final root = Directory(rootPath);
     if (!await root.exists()) return '';
+    final extraIgnores = await _loadIgnorePatterns(root);
+    final rootPrefix = root.path.endsWith(Platform.pathSeparator)
+        ? root.path
+        : '${root.path}${Platform.pathSeparator}';
 
     // Breadth-first scan ensures monorepo modules (e.g. app/lib, packages/)
     // are represented evenly before hitting [maxFiles] instead of one deep
@@ -373,10 +437,20 @@ class RepoMapBuilder {
       for (final entity in entries) {
         if (collected.length >= maxFiles) break;
         final name = entity.path.split(Platform.pathSeparator).last;
+        final relPath = entity.path.startsWith(rootPrefix)
+            ? entity.path.substring(rootPrefix.length).replaceAll('\\', '/')
+            : name;
         if (entity is Directory) {
-          if (ignoredDirs.contains(name) || name.startsWith('.')) continue;
+          if (ignoredDirs.contains(name) ||
+              name.startsWith('.') ||
+              shouldIgnoreRelativePath(relPath, extraIgnorePatterns: extraIgnores)) {
+            continue;
+          }
           queue.add(entity);
         } else if (entity is File) {
+          if (shouldIgnoreRelativePath(relPath, extraIgnorePatterns: extraIgnores)) {
+            continue;
+          }
           final ext = name.contains('.') ? name.split('.').last.toLowerCase() : '';
           if (supportedExtensions.contains(ext)) {
             collected.add(entity);
@@ -384,9 +458,6 @@ class RepoMapBuilder {
         }
       }
     }
-    final rootPrefix = root.path.endsWith(Platform.pathSeparator)
-        ? root.path
-        : '${root.path}${Platform.pathSeparator}';
     final summaries = <RepoMapFileSummary>[];
     const batchSize = 8;
     for (var start = 0; start < collected.length; start += batchSize) {

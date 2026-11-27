@@ -139,7 +139,8 @@ internal class AcpFsTerminalHandler(
                 "terminal/output" -> {
                     val termId = params?.optString("terminalId", "") ?: ""
                     val tp = active.terminals[termId]
-                    val rawOut = tp?.output?.toString() ?: ""
+                    val rawUnfiltered = tp?.output?.toString() ?: ""
+                    val rawOut = CommandSafetyGuard.compressTerminalOutput(rawUnfiltered)
                     val offloaded = CommandSafetyGuard.offloadIfLarge(
                         outputDir = outputOffloadDir,
                         callId = termId.ifBlank { "term" },
@@ -370,23 +371,67 @@ internal class AcpFsTerminalHandler(
             }
             val startLine = params?.optInt("line", 0) ?: 0
             val limit = params?.optInt("limit", 0) ?: 0
+            val forceReread = params?.optBoolean("force_reread", false) ?: false
+            val canonPath = runCatching { file.canonicalPath }.getOrDefault(file.absolutePath)
             var content = readBoundedFileContent(file, startLine = startLine, limit = limit)
-            if (SessionVariableStore.enabled && startLine == 0 && limit == 0 && file.length() > 24_000L && file.length() <= 2L * 1024L * 1024L) {
-                val fullText = runCatching { file.readText() }.getOrNull()
-                if (fullText != null) {
-                    val entry = SessionVariableStore.shared.save(
-                        toolName = "read_file",
-                        rawOutput = fullText,
-                        target = path,
+            val mtimeMs = file.lastModified()
+            if (SessionVariableStore.enabled && !forceReread && content.length > 2_000) {
+                val hit = SessionVariableStore.shared.checkFileRead(
+                    path = canonPath,
+                    startLine = startLine,
+                    limit = limit,
+                    currentContent = content,
+                    modifiedMs = mtimeMs,
+                )
+                if (hit != null) {
+                    content = "[READ-ONCE CACHE HIT: $path is unchanged (${hit.lineCount} lines, stored in \$${hit.varName}). Call var_inspect or re-read with line/limit or force_reread:true if full text needed.]"
+                    AcpConfigAndPromptHelper.sendJson(
+                        writer,
+                        JSONObject()
+                            .put("jsonrpc", "2.0")
+                            .put("id", id)
+                            .put("result", JSONObject().put("content", content))
                     )
-                    emitVarSaved(
-                        active.currentTurnId,
-                        entry.name,
-                        "read_file",
-                        path,
-                        fullText,
+                    return
+                }
+            }
+            if (SessionVariableStore.enabled && file.length() <= 2L * 1024L * 1024L && content.length > 2_000) {
+                val fullText = if (startLine == 0 && limit == 0 && file.length() > 24_000L) {
+                    runCatching { file.readText() }.getOrNull() ?: content
+                } else {
+                    content
+                }
+                val entry = SessionVariableStore.shared.save(
+                    toolName = "read_file",
+                    rawOutput = fullText,
+                    target = path,
+                )
+                SessionVariableStore.shared.recordFileRead(
+                    path = canonPath,
+                    startLine = startLine,
+                    limit = limit,
+                    content = content,
+                    varName = entry.name,
+                    modifiedMs = mtimeMs,
+                )
+                emitVarSaved(
+                    active.currentTurnId,
+                    entry.name,
+                    "read_file",
+                    path,
+                    fullText,
+                )
+                content = if (startLine == 0 && limit == 0 && SessionVariableStore.isLockOrGeneratedFile(path)) {
+                    SessionVariableStore.shared.formatCompactHandle(
+                        entry = entry,
+                        thresholdChars = 400,
+                        headChars = 220,
+                        tailChars = 120,
                     )
-                    content = "[VAR STORED: \$${entry.name} (${entry.summary}) — pass \$${entry.name} or \$v_last in write_file/MCP args/reply]\n$content"
+                } else if (startLine == 0 && limit == 0 && file.length() > 24_000L) {
+                    "[VAR STORED: \$${entry.name} (${entry.summary}) — pass \$${entry.name} or \$v_last in write_file/MCP args/reply]\n$content"
+                } else {
+                    content
                 }
             }
             AcpConfigAndPromptHelper.sendJson(
@@ -458,6 +503,9 @@ internal class AcpFsTerminalHandler(
             val file = if (rawFile.isAbsolute) rawFile else File(active.defaultCwd, path)
             file.parentFile?.mkdirs()
             file.writeText(content)
+            SessionVariableStore.shared.invalidateFilePath(
+                runCatching { file.canonicalPath }.getOrDefault(file.absolutePath),
+            )
             executor.submit {
                 LifecycleHooksManager.runPostToolUse(
                     tool = "write_file",

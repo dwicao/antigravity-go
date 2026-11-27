@@ -87,7 +87,8 @@ class OpenAiCompatRunner {
           'type': 'function',
           'function': {
             'name': 'read_file',
-            'description': 'Read a text file in the workspace or device.',
+            'description':
+                'Read a text file (or specific line slice) in the workspace or device.',
             'parameters': {
               'type': 'object',
               'properties': {
@@ -95,6 +96,19 @@ class OpenAiCompatRunner {
                   'type': 'string',
                   'description': 'File path (absolute or workspace-relative)',
                 },
+                'start_line': {
+                  'type': 'integer',
+                  'description': 'Optional 1-based start line for sliced reads',
+                },
+                'limit': {
+                  'type': 'integer',
+                  'description': 'Optional max lines to read from start_line',
+                },
+                if (includeVariables)
+                  'force_reread': {
+                    'type': 'boolean',
+                    'description': 'Set true to bypass Read-Once session cache',
+                  },
                 if (includeVariables)
                   'save_as': {
                     'type': 'string',
@@ -102,6 +116,37 @@ class OpenAiCompatRunner {
                   },
               },
               'required': ['path'],
+            },
+          },
+        },
+        {
+          'type': 'function',
+          'function': {
+            'name': 'edit_file',
+            'description':
+                'Surgically replace a unique text block in an existing file (saves tokens vs write_file). Fails if old_string is missing or ambiguous.',
+            'parameters': {
+              'type': 'object',
+              'properties': {
+                'path': {
+                  'type': 'string',
+                  'description': 'File path (absolute or workspace-relative)',
+                },
+                'old_string': {
+                  'type': 'string',
+                  'description': 'Exact existing text to replace',
+                },
+                'new_string': {
+                  'type': 'string',
+                  'description':
+                      'Replacement text (can reference \$var variables directly)',
+                },
+                'replace_all': {
+                  'type': 'boolean',
+                  'description': 'Optional: replace every occurrence when true',
+                },
+              },
+              'required': ['path', 'old_string', 'new_string'],
             },
           },
         },
@@ -203,6 +248,11 @@ class OpenAiCompatRunner {
                     'type': 'string',
                     'description':
                         'Optional large payload or \$v_* variable reference passed to subagent',
+                  },
+                  'model': {
+                    'type': 'string',
+                    'description':
+                        'Optional cheaper/faster model ID override for this subagent',
                   },
                   if (includeVariables)
                     'save_as': {
@@ -462,10 +512,10 @@ class OpenAiCompatRunner {
         if (quotaSaverEnabled)
           'Be concise; omit filler and redundant code restatements.',
         if (profile.supportsTools)
-          'You have tools (`run_command`, `read_file`, `write_file`, `list_dir`, `search_files`'
+          'You have tools (`run_command`, `read_file`, `edit_file`, `write_file`, `list_dir`, `search_files`'
               '${toolVariablesEnabled ? ', `inspect_var`' : ''}'
               '${allowSubagentDelegation ? ', `delegate_subagent`' : ''}'
-              ') to inspect, search, and edit files.',
+              ') to inspect, search, and edit files. Prefer `edit_file` over `write_file` for targeted changes.',
         if (profile.supportsTools && toolVariablesEnabled)
           varStore.systemPromptInstructions(
             hasSubagentTool: allowSubagentDelegation,
@@ -705,7 +755,9 @@ class OpenAiCompatRunner {
               ? varStore.resolveArguments(rawArgs)
               : rawArgs;
           final needsApproval = !dangerouslySkipPermissions &&
-              (tc.name == 'run_command' || tc.name == 'write_file');
+              (tc.name == 'run_command' ||
+                  tc.name == 'write_file' ||
+                  tc.name == 'edit_file');
           preparedCalls.add((
             callId: callId,
             name: tc.name,
@@ -780,7 +832,9 @@ class OpenAiCompatRunner {
                 toolName: c.name,
                 title: c.name == 'run_command'
                     ? 'Approve shell command'
-                    : 'Approve file write',
+                    : c.name == 'edit_file'
+                        ? 'Approve file edit'
+                        : 'Approve file write',
                 commandOrPath: (c.resolvedArgs['command'] ??
                         c.resolvedArgs['path'] ??
                         '')
@@ -842,14 +896,56 @@ class OpenAiCompatRunner {
           final call = preparedCalls[i];
           final res = results[i];
           final saveAs = call.displayArgs['save_as']?.toString().trim();
-          var messageContent = res.output;
-          var displayOutput = res.output;
+          var effectiveOutput = res.output;
+          if (res.ok &&
+              (call.name == 'run_command' || call.name == 'search_files')) {
+            effectiveOutput =
+                ToolVariableStore.compressTerminalOutput(res.output);
+          }
+          if (res.ok &&
+              (call.name == 'write_file' || call.name == 'edit_file')) {
+            final editedPath = _resolvePath(
+              (call.resolvedArgs['path'] ?? '').toString(),
+              ws,
+            );
+            varStore.invalidateFilePath(editedPath);
+          }
+
+          var messageContent = effectiveOutput;
+          var displayOutput = effectiveOutput;
           String? savedVarName;
 
-          if (toolVariablesEnabled &&
+          var handledReadCache = false;
+          if (toolVariablesEnabled && res.ok && call.name == 'read_file') {
+            final rawPath = (call.resolvedArgs['path'] ?? '').toString();
+            final resolvedPath = _resolvePath(rawPath, ws);
+            final startLine =
+                (call.resolvedArgs['start_line'] as num?)?.toInt() ?? 0;
+            final limit = (call.resolvedArgs['limit'] as num?)?.toInt() ?? 0;
+            final forceReread = call.resolvedArgs['force_reread'] == true;
+            if (!forceReread) {
+              final hit = varStore.checkFileRead(
+                path: resolvedPath,
+                startLine: startLine,
+                limit: limit,
+                currentContent: effectiveOutput,
+              );
+              if (hit != null) {
+                handledReadCache = true;
+                savedVarName = hit.varName;
+                messageContent =
+                    '[READ-ONCE CACHE HIT: $resolvedPath is unchanged since earlier read (${hit.lineCount} lines, stored in \$${hit.varName}). Use inspect_var or pass force_reread:true if full text needed.]';
+                displayOutput = messageContent;
+              }
+            }
+          }
+
+          if (!handledReadCache &&
+              toolVariablesEnabled &&
               res.ok &&
               call.name != 'inspect_var' &&
-              call.name != 'write_file') {
+              call.name != 'write_file' &&
+              call.name != 'edit_file') {
             final target = (call.resolvedArgs['path'] ??
                     call.resolvedArgs['pattern'] ??
                     call.resolvedArgs['command'] ??
@@ -859,18 +955,43 @@ class OpenAiCompatRunner {
             final entry = varStore.save(
               toolName: call.name,
               target: target,
-              rawOutput: res.output,
-              explicitName: (saveAs != null && saveAs.isNotEmpty) ? saveAs : null,
+              rawOutput: effectiveOutput,
+              explicitName:
+                  (saveAs != null && saveAs.isNotEmpty) ? saveAs : null,
             );
             savedVarName = entry.name;
+            if (call.name == 'read_file') {
+              final resolvedPath = _resolvePath(
+                (call.resolvedArgs['path'] ?? '').toString(),
+                ws,
+              );
+              final startLine =
+                  (call.resolvedArgs['start_line'] as num?)?.toInt() ?? 0;
+              final limit = (call.resolvedArgs['limit'] as num?)?.toInt() ?? 0;
+              varStore.recordFileRead(
+                path: resolvedPath,
+                startLine: startLine,
+                limit: limit,
+                content: effectiveOutput,
+                varName: entry.name,
+              );
+            }
+            final isLockOrGen = call.name == 'read_file' &&
+                ToolVariableStore.isLockOrGeneratedFile(target) &&
+                ((call.resolvedArgs['start_line'] as num?)?.toInt() ?? 0) == 0;
             messageContent = varStore.formatToolResponse(
               entry,
-              previewHead: quotaSaverEnabled ? 320 : 450,
-              previewTail: quotaSaverEnabled ? 200 : 300,
+              thresholdChars: isLockOrGen ? 350 : null,
+              previewHead: isLockOrGen
+                  ? 220
+                  : (quotaSaverEnabled ? 320 : 450),
+              previewTail: isLockOrGen
+                  ? 120
+                  : (quotaSaverEnabled ? 200 : 300),
             );
             displayOutput =
-                '[var: \$${entry.name} · ${entry.summary}]\n${res.output}';
-          } else if (messageContent.length > 24000) {
+                '[var: \$${entry.name} · ${entry.summary}]\n$effectiveOutput';
+          } else if (!handledReadCache && messageContent.length > 24000) {
             messageContent =
                 '${messageContent.substring(0, 24000)}\n...[truncated]';
           }
@@ -881,7 +1002,7 @@ class OpenAiCompatRunner {
             state: res.ok ? ToolCallState.completed : ToolCallState.failed,
             parameters: call.displayArgs,
             output: res.ok ? displayOutput : null,
-            errorMessage: res.ok ? null : res.output,
+            errorMessage: res.ok ? null : effectiveOutput,
             durationSeconds: res.durationSeconds,
           );
 
@@ -965,7 +1086,7 @@ class OpenAiCompatRunner {
           final qPattern = "'${pattern.replaceAll("'", "'\\''")}'";
           final qPath = "'${targetPath.replaceAll("'", "'\\''")}'";
           final grepCmd =
-              'grep -rnI --exclude-dir=.git --exclude-dir=.dart_tool --exclude-dir=build --exclude-dir=node_modules --exclude-dir=.gradle -e $qPattern $qPath 2>/dev/null | head -n 120';
+              'grep -rnI --exclude-dir=.git --exclude-dir=.dart_tool --exclude-dir=build --exclude-dir=dist --exclude-dir=node_modules --exclude-dir=.gradle --exclude-dir=target --exclude-dir=.venv --exclude-dir=__pycache__ --exclude="*.lock" --exclude="package-lock.json" --exclude="*.min.js" --exclude="*.min.css" --exclude="*.g.dart" --exclude="*.freezed.dart" -e $qPattern $qPath 2>/dev/null | head -n 120';
           final out = sshHost != null
               ? await SshAgyRunner.instance.runRemoteCommand(
                   host: sshHost,
@@ -1006,6 +1127,13 @@ class OpenAiCompatRunner {
           final role = (args['role'] ?? 'Subagent').toString().trim();
           final task = (args['task'] ?? '').toString().trim();
           final ctx = (args['context'] ?? '').toString().trim();
+          final modelOverride = (args['model'] ?? '').toString().trim();
+          final targetSubModel = modelOverride.isNotEmpty
+              ? modelOverride
+              : profile.effectiveSubagentModelId;
+          final subProfile = targetSubModel != profile.modelId
+              ? profile.copyWith(modelId: targetSubModel)
+              : profile;
           if (task.isEmpty) {
             return (ok: false, output: 'Subagent task cannot be empty');
           }
@@ -1013,7 +1141,7 @@ class OpenAiCompatRunner {
           final subOut = StringBuffer();
           String? subErr;
           await for (final evt in runPrompt(
-            profile: profile,
+            profile: subProfile,
             apiKey: apiKey,
             turnId: 'sub-${_nextReqId++}',
             prompt: subPrompt,
@@ -1077,20 +1205,100 @@ class OpenAiCompatRunner {
         case 'read_file':
           final rawPath = (args['path'] ?? '').toString();
           final path = _resolvePath(rawPath, workspacePath);
+          final startLine = (args['start_line'] as num?)?.toInt() ?? 0;
+          final limit = (args['limit'] as num?)?.toInt() ?? 0;
+          final String content;
           if (sshHost != null) {
             final quoted = "'${path.replaceAll("'", "'\\''")}'";
-            final out = await SshAgyRunner.instance.runRemoteCommand(
+            final start = startLine > 0 ? startLine : 1;
+            final end = limit > 0 ? (start + limit - 1) : (start + 399);
+            content = await SshAgyRunner.instance.runRemoteCommand(
               host: sshHost,
-              command: 'sed -n "1,400p" $quoted',
+              command: 'sed -n "${start},${end}p" $quoted',
               cwd: workspacePath,
               password: sshPassword,
               privateKeyPem: sshPrivateKey,
               onTrustFirstKey: onTrustFirstKey,
             );
-            return (ok: true, output: out);
+          } else {
+            final full = await RuntimeBridge.instance.readWorkspaceFile(path);
+            if (startLine > 0 || limit > 0) {
+              final lines = full.split('\n');
+              final from = (startLine > 0 ? startLine - 1 : 0).clamp(0, lines.length);
+              final to = limit > 0
+                  ? (from + limit).clamp(from, lines.length)
+                  : lines.length;
+              content = lines.sublist(from, to).join('\n');
+            } else {
+              content = full;
+            }
           }
-          final content = await RuntimeBridge.instance.readWorkspaceFile(path);
           return (ok: true, output: content);
+
+        case 'edit_file':
+          final rawPath = (args['path'] ?? '').toString();
+          final oldStr = (args['old_string'] ?? '').toString();
+          final newStr = (args['new_string'] ?? '').toString();
+          final replaceAll = args['replace_all'] == true;
+          if (rawPath.trim().isEmpty) {
+            return (ok: false, output: 'Missing file path');
+          }
+          if (oldStr.isEmpty) {
+            return (ok: false, output: 'old_string cannot be empty');
+          }
+          final path = _resolvePath(rawPath, workspacePath);
+          final existing = sshHost != null
+              ? await SshAgyRunner.instance.runRemoteCommand(
+                  host: sshHost,
+                  command: "cat '${path.replaceAll("'", "'\\''")}'",
+                  cwd: workspacePath,
+                  password: sshPassword,
+                  privateKeyPem: sshPrivateKey,
+                  onTrustFirstKey: onTrustFirstKey,
+                )
+              : await RuntimeBridge.instance.readWorkspaceFile(path);
+          final matches = oldStr.allMatches(existing).length;
+          if (matches == 0) {
+            return (
+              ok: false,
+              output:
+                  'edit_file failed: old_string not found in $path. Re-read target lines and match exact indentation.',
+            );
+          }
+          if (matches > 1 && !replaceAll) {
+            return (
+              ok: false,
+              output:
+                  'edit_file failed: old_string matched $matches times in $path. Include more surrounding context or pass replace_all:true.',
+            );
+          }
+          final updated = replaceAll
+              ? existing.replaceAll(oldStr, newStr)
+              : existing.replaceFirst(oldStr, newStr);
+          if (sshHost != null) {
+            final quoted = "'${path.replaceAll("'", "'\\''")}'";
+            final b64 = base64Encode(utf8.encode(updated));
+            await SshAgyRunner.instance.runRemoteCommand(
+              host: sshHost,
+              command: 'printf %s "$b64" | base64 -d > $quoted',
+              cwd: workspacePath,
+              password: sshPassword,
+              privateKeyPem: sshPrivateKey,
+              onTrustFirstKey: onTrustFirstKey,
+            );
+            return (
+              ok: true,
+              output:
+                  'Edited $path (${replaceAll ? matches : 1} replacement${matches > 1 && replaceAll ? "s" : ""})',
+            );
+          }
+          final editOk = await RuntimeBridge.instance.writeWorkspaceFile(path, updated);
+          return (
+            ok: editOk,
+            output: editOk
+                ? 'Edited $path (${replaceAll ? matches : 1} replacement${matches > 1 && replaceAll ? "s" : ""})'
+                : 'Failed writing edited $path',
+          );
 
         case 'write_file':
           final rawPath = (args['path'] ?? '').toString();

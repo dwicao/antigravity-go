@@ -60,4 +60,15 @@ class CommandSafetyGuardTest {
             dir.deleteRecursively()
         }
     }
+
+    @Test
+    fun compressTerminalOutputStripsAnsiAndCollapsesProgressAndRepeats() {
+        val raw = "\u001B[31mFAIL\u001B[0m\n10%\r50%\r100% done\nspam\nspam\nspam\nspam\nend"
+        val cleaned = CommandSafetyGuard.compressTerminalOutput(raw)
+        assertFalse(cleaned.contains("\u001B"))
+        assertFalse(cleaned.contains("10%"))
+        assertTrue(cleaned.contains("100% done"))
+        assertTrue(cleaned.contains("... [repeated 3 more times]"))
+        assertTrue(cleaned.endsWith("end"))
+    }
 }

@@ -2,6 +2,16 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.63] - 2026-11-27
+
+### Added & Optimized
+- **Modern Harness Token Engineering (RTK Filtering, Read-Once Cache, Surgical `edit_file`, Ignore Guards & Tiered Subagents):**
+  - **RTK-Style Terminal Output Compression:** `CommandSafetyGuard.compressTerminalOutput` (Kotlin ACP) and `ToolVariableStore.compressTerminalOutput` (Dart `/v1`) strip ANSI/OSC color codes, collapse `\r` spinner/progress overwrites, trim blank floods, and deduplicate consecutive spam lines before context injection or variable storage.
+  - **Surgical `edit_file` (`str_replace`) & Sliced `read_file` in `/v1`:** Added `edit_file(path, old_string, new_string, replace_all)` with strict unique-match validation (avoiding full-file output token rewrites on edits and integrating directly with `ChangeCard` diff views) plus `start_line`/`limit` slicing on `read_file`.
+  - **Read-Once File Deduplication (`ReadOnceCache`):** Both ACP `fs/read_text_file` and `/v1` `read_file` track `(path, line, limit, mtime, contentHash)` and replace unchanged repeated reads with a 1-line `[READ-ONCE CACHE HIT]` pointer to `$v_read_*` (auto-invalidated on writes/edits or disk changes).
+  - **`.agyignore` & Lockfile / Generated Asset Guards:** `RepoMapBuilder`, `/v1` `search_files`, and file read preview caps automatically skip or tightly bound lockfiles (`package-lock.json`, `Cargo.lock`, `pubspec.lock`, `yarn.lock`), `*.g.dart` / `*.freezed.dart` / `*.min.js`, and repo `.agyignore` / `.claudeignore` patterns.
+  - **Tiered Subagent Model Routing (`/v1`):** Added optional **Subagent Model ID** (`subagentModelId`) on `OpenAiProviderConfig` and `CustomProvidersPage` (`delegate_subagent` `model` override) so subagents run on faster, lower-cost models while keeping frontier reasoning on the main thread.
+
 ## [1.0.62] - 2026-11-27
 
 ### Improved & Optimized
