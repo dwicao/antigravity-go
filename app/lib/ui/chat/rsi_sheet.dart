@@ -27,12 +27,12 @@ class RsiStatusBanner extends ConsumerWidget {
     final bg = isErr
         ? theme.colorScheme.errorContainer.withOpacity(0.55)
         : isDone
-            ? semantic.successContainer.withOpacity(0.65)
+            ? semantic.success.withOpacity(0.16)
             : theme.colorScheme.primaryContainer.withOpacity(0.45);
     final fg = isErr
         ? theme.colorScheme.onErrorContainer
         : isDone
-            ? semantic.onSuccessContainer
+            ? semantic.success
             : theme.colorScheme.onPrimaryContainer;
 
     final detail = rsi.statusDetail.trim().isNotEmpty
