@@ -78,6 +78,17 @@ class RuntimeBridge {
     }
   }
 
+  Future<void> setToolVariablesEnabled(bool enabled) async {
+    try {
+      await _method.invokeMethod<void>(
+        'setToolVariablesEnabled',
+        {'enabled': enabled},
+      );
+    } on MissingPluginException {
+      // No-op in headless widget tests.
+    }
+  }
+
   Future<void> setLifecycleHooks(String hooksJson) async {
     try {
       await _method.invokeMethod<void>(

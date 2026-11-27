@@ -1470,6 +1470,10 @@ am start -a android.intent.action.VIEW -d "${'$'}url" >/dev/null 2>&1 || echo "[
         CommandSafetyGuard.enabled = enabled
     }
 
+    fun setToolVariablesEnabled(enabled: Boolean) {
+        SessionVariableStore.enabled = enabled
+    }
+
     fun setPhoneMcpMinimalMode(minimal: Boolean) {
         PhoneControlCoordinator.minimalCodingMcp = minimal
     }

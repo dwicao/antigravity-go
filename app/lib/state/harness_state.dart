@@ -27,6 +27,7 @@ class HarnessState {
     this.smartRoutingEnabled = true,
     this.effortProfile = EffortCategoryProfile.defaults,
     this.repoMapEnabled = true,
+    this.toolVariablesEnabled = true,
     this.initialized = false,
     this.loading = false,
     this.workspacePath = '',
@@ -50,6 +51,7 @@ class HarnessState {
   final bool smartRoutingEnabled;
   final EffortCategoryProfile effortProfile;
   final bool repoMapEnabled;
+  final bool toolVariablesEnabled;
   final bool initialized;
   final bool loading;
   final String workspacePath;
@@ -92,6 +94,7 @@ class HarnessState {
     bool? smartRoutingEnabled,
     EffortCategoryProfile? effortProfile,
     bool? repoMapEnabled,
+    bool? toolVariablesEnabled,
     bool? initialized,
     bool? loading,
     String? workspacePath,
@@ -116,6 +119,7 @@ class HarnessState {
       smartRoutingEnabled: smartRoutingEnabled ?? this.smartRoutingEnabled,
       effortProfile: effortProfile ?? this.effortProfile,
       repoMapEnabled: repoMapEnabled ?? this.repoMapEnabled,
+      toolVariablesEnabled: toolVariablesEnabled ?? this.toolVariablesEnabled,
       initialized: initialized ?? this.initialized,
       loading: loading ?? this.loading,
       workspacePath: workspacePath ?? this.workspacePath,
@@ -304,6 +308,7 @@ class HarnessNotifier extends Notifier<HarnessState> {
   static const _kSmartRouting = 'agy_harness_smart_routing';
   static const _kEffortProfile = 'agy_harness_effort_profile';
   static const _kRepoMap = 'agy_harness_repo_map';
+  static const _kToolVariables = 'agy_harness_tool_variables';
   static const _kHooksJson = 'agy_harness_lifecycle_hooks';
   static const _kCustomVerify = 'agy_harness_custom_verify';
 
@@ -411,10 +416,16 @@ class HarnessNotifier extends Notifier<HarnessState> {
         smartRoutingEnabled: prefs.getBool(_kSmartRouting) ?? true,
         effortProfile: effortProfile,
         repoMapEnabled: prefs.getBool(_kRepoMap) ?? true,
+        toolVariablesEnabled: prefs.getBool(_kToolVariables) ?? true,
         customVerifyCommand: prefs.getString(_kCustomVerify),
         hooksConfig: hooks,
       );
       unawaited(RuntimeBridge.instance.setGuardrailsEnabled(guardrails));
+      unawaited(
+        RuntimeBridge.instance.setToolVariablesEnabled(
+          prefs.getBool(_kToolVariables) ?? true,
+        ),
+      );
       unawaited(RuntimeBridge.instance.setLifecycleHooks(hooks.encodeJson()));
       unawaited(RuntimeBridge.instance.setPhoneMcpMinimalMode(quotaSaver));
     } catch (_) {}
@@ -487,6 +498,13 @@ class HarnessNotifier extends Notifier<HarnessState> {
     state = state.copyWith(repoMapEnabled: value);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kRepoMap, value);
+  }
+
+  Future<void> setToolVariablesEnabled(bool value) async {
+    state = state.copyWith(toolVariablesEnabled: value);
+    unawaited(RuntimeBridge.instance.setToolVariablesEnabled(value));
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kToolVariables, value);
   }
 
   Future<void> toggleHookRule(String ruleId, bool enabled) async {

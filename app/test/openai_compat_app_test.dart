@@ -1,4 +1,8 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:agy_client/agy_client.dart';
+import 'package:antigravity_go/remote/openai_compat_runner.dart';
 import 'package:antigravity_go/state/chat_state.dart';
 import 'package:antigravity_go/state/custom_providers_state.dart';
 import 'package:antigravity_go/state/harness_state.dart';
@@ -6,7 +10,31 @@ import 'package:antigravity_go/ui/remote/custom_providers_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+
+class _QueuedHttpClient extends http.BaseClient {
+  _QueuedHttpClient(this._responder);
+
+  final Future<http.StreamedResponse> Function(http.BaseRequest req, String body)
+      _responder;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    final bodyBytes = await request.finalize().toBytes();
+    return _responder(request, utf8.decode(bodyBytes));
+  }
+}
+
+http.StreamedResponse _sseResponse(List<String> payloads) {
+  final sseText = payloads.map((p) => 'data: $p\n\n').join();
+  final stream = Stream<List<int>>.fromIterable([utf8.encode(sseText)]);
+  return http.StreamedResponse(
+    stream,
+    200,
+    headers: const {'content-type': 'text/event-stream'},
+  );
+}
 
 void main() {
   setUp(() {
@@ -98,5 +126,233 @@ void main() {
     expect(find.text('OpenAI'), findsOneWidget);
     expect(find.text('Ollama (Local)'), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  test('HarnessNotifier persists toolVariablesEnabled toggle', () async {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    expect(container.read(harnessProvider).toolVariablesEnabled, isTrue);
+    await container.read(harnessProvider.notifier).setToolVariablesEnabled(false);
+    expect(container.read(harnessProvider).toolVariablesEnabled, isFalse);
+
+    final reloaded = ProviderContainer();
+    addTearDown(reloaded.dispose);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(reloaded.read(harnessProvider).toolVariablesEnabled, isFalse);
+  });
+
+  test('OpenAiCompatRunner saves large tool outputs as \$vars, resolves tool args, fans out subagents, and expands streamed text', () async {
+    final hugeRows = List.generate(
+      150,
+      (i) => {'id': 'u_$i', 'visited': '2026-11-27', 'duration': 100 + i},
+    );
+    final hugeJson = jsonEncode(hugeRows);
+    String? writtenContent;
+    final subagentContexts = <String>[];
+    var requestTurn = 0;
+
+    final fakeClient = _QueuedHttpClient((req, body) async {
+      final decoded = jsonDecode(body) as Map<String, dynamic>;
+      final msgs = (decoded['messages'] as List).cast<Map<String, dynamic>>();
+      final userPrompt = msgs.last['content']?.toString() ?? '';
+
+      // Subagent HTTP turns (contain "focused subagent")
+      final sysMsg = msgs.first['content']?.toString() ?? '';
+      if (sysMsg.contains('focused subagent')) {
+        subagentContexts.add(userPrompt);
+        return _sseResponse([
+          jsonEncode({
+            'choices': [
+              {
+                'delta': {'content': 'Verified ${hugeRows.length} rows'},
+                'finish_reason': 'stop',
+              },
+            ],
+          }),
+          '[DONE]',
+        ]);
+      }
+
+      requestTurn++;
+      if (requestTurn == 1) {
+        return _sseResponse([
+          jsonEncode({
+            'choices': [
+              {
+                'delta': {
+                  'tool_calls': [
+                    {
+                      'index': 0,
+                      'id': 'call_query',
+                      'type': 'function',
+                      'function': {
+                        'name': 'run_command',
+                        'arguments': jsonEncode({
+                          'command': 'query_visits',
+                          'save_as': 'weekly_visits',
+                        }),
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+          jsonEncode({
+            'choices': [
+              {'delta': {}, 'finish_reason': 'tool_calls'},
+            ],
+          }),
+          '[DONE]',
+        ]);
+      }
+
+      if (requestTurn == 2) {
+        // Confirm the tool message given to the LLM was compact (< 1400 chars), not 7000+ chars
+        final toolMsg = msgs.lastWhere((m) => m['role'] == 'tool');
+        final contentStr = toolMsg['content']?.toString() ?? '';
+        expect(contentStr.length, lessThan(1400));
+        expect(contentStr, contains('[VAR STORED: \$weekly_visits'));
+
+        return _sseResponse([
+          jsonEncode({
+            'choices': [
+              {
+                'delta': {
+                  'tool_calls': [
+                    {
+                      'index': 0,
+                      'id': 'call_write',
+                      'type': 'function',
+                      'function': {
+                        'name': 'write_file',
+                        'arguments': jsonEncode({
+                          'path': 'export.json',
+                          'content': r'$weekly_visits',
+                        }),
+                      },
+                    },
+                    {
+                      'index': 1,
+                      'id': 'call_sub_1',
+                      'type': 'function',
+                      'function': {
+                        'name': 'delegate_subagent',
+                        'arguments': jsonEncode({
+                          'role': 'Cohort Analyst A',
+                          'task': 'Count records',
+                          'context': r'$weekly_visits',
+                        }),
+                      },
+                    },
+                    {
+                      'index': 2,
+                      'id': 'call_sub_2',
+                      'type': 'function',
+                      'function': {
+                        'name': 'delegate_subagent',
+                        'arguments': jsonEncode({
+                          'role': 'Cohort Analyst B',
+                          'task': 'Audit first row',
+                          'context': r'${weekly_visits[0].id}',
+                        }),
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+          jsonEncode({
+            'choices': [
+              {'delta': {}, 'finish_reason': 'tool_calls'},
+            ],
+          }),
+          '[DONE]',
+        ]);
+      }
+
+      return _sseResponse([
+        jsonEncode({
+          'choices': [
+            {
+              'delta': {'content': 'Saved count: '},
+            },
+          ],
+        }),
+        jsonEncode({
+          'choices': [
+            {
+              'delta': {'content': r'$weekly_vi'},
+            },
+          ],
+        }),
+        jsonEncode({
+          'choices': [
+            {
+              'delta': {'content': 'sits.length, first='},
+            },
+          ],
+        }),
+        jsonEncode({
+          'choices': [
+            {
+              'delta': {'content': r'${weekly_visits[0].id}.'},
+              'finish_reason': 'stop',
+            },
+          ],
+        }),
+        '[DONE]',
+      ]);
+    });
+
+    final store = ToolVariableStore();
+    final streamedText = StringBuffer();
+    AgyTurnResultEvent? resultEvt;
+
+    await for (final evt in OpenAiCompatRunner.instance.runPrompt(
+      profile: const OpenAiProviderConfig(
+        id: 'mock',
+        name: 'Mock OpenAI',
+        baseUrl: 'https://mock.local/v1',
+        modelId: 'gpt-4o-mini',
+      ),
+      apiKey: 'k',
+      turnId: 'turn-var-test',
+      prompt: 'Export and analyze cohort',
+      workspacePath: '/tmp/ws',
+      dangerouslySkipPermissions: true,
+      variableStore: store,
+      httpClient: fakeClient,
+      toolExecutorOverride: (name, args) async {
+        if (name == 'run_command') {
+          return (ok: true, output: hugeJson);
+        }
+        if (name == 'write_file') {
+          writtenContent = args['content']?.toString();
+          return (ok: true, output: 'Wrote export.json');
+        }
+        if (name == 'delegate_subagent') {
+          subagentContexts.add(args['context']?.toString() ?? '');
+          return (ok: true, output: 'OK from ${args['role']}');
+        }
+        return (ok: false, output: 'Unexpected $name');
+      },
+    )) {
+      if (evt is AgyTextDeltaEvent) {
+        streamedText.write(evt.delta);
+      } else if (evt is AgyTurnResultEvent) {
+        resultEvt = evt;
+      }
+    }
+
+    expect(writtenContent, hugeJson);
+    expect(subagentContexts, hasLength(2));
+    expect(subagentContexts[0], hugeJson);
+    expect(subagentContexts[1], 'u_0');
+    expect(streamedText.toString(), 'Saved count: 150, first=u_0.');
+    expect(resultEvt?.response, 'Saved count: 150, first=u_0.');
+    expect(store.savedOutputChars, greaterThan(5000));
   });
 }

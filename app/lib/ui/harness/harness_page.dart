@@ -541,6 +541,19 @@ class _HarnessPageState extends ConsumerState<HarnessPage> {
                 const Divider(height: 1),
                 SwitchListTile.adaptive(
                   dense: true,
+                  secondary: const Icon(Icons.data_object_rounded, size: 20),
+                  title: const Text('Tool Output Variables (\$var)'),
+                  subtitle: const Text(
+                    'Stores large tool outputs as \$v_* variables so agents pass data by reference instead of re-typing tokens',
+                  ),
+                  value: harness.toolVariablesEnabled,
+                  onChanged: (v) => ref
+                      .read(harnessProvider.notifier)
+                      .setToolVariablesEnabled(v),
+                ),
+                const Divider(height: 1),
+                SwitchListTile.adaptive(
+                  dense: true,
                   secondary: const Icon(Icons.account_tree_outlined, size: 20),
                   title: const Text('Smart Repo Map Context'),
                   subtitle: const Text(

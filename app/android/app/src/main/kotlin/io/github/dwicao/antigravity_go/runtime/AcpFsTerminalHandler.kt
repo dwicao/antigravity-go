@@ -17,6 +17,13 @@ internal class AcpFsTerminalHandler(
     private val log: (String) -> Unit,
     private val onTasksChanged: () -> Unit,
     private val outputOffloadDir: File?,
+    private val emitVarSaved: (
+        turnId: String?,
+        name: String,
+        toolName: String,
+        target: String,
+        rawValue: String,
+    ) -> Unit = { _, _, _, _, _ -> },
 ) {
     fun handleTerminalRpc(
         active: ActiveAcp,
@@ -138,9 +145,35 @@ internal class AcpFsTerminalHandler(
                         callId = termId.ifBlank { "term" },
                         rawOutput = rawOut,
                     )
+                    var finalOut = offloaded.text
+                    var savedVarName: String? = null
+                    if (SessionVariableStore.enabled && rawOut.isNotEmpty()) {
+                        val entry = SessionVariableStore.shared.save(
+                            toolName = "terminal",
+                            rawOutput = rawOut,
+                            target = tp?.command ?: termId,
+                        )
+                        savedVarName = entry.name
+                        emitVarSaved(
+                            active.currentTurnId,
+                            entry.name,
+                            "terminal",
+                            tp?.command ?: termId,
+                            rawOut,
+                        )
+                        if (rawOut.length > 1_200) {
+                            finalOut = SessionVariableStore.shared.formatCompactHandle(
+                                entry = entry,
+                                offloadedPath = offloaded.filePath,
+                            )
+                        }
+                    }
                     val res = JSONObject()
-                        .put("output", offloaded.text)
-                        .put("truncated", (tp?.output?.length ?: 0) >= 262_144 || offloaded.offloaded)
+                        .put("output", finalOut)
+                        .put("truncated", (tp?.output?.length ?: 0) >= 262_144 || offloaded.offloaded || (SessionVariableStore.enabled && rawOut.length > 1_200))
+                    if (savedVarName != null) {
+                        res.put("variable", "\$$savedVarName")
+                    }
                     if (offloaded.filePath != null) {
                         res.put("offloadedPath", offloaded.filePath)
                     }
@@ -320,7 +353,25 @@ internal class AcpFsTerminalHandler(
             }
             val startLine = params?.optInt("line", 0) ?: 0
             val limit = params?.optInt("limit", 0) ?: 0
-            val content = readBoundedFileContent(file, startLine = startLine, limit = limit)
+            var content = readBoundedFileContent(file, startLine = startLine, limit = limit)
+            if (SessionVariableStore.enabled && startLine == 0 && limit == 0 && file.length() > 24_000L && file.length() <= 2L * 1024L * 1024L) {
+                val fullText = runCatching { file.readText() }.getOrNull()
+                if (fullText != null) {
+                    val entry = SessionVariableStore.shared.save(
+                        toolName = "read_file",
+                        rawOutput = fullText,
+                        target = path,
+                    )
+                    emitVarSaved(
+                        active.currentTurnId,
+                        entry.name,
+                        "read_file",
+                        path,
+                        fullText,
+                    )
+                    content = "[VAR STORED: \$${entry.name} (${entry.summary}) — pass \$${entry.name} or \$v_last in write_file/MCP args/reply]\n$content"
+                }
+            }
             AcpConfigAndPromptHelper.sendJson(
                 writer,
                 JSONObject()
@@ -351,7 +402,12 @@ internal class AcpFsTerminalHandler(
         params: JSONObject?,
     ) {
         val path = params?.optString("path", "") ?: ""
-        val content = params?.optString("content", "") ?: ""
+        val rawContent = params?.optString("content", "") ?: ""
+        val content = if (SessionVariableStore.enabled) {
+            SessionVariableStore.shared.resolveText(rawContent)
+        } else {
+            rawContent
+        }
         val rawDecision = CommandSafetyGuard.evaluateWritePath(path, active.defaultCwd)
         val writeDecision = if (rawDecision.allowed) {
             val targetForHook = try {

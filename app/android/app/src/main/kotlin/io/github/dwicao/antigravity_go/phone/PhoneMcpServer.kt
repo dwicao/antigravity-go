@@ -1,5 +1,6 @@
 package io.github.dwicao.antigravity_go.phone
 
+import io.github.dwicao.antigravity_go.runtime.SessionVariableStore
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedInputStream
@@ -701,6 +702,24 @@ class PhoneMcpServer(
                         .put("required", JSONArray().put("action")),
                 )
 
+            val varInspectTool = JSONObject()
+                .put("name", "var_inspect")
+                .put("description", "Inspect a stored \$v_* session variable slice, JSON field, or regex grep (or list active variables with name='list').")
+                .put(
+                    "inputSchema",
+                    JSONObject()
+                        .put("type", "object")
+                        .put(
+                            "properties",
+                            JSONObject()
+                                .put("name", JSONObject().put("type", "string").put("description", "Variable expression (e.g. \$v_term_1, \$v_last.items[0]) or 'list'"))
+                                .put("startLine", JSONObject().put("type", "integer"))
+                                .put("limit", JSONObject().put("type", "integer"))
+                                .put("grep", JSONObject().put("type", "string")),
+                        )
+                        .put("required", JSONArray().put("name")),
+                )
+
             if (minimalCodingOnly) {
                 return JSONArray()
                     .put(notifyTool)
@@ -724,6 +743,7 @@ class PhoneMcpServer(
                 .put(shizukuUiDumpTool)
                 .put(subagentNotifyTool)
                 .put(browserTool)
+                .put(varInspectTool)
         }
 
         /**
@@ -782,49 +802,23 @@ class PhoneMcpServer(
 
                 "tools/call" -> {
                     val toolName = params.optString("name", "")
-                    val args = params.optJSONObject("arguments") ?: JSONObject()
-                    val action = when (toolName) {
-                        "phone_screen_tree", "screen" -> "screen"
-                        "phone_tap", "tap" -> "tap"
-                        "phone_type", "type" -> "type"
-                        "phone_device_info", "device_info", "system_info" -> "device_info"
-                        "phone_notify", "notify" -> "notify"
-                        "phone_clipboard", "clipboard" -> "clipboard"
-                        "phone_torch", "torch" -> "torch"
-                        "phone_vibrate", "vibrate" -> "vibrate"
-                        "phone_toast", "toast" -> "toast"
-                        "phone_open_url", "open_url" -> "open_url"
-                        "phone_shizuku_exec", "shizuku_exec" -> "shizuku_exec"
-                        "phone_shizuku_logcat", "shizuku_logcat" -> "shizuku_logcat"
-                        "phone_shizuku_install", "shizuku_install" -> "shizuku_install"
-                        "phone_shizuku_ui_dump", "shizuku_ui_dump" -> "shizuku_ui_dump"
-                        "phone_subagent_notify", "subagent_notify" -> "subagent_notify"
-                        "phone_browser", "browser_auto", "phone_browser_automate" -> "browser_auto"
-                        else -> ""
-                    }
-                    if (action.isEmpty()) {
-                        JSONObject()
-                            .put("jsonrpc", "2.0")
-                            .put("id", id)
-                            .put(
-                                "error",
-                                JSONObject()
-                                    .put("code", -32602)
-                                    .put("message", "Unknown tool: $toolName"),
-                            )
-                    } else {
-                        val actionResp = executeAction(action, args)
-                        val allowed = actionResp.optBoolean("allowed", false)
-                        val isError = !allowed || actionResp.has("error")
-                        val rawText = when {
-                            action == "screen" && allowed -> actionResp.optString("tree", "")
-                            else -> actionResp.toString(2)
-                        }
-                        val text = if (rawText.length > 8_000) {
-                            val omitted = rawText.length - 6_500
-                            "${rawText.take(4_500)}\n\n...[MCP RESPONSE TRUNCATED: $omitted middle chars omitted for token budget]...\n\n${rawText.takeLast(2_000)}"
+                    val rawArgs = params.optJSONObject("arguments") ?: JSONObject()
+                    if (toolName == "var_inspect") {
+                        val name = rawArgs.optString("name", "").trim()
+                        val outText = if (name == "list" || name.isEmpty()) {
+                            val entries = SessionVariableStore.shared.listEntries()
+                            if (entries.isEmpty()) {
+                                "(no stored session variables yet)"
+                            } else {
+                                entries.joinToString("\n") { "\$${it.name}: ${it.summary}" }
+                            }
                         } else {
-                            rawText
+                            SessionVariableStore.shared.inspect(
+                                nameOrExpr = name,
+                                startLine = if (rawArgs.has("startLine")) rawArgs.optInt("startLine") else null,
+                                limit = if (rawArgs.has("limit")) rawArgs.optInt("limit") else null,
+                                grep = rawArgs.optString("grep").takeIf { it.isNotBlank() },
+                            )
                         }
                         JSONObject()
                             .put("jsonrpc", "2.0")
@@ -837,11 +831,93 @@ class PhoneMcpServer(
                                         JSONArray().put(
                                             JSONObject()
                                                 .put("type", "text")
-                                                .put("text", text),
+                                                .put("text", outText),
                                         ),
                                     )
-                                    .put("isError", isError),
+                                    .put("isError", false),
                             )
+                    } else {
+                        val args = if (SessionVariableStore.enabled) {
+                            SessionVariableStore.shared.resolveJsonArgs(rawArgs)
+                        } else {
+                            rawArgs
+                        }
+                        val action = when (toolName) {
+                            "phone_screen_tree", "screen" -> "screen"
+                            "phone_tap", "tap" -> "tap"
+                            "phone_type", "type" -> "type"
+                            "phone_device_info", "device_info", "system_info" -> "device_info"
+                            "phone_notify", "notify" -> "notify"
+                            "phone_clipboard", "clipboard" -> "clipboard"
+                            "phone_torch", "torch" -> "torch"
+                            "phone_vibrate", "vibrate" -> "vibrate"
+                            "phone_toast", "toast" -> "toast"
+                            "phone_open_url", "open_url" -> "open_url"
+                            "phone_shizuku_exec", "shizuku_exec" -> "shizuku_exec"
+                            "phone_shizuku_logcat", "shizuku_logcat" -> "shizuku_logcat"
+                            "phone_shizuku_install", "shizuku_install" -> "shizuku_install"
+                            "phone_shizuku_ui_dump", "shizuku_ui_dump" -> "shizuku_ui_dump"
+                            "phone_subagent_notify", "subagent_notify" -> "subagent_notify"
+                            "phone_browser", "browser_auto", "phone_browser_automate" -> "browser_auto"
+                            else -> ""
+                        }
+                        if (action.isEmpty()) {
+                            JSONObject()
+                                .put("jsonrpc", "2.0")
+                                .put("id", id)
+                                .put(
+                                    "error",
+                                    JSONObject()
+                                        .put("code", -32602)
+                                        .put("message", "Unknown tool: $toolName"),
+                                )
+                        } else {
+                            val actionResp = executeAction(action, args)
+                            val allowed = actionResp.optBoolean("allowed", false)
+                            val isError = !allowed || actionResp.has("error")
+                            val rawText = when {
+                                action == "screen" && allowed -> actionResp.optString("tree", "")
+                                else -> actionResp.toString(2)
+                            }
+                            val text = if (!isError && SessionVariableStore.enabled && rawText.isNotEmpty()) {
+                                val entry = SessionVariableStore.shared.save(
+                                    toolName = toolName.ifBlank { action },
+                                    rawOutput = rawText,
+                                    target = args.optString("url", args.optString("target", action)),
+                                    explicitName = rawArgs.optString("save_as").takeIf { it.isNotBlank() },
+                                )
+                                if (rawText.length > 1_200) {
+                                    SessionVariableStore.shared.formatCompactHandle(
+                                        entry = entry,
+                                        headChars = 1_500,
+                                        tailChars = 800,
+                                    )
+                                } else {
+                                    rawText
+                                }
+                            } else if (rawText.length > 8_000) {
+                                val omitted = rawText.length - 6_500
+                                "${rawText.take(4_500)}\n\n...[MCP RESPONSE TRUNCATED: $omitted middle chars omitted for token budget]...\n\n${rawText.takeLast(2_000)}"
+                            } else {
+                                rawText
+                            }
+                            JSONObject()
+                                .put("jsonrpc", "2.0")
+                                .put("id", id)
+                                .put(
+                                    "result",
+                                    JSONObject()
+                                        .put(
+                                            "content",
+                                            JSONArray().put(
+                                                JSONObject()
+                                                    .put("type", "text")
+                                                    .put("text", text),
+                                            ),
+                                        )
+                                        .put("isError", isError),
+                                )
+                        }
                     }
                 }
 

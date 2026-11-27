@@ -30,8 +30,10 @@ class _TurnControl {
 
 /// Runs OpenAI-compatible `/v1/chat/completions` turns with SSE streaming,
 /// reasoning/think-block extraction, vision image attachments, interactive
-/// permission gating, and an agentic tool loop (`run_command`, `read_file`,
-/// `write_file`, `list_dir`) against either the local Android workspace or an SSH host.
+/// permission gating, pass-by-reference tool output variables (`$v_*`), and an
+/// agentic tool loop (`run_command`, `read_file`, `write_file`, `list_dir`,
+/// `inspect_var`, `delegate_subagent`) against either the local Android
+/// workspace or an SSH host.
 class OpenAiCompatRunner {
   OpenAiCompatRunner._();
   static final OpenAiCompatRunner instance = OpenAiCompatRunner._();
@@ -41,7 +43,11 @@ class OpenAiCompatRunner {
 
   static const int _maxToolRounds = 16;
 
-  static List<Map<String, dynamic>> _toolDefinitions() => [
+  static List<Map<String, dynamic>> _toolDefinitions({
+    bool includeVariables = true,
+    bool includeSubagent = true,
+  }) =>
+      [
         {
           'type': 'function',
           'function': {
@@ -59,6 +65,17 @@ class OpenAiCompatRunner {
                   'type': 'string',
                   'description': 'Optional working directory override',
                 },
+                if (includeVariables)
+                  'stdin': {
+                    'type': 'string',
+                    'description':
+                        'Optional stdin payload (can reference \$var directly, e.g. "\$v_cmd_1")',
+                  },
+                if (includeVariables)
+                  'save_as': {
+                    'type': 'string',
+                    'description': 'Optional custom variable name to store output',
+                  },
               },
               'required': ['command'],
             },
@@ -76,6 +93,11 @@ class OpenAiCompatRunner {
                   'type': 'string',
                   'description': 'File path (absolute or workspace-relative)',
                 },
+                if (includeVariables)
+                  'save_as': {
+                    'type': 'string',
+                    'description': 'Optional custom variable name to store file content',
+                  },
               },
               'required': ['path'],
             },
@@ -85,7 +107,8 @@ class OpenAiCompatRunner {
           'type': 'function',
           'function': {
             'name': 'write_file',
-            'description': 'Write full text content to a file (creating parent directories if needed).',
+            'description':
+                'Write full text content to a file (creating parent directories if needed).',
             'parameters': {
               'type': 'object',
               'properties': {
@@ -95,7 +118,8 @@ class OpenAiCompatRunner {
                 },
                 'content': {
                   'type': 'string',
-                  'description': 'Complete text content to write',
+                  'description':
+                      'Complete text content to write (can reference \$var variables directly)',
                 },
               },
               'required': ['path', 'content'],
@@ -114,10 +138,80 @@ class OpenAiCompatRunner {
                   'type': 'string',
                   'description': 'Directory path (defaults to workspace root)',
                 },
+                if (includeVariables)
+                  'save_as': {
+                    'type': 'string',
+                    'description': 'Optional custom variable name',
+                  },
               },
             },
           },
         },
+        if (includeVariables)
+          {
+            'type': 'function',
+            'function': {
+              'name': 'inspect_var',
+              'description':
+                  'Inspect a line slice, JSON field/path, or regex grep on a stored \$v_* variable without loading all data into context.',
+              'parameters': {
+                'type': 'object',
+                'properties': {
+                  'name': {
+                    'type': 'string',
+                    'description':
+                        'Variable name or path expression (e.g. "\$v_cmd_1", "\$v_cmd_1.items[0]")',
+                  },
+                  'start_line': {
+                    'type': 'integer',
+                    'description': '1-based start line for text slicing',
+                  },
+                  'limit': {
+                    'type': 'integer',
+                    'description': 'Max lines to return (default 120)',
+                  },
+                  'grep': {
+                    'type': 'string',
+                    'description': 'Optional case-insensitive regex filter',
+                  },
+                },
+                'required': ['name'],
+              },
+            },
+          },
+        if (includeSubagent)
+          {
+            'type': 'function',
+            'function': {
+              'name': 'delegate_subagent',
+              'description':
+                  'Run a focused subagent task (parallelizable in batches). Pass large docs/data via \$v_* variable references.',
+              'parameters': {
+                'type': 'object',
+                'properties': {
+                  'role': {
+                    'type': 'string',
+                    'description': 'Short role name (e.g. "Security Auditor")',
+                  },
+                  'task': {
+                    'type': 'string',
+                    'description': 'Specific objective for this subagent',
+                  },
+                  'context': {
+                    'type': 'string',
+                    'description':
+                        'Optional large payload or \$v_* variable reference passed to subagent',
+                  },
+                  if (includeVariables)
+                    'save_as': {
+                      'type': 'string',
+                      'description': 'Optional variable name for subagent output',
+                    },
+                },
+                'required': ['role', 'task'],
+              },
+            },
+          },
       ];
 
   static Map<String, String> _headers(String? apiKey) => {
@@ -266,11 +360,25 @@ class OpenAiCompatRunner {
     String? sshPassword,
     String? sshPrivateKey,
     FutureOr<void> Function(String fp)? onTrustFirstKey,
+    ToolVariableStore? variableStore,
+    bool toolVariablesEnabled = true,
+    bool allowSubagentDelegation = true,
+    http.Client? httpClient,
+    Future<({bool ok, String output})> Function(
+      String name,
+      Map<String, dynamic> args,
+    )? toolExecutorOverride,
   }) async* {
     final ctrl = _TurnControl();
     _activeTurns[turnId]?.cancel();
     _activeTurns[turnId] = ctrl;
     final startedAt = DateTime.now();
+    final ownsHttpClient = httpClient == null;
+    final client = httpClient ?? http.Client();
+    ctrl.client = ownsHttpClient ? client : null;
+    final varStore = variableStore ??
+        ToolVariableStore(enabled: toolVariablesEnabled);
+    varStore.enabled = toolVariablesEnabled;
 
     try {
       final ws = workspacePath.trim();
@@ -278,7 +386,14 @@ class OpenAiCompatRunner {
         'You are Antigravity running inside Antigravity Go.',
         if (ws.isNotEmpty) 'Active workspace directory: $ws',
         if (profile.supportsTools)
-          'You have tools (`run_command`, `read_file`, `write_file`, `list_dir`) to inspect and edit files.',
+          'You have tools (`run_command`, `read_file`, `write_file`, `list_dir`'
+              '${toolVariablesEnabled ? ', `inspect_var`' : ''}'
+              '${allowSubagentDelegation ? ', `delegate_subagent`' : ''}'
+              ') to inspect and edit files.',
+        if (profile.supportsTools && toolVariablesEnabled)
+          varStore.systemPromptInstructions(
+            hasSubagentTool: allowSubagentDelegation,
+          ),
         if (systemInstructions.trim().isNotEmpty) systemInstructions.trim(),
         if (profile.systemPrompt.trim().isNotEmpty) profile.systemPrompt.trim(),
       ];
@@ -310,8 +425,6 @@ class OpenAiCompatRunner {
       var lastCtxTokens = 0;
       final fullResponse = StringBuffer();
       var includeStreamOptions = true;
-      final client = http.Client();
-      ctrl.client = client;
 
       for (var round = 0; round < _maxToolRounds; round++) {
         if (ctrl.cancelled) break;
@@ -322,7 +435,11 @@ class OpenAiCompatRunner {
           'stream': true,
           if (includeStreamOptions)
             'stream_options': const {'include_usage': true},
-          if (profile.supportsTools) 'tools': _toolDefinitions(),
+          if (profile.supportsTools)
+            'tools': _toolDefinitions(
+              includeVariables: toolVariablesEnabled,
+              includeSubagent: allowSubagentDelegation,
+            ),
         };
 
         final req = http.Request('POST', profile.chatCompletionsUri)
@@ -363,6 +480,7 @@ class OpenAiCompatRunner {
 
         final parser = OpenAiSseParser();
         final roundText = StringBuffer();
+        final textExpander = StreamingVariableExpander(varStore);
         final ctype = (resp.headers['content-type'] ?? '').toLowerCase();
 
         if (ctype.contains('application/json')) {
@@ -378,8 +496,11 @@ class OpenAiCompatRunner {
             }
             if (slice.textDelta.isNotEmpty) {
               roundText.write(slice.textDelta);
-              fullResponse.write(slice.textDelta);
-              yield AgyTextDeltaEvent(delta: slice.textDelta);
+              final expanded = textExpander.addDelta(slice.textDelta);
+              if (expanded.isNotEmpty) {
+                fullResponse.write(expanded);
+                yield AgyTextDeltaEvent(delta: expanded);
+              }
             }
           }
         } else {
@@ -402,11 +523,14 @@ class OpenAiCompatRunner {
             }
             if (slice.textDelta.isNotEmpty) {
               roundText.write(slice.textDelta);
-              fullResponse.write(slice.textDelta);
-              yield AgyTextDeltaEvent(
-                delta: slice.textDelta,
-                stepUsage: slice.usage,
-              );
+              final expanded = textExpander.addDelta(slice.textDelta);
+              if (expanded.isNotEmpty) {
+                fullResponse.write(expanded);
+                yield AgyTextDeltaEvent(
+                  delta: expanded,
+                  stepUsage: slice.usage,
+                );
+              }
             }
           }
           final tail = parser.flushPendingTags();
@@ -415,9 +539,18 @@ class OpenAiCompatRunner {
           }
           if (tail.text.isNotEmpty) {
             roundText.write(tail.text);
-            fullResponse.write(tail.text);
-            yield AgyTextDeltaEvent(delta: tail.text);
+            final expandedTail = textExpander.addDelta(tail.text);
+            if (expandedTail.isNotEmpty) {
+              fullResponse.write(expandedTail);
+              yield AgyTextDeltaEvent(delta: expandedTail);
+            }
           }
+        }
+
+        final flushedText = textExpander.flush();
+        if (flushedText.isNotEmpty) {
+          fullResponse.write(flushedText);
+          yield AgyTextDeltaEvent(delta: flushedText);
         }
 
         final u = parser.latestUsage;
@@ -452,89 +585,199 @@ class OpenAiCompatRunner {
           ],
         });
 
+        final preparedCalls = <({
+          String callId,
+          String name,
+          Map<String, dynamic> displayArgs,
+          Map<String, dynamic> resolvedArgs,
+          bool needsApproval,
+        })>[];
+
         for (final tc in pendingTools) {
-          if (ctrl.cancelled) break;
           final callId =
               tc.id.isNotEmpty ? tc.id : 'call_${tc.index}_$round';
-          final args = tc.parseArgumentsMap();
+          final rawArgs = tc.parseArgumentsMap();
+          final resolvedArgs = toolVariablesEnabled
+              ? varStore.resolveArguments(rawArgs)
+              : rawArgs;
+          final needsApproval = !dangerouslySkipPermissions &&
+              (tc.name == 'run_command' || tc.name == 'write_file');
+          preparedCalls.add((
+            callId: callId,
+            name: tc.name,
+            displayArgs: rawArgs,
+            resolvedArgs: resolvedArgs,
+            needsApproval: needsApproval,
+          ));
           yield AgyToolCallEvent(
             callId: callId,
             toolName: tc.name,
             state: ToolCallState.running,
-            parameters: args,
+            parameters: rawArgs,
           );
+        }
 
-          final needsApproval = !dangerouslySkipPermissions &&
-              (tc.name == 'run_command' || tc.name == 'write_file');
-          var approved = true;
-          if (needsApproval) {
-            final reqId = 'perm-${_nextReqId++}';
-            final completer = Completer<String?>();
-            ctrl.pendingPermissions[reqId] = completer;
-            yield AgyPermissionRequestEvent(
-              requestId: reqId,
-              toolName: tc.name,
-              title: tc.name == 'run_command'
-                  ? 'Approve shell command'
-                  : 'Approve file write',
-              commandOrPath: (args['command'] ?? args['path'] ?? '').toString(),
-              options: const [
-                PermissionOption(
-                  optionId: 'allow_once',
-                  name: 'Allow once',
-                  kind: 'allow_once',
-                ),
-                PermissionOption(
-                  optionId: 'reject_once',
-                  name: 'Deny',
-                  kind: 'reject_once',
-                ),
-              ],
-            );
-            final choice = await completer.future;
-            approved = choice != null && !choice.startsWith('reject');
+        Future<({bool ok, String output, double durationSeconds})> runPrepared(
+          ({
+            String callId,
+            String name,
+            Map<String, dynamic> displayArgs,
+            Map<String, dynamic> resolvedArgs,
+            bool needsApproval,
+          }) call,
+        ) async {
+          if (ctrl.cancelled) {
+            return (ok: false, output: 'Cancelled', durationSeconds: 0.0);
           }
-
-          if (ctrl.cancelled) break;
-
           final tStart = DateTime.now();
-          String toolResultText;
-          var toolOk = true;
-          if (!approved) {
-            toolOk = false;
-            toolResultText = 'Permission denied by user.';
-          } else {
-            final exec = await _executeTool(
-              name: tc.name,
-              args: args,
-              workspacePath: ws,
-              sshHost: sshHost,
-              sshPassword: sshPassword,
-              sshPrivateKey: sshPrivateKey,
-              onTrustFirstKey: onTrustFirstKey,
-            );
-            toolOk = exec.ok;
-            toolResultText = exec.output;
+          final exec = toolExecutorOverride != null
+              ? await toolExecutorOverride(call.name, call.resolvedArgs)
+              : await _executeTool(
+                  name: call.name,
+                  args: call.resolvedArgs,
+                  workspacePath: ws,
+                  profile: profile,
+                  apiKey: apiKey,
+                  dangerouslySkipPermissions: dangerouslySkipPermissions,
+                  varStore: varStore,
+                  sshHost: sshHost,
+                  sshPassword: sshPassword,
+                  sshPrivateKey: sshPrivateKey,
+                  onTrustFirstKey: onTrustFirstKey,
+                  httpClient: ownsHttpClient ? null : client,
+                );
+          return (
+            ok: exec.ok,
+            output: exec.output,
+            durationSeconds:
+                DateTime.now().difference(tStart).inMilliseconds / 1000.0,
+          );
+        }
+
+        final anyNeedsApproval = preparedCalls.any((c) => c.needsApproval);
+        final List<({bool ok, String output, double durationSeconds})> results;
+
+        if (!anyNeedsApproval && preparedCalls.length > 1) {
+          // Execute independent read/inspect/subagent batch concurrently.
+          results = await Future.wait([
+            for (final c in preparedCalls) runPrepared(c),
+          ]);
+        } else {
+          results = [];
+          for (final c in preparedCalls) {
+            if (ctrl.cancelled) break;
+            if (c.needsApproval) {
+              final tStart = DateTime.now();
+              final reqId = 'perm-${_nextReqId++}';
+              final completer = Completer<String?>();
+              ctrl.pendingPermissions[reqId] = completer;
+              yield AgyPermissionRequestEvent(
+                requestId: reqId,
+                toolName: c.name,
+                title: c.name == 'run_command'
+                    ? 'Approve shell command'
+                    : 'Approve file write',
+                commandOrPath: (c.resolvedArgs['command'] ??
+                        c.resolvedArgs['path'] ??
+                        '')
+                    .toString(),
+                options: const [
+                  PermissionOption(
+                    optionId: 'allow_once',
+                    name: 'Allow once',
+                    kind: 'allow_once',
+                  ),
+                  PermissionOption(
+                    optionId: 'reject_once',
+                    name: 'Deny',
+                    kind: 'reject_once',
+                  ),
+                ],
+              );
+              final choice = await completer.future;
+              if (ctrl.cancelled) break;
+              final approved = choice != null && !choice.startsWith('reject');
+              if (!approved) {
+                results.add((
+                  ok: false,
+                  output: 'Permission denied by user.',
+                  durationSeconds:
+                      DateTime.now().difference(tStart).inMilliseconds / 1000.0,
+                ));
+                continue;
+              }
+              final exec = toolExecutorOverride != null
+                  ? await toolExecutorOverride(c.name, c.resolvedArgs)
+                  : await _executeTool(
+                      name: c.name,
+                      args: c.resolvedArgs,
+                      workspacePath: ws,
+                      profile: profile,
+                      apiKey: apiKey,
+                      dangerouslySkipPermissions: dangerouslySkipPermissions,
+                      varStore: varStore,
+                      sshHost: sshHost,
+                      sshPassword: sshPassword,
+                      sshPrivateKey: sshPrivateKey,
+                      onTrustFirstKey: onTrustFirstKey,
+                      httpClient: ownsHttpClient ? null : client,
+                    );
+              results.add((
+                ok: exec.ok,
+                output: exec.output,
+                durationSeconds:
+                    DateTime.now().difference(tStart).inMilliseconds / 1000.0,
+              ));
+            } else {
+              results.add(await runPrepared(c));
+            }
           }
-          final tDur =
-              DateTime.now().difference(tStart).inMilliseconds / 1000.0;
+        }
+
+        for (var i = 0; i < preparedCalls.length && i < results.length; i++) {
+          final call = preparedCalls[i];
+          final res = results[i];
+          final saveAs = call.displayArgs['save_as']?.toString().trim();
+          var messageContent = res.output;
+          var displayOutput = res.output;
+
+          if (toolVariablesEnabled &&
+              res.ok &&
+              call.name != 'inspect_var' &&
+              call.name != 'write_file') {
+            final target = (call.resolvedArgs['path'] ??
+                    call.resolvedArgs['command'] ??
+                    call.resolvedArgs['role'] ??
+                    '')
+                .toString();
+            final entry = varStore.save(
+              toolName: call.name,
+              target: target,
+              rawOutput: res.output,
+              explicitName: (saveAs != null && saveAs.isNotEmpty) ? saveAs : null,
+            );
+            messageContent = varStore.formatToolResponse(entry);
+            displayOutput =
+                '[var: \$${entry.name} · ${entry.summary}]\n${res.output}';
+          } else if (messageContent.length > 24000) {
+            messageContent =
+                '${messageContent.substring(0, 24000)}\n...[truncated]';
+          }
 
           yield AgyToolCallEvent(
-            callId: callId,
-            toolName: tc.name,
-            state: toolOk ? ToolCallState.completed : ToolCallState.failed,
-            parameters: args,
-            output: toolOk ? toolResultText : null,
-            errorMessage: toolOk ? null : toolResultText,
-            durationSeconds: tDur,
+            callId: call.callId,
+            toolName: call.name,
+            state: res.ok ? ToolCallState.completed : ToolCallState.failed,
+            parameters: call.displayArgs,
+            output: res.ok ? displayOutput : null,
+            errorMessage: res.ok ? null : res.output,
+            durationSeconds: res.durationSeconds,
           );
 
           messages.add({
             'role': 'tool',
-            'tool_call_id': callId,
-            'content': toolResultText.length > 24000
-                ? '${toolResultText.substring(0, 24000)}\n...[truncated]'
-                : toolResultText,
+            'tool_call_id': call.callId,
+            'content': messageContent,
           });
         }
       }
@@ -580,16 +823,88 @@ class OpenAiCompatRunner {
     required String name,
     required Map<String, dynamic> args,
     required String workspacePath,
+    required OpenAiProviderConfig profile,
+    required String? apiKey,
+    required bool dangerouslySkipPermissions,
+    required ToolVariableStore varStore,
     SshHostConfig? sshHost,
     String? sshPassword,
     String? sshPrivateKey,
     FutureOr<void> Function(String fp)? onTrustFirstKey,
+    http.Client? httpClient,
   }) async {
     try {
       switch (name) {
+        case 'inspect_var':
+          final varName = (args['name'] ?? '').toString().trim();
+          if (varName.isEmpty) {
+            return (ok: false, output: 'Missing variable name');
+          }
+          final startLine = (args['start_line'] as num?)?.toInt();
+          final limit = (args['limit'] as num?)?.toInt();
+          final grep = args['grep']?.toString();
+          return (
+            ok: true,
+            output: varStore.inspect(
+              varName,
+              startLine: startLine,
+              limit: limit,
+              grep: grep,
+            ),
+          );
+
+        case 'delegate_subagent':
+          final role = (args['role'] ?? 'Subagent').toString().trim();
+          final task = (args['task'] ?? '').toString().trim();
+          final ctx = (args['context'] ?? '').toString().trim();
+          if (task.isEmpty) {
+            return (ok: false, output: 'Subagent task cannot be empty');
+          }
+          final subPrompt = ctx.isEmpty ? task : '$task\n\n[Context]\n$ctx';
+          final subOut = StringBuffer();
+          String? subErr;
+          await for (final evt in runPrompt(
+            profile: profile,
+            apiKey: apiKey,
+            turnId: 'sub-${_nextReqId++}',
+            prompt: subPrompt,
+            workspacePath: workspacePath,
+            dangerouslySkipPermissions: dangerouslySkipPermissions,
+            systemInstructions:
+                'You are a focused subagent playing role "$role". '
+                'Complete the assigned task concisely and return only verified findings/results.',
+            variableStore: varStore,
+            toolVariablesEnabled: varStore.enabled,
+            allowSubagentDelegation: false,
+            sshHost: sshHost,
+            sshPassword: sshPassword,
+            sshPrivateKey: sshPrivateKey,
+            onTrustFirstKey: onTrustFirstKey,
+            httpClient: httpClient,
+          )) {
+            if (evt is AgyTextDeltaEvent) {
+              subOut.write(evt.delta);
+            } else if (evt is AgyErrorEvent) {
+              subErr = evt.message;
+            }
+          }
+          if (subErr != null && subOut.isEmpty) {
+            return (ok: false, output: 'Subagent [$role] error: $subErr');
+          }
+          final finalSub = subOut.toString().trim();
+          return (
+            ok: true,
+            output: finalSub.isEmpty ? '(subagent returned no text)' : finalSub,
+          );
+
         case 'run_command':
-          final cmd = (args['command'] ?? '').toString().trim();
+          var cmd = (args['command'] ?? '').toString().trim();
           if (cmd.isEmpty) return (ok: false, output: 'Empty command');
+          final stdinPayload = args['stdin']?.toString();
+          if (stdinPayload != null && stdinPayload.isNotEmpty) {
+            final b64 = base64Encode(utf8.encode(stdinPayload));
+            cmd = 'printf %s "$b64" | base64 -d | ( $cmd )';
+          }
           final cwd = args['cwd']?.toString().trim();
           final effCwd =
               (cwd != null && cwd.isNotEmpty) ? cwd : workspacePath;

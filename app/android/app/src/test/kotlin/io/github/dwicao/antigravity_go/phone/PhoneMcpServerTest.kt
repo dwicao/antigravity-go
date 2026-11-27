@@ -1,5 +1,6 @@
 package io.github.dwicao.antigravity_go.phone
 
+import io.github.dwicao.antigravity_go.runtime.SessionVariableStore
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -28,7 +29,7 @@ class PhoneMcpServerTest {
             .put("method", "tools/list")
         val listResp = PhoneMcpServer.dispatchJsonRpc(listReq) { _, _ -> JSONObject() }
         val tools = listResp!!.getJSONObject("result").getJSONArray("tools")
-        assertEquals(16, tools.length())
+        assertEquals(17, tools.length())
         assertEquals("phone_screen_tree", tools.getJSONObject(0).getString("name"))
         assertEquals("phone_tap", tools.getJSONObject(1).getString("name"))
         assertEquals("phone_type", tools.getJSONObject(2).getString("name"))
@@ -40,6 +41,7 @@ class PhoneMcpServerTest {
         assertEquals("phone_shizuku_ui_dump", tools.getJSONObject(13).getString("name"))
         assertEquals("phone_subagent_notify", tools.getJSONObject(14).getString("name"))
         assertEquals("phone_browser", tools.getJSONObject(15).getString("name"))
+        assertEquals("var_inspect", tools.getJSONObject(16).getString("name"))
     }
 
     @Test
@@ -85,5 +87,60 @@ class PhoneMcpServerTest {
         assertEquals(2, tools.length())
         assertEquals("phone_notify", tools.getJSONObject(0).getString("name"))
         assertEquals("phone_subagent_notify", tools.getJSONObject(1).getString("name"))
+    }
+
+    @Test
+    fun capturesLargeMcpOutputAsSessionVarAndResolvesInSubsequentCall() {
+        SessionVariableStore.shared.clear()
+        SessionVariableStore.enabled = true
+        val bigTree = "HEADER\n" + "node ".repeat(400) + "\nFOOTER"
+        val screenCall = JSONObject()
+            .put("jsonrpc", "2.0")
+            .put("id", 10)
+            .put("method", "tools/call")
+            .put(
+                "params",
+                JSONObject()
+                    .put("name", "phone_screen_tree")
+                    .put("arguments", JSONObject().put("save_as", "screen_dump")),
+            )
+
+        val screenResp = PhoneMcpServer.dispatchJsonRpc(screenCall) { _, _ ->
+            JSONObject().put("allowed", true).put("tree", bigTree)
+        }!!
+        val screenText = screenResp.getJSONObject("result").getJSONArray("content").getJSONObject(0).getString("text")
+        assertTrue(screenText.contains("[VAR STORED: \$screen_dump"))
+
+        var capturedText = ""
+        val typeCall = JSONObject()
+            .put("jsonrpc", "2.0")
+            .put("id", 11)
+            .put("method", "tools/call")
+            .put(
+                "params",
+                JSONObject()
+                    .put("name", "phone_type")
+                    .put("arguments", JSONObject().put("text", "Line1:\$screen_dump[1:1]")),
+            )
+        PhoneMcpServer.dispatchJsonRpc(typeCall) { _, args ->
+            capturedText = args.optString("text", "")
+            JSONObject().put("allowed", true).put("ok", true)
+        }
+        assertEquals("Line1:HEADER", capturedText)
+
+        val inspectCall = JSONObject()
+            .put("jsonrpc", "2.0")
+            .put("id", 12)
+            .put("method", "tools/call")
+            .put(
+                "params",
+                JSONObject()
+                    .put("name", "var_inspect")
+                    .put("arguments", JSONObject().put("name", "\$screen_dump").put("grep", "FOOTER")),
+            )
+        val inspectResp = PhoneMcpServer.dispatchJsonRpc(inspectCall) { _, _ -> JSONObject() }!!
+        val inspectText = inspectResp.getJSONObject("result").getJSONArray("content").getJSONObject(0).getString("text")
+        assertTrue(inspectText.contains("FOOTER"))
+        SessionVariableStore.shared.clear()
     }
 }

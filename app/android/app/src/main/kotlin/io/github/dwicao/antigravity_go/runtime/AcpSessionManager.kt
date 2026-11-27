@@ -33,6 +33,20 @@ class AcpSessionManager(
         log = log,
         onTasksChanged = onTasksChanged,
         outputOffloadDir = outputOffloadDir,
+        emitVarSaved = { turnId, name, toolName, target, rawValue ->
+            if (!turnId.isNullOrBlank()) {
+                emit(
+                    mapOf(
+                        "kind" to "session_var_saved",
+                        "turnId" to turnId,
+                        "name" to name,
+                        "toolName" to toolName,
+                        "target" to target,
+                        "stdoutLine" to rawValue,
+                    ),
+                )
+            }
+        },
     )
 
     private fun takeStandbyWorker(expectedSignature: String): ActiveAcp? {

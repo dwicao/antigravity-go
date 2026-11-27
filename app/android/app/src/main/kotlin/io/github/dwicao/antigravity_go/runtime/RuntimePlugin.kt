@@ -100,6 +100,10 @@ class RuntimePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, EventChann
                 ctrl.setGuardrailsEnabled(call.argument<Boolean>("enabled") ?: true)
                 result.success(null)
             }
+            "setToolVariablesEnabled" -> {
+                ctrl.setToolVariablesEnabled(call.argument<Boolean>("enabled") ?: true)
+                result.success(null)
+            }
             "setPhoneMcpMinimalMode" -> {
                 ctrl.setPhoneMcpMinimalMode(call.argument<Boolean>("minimal") ?: true)
                 result.success(null)

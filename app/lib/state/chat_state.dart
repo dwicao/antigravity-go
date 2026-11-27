@@ -57,6 +57,7 @@ class _SessionTurnRuntime {
   bool pendingUiEmit = false;
   double latestTokensPerSec = 0;
   String? pendingAssistantId;
+  StreamingVariableExpander? textExpander;
   final StringBuffer pendingThoughtDelta = StringBuffer();
   final StringBuffer pendingTextDelta = StringBuffer();
   TokenUsage? pendingStepUsage;
@@ -90,9 +91,11 @@ class _SessionTurnRuntime {
 class ChatNotifier extends Notifier<ChatThreadState> {
   StreamSubscription<RuntimeEvent>? _wakeupSub;
   StreamSubscription<RuntimeEvent>? _notifPermSub;
+  StreamSubscription<RuntimeEvent>? _varSavedSub;
   final Set<String> _autoCompactingSessions = <String>{};
   String? _loadedSessionId;
   final Map<String, _SessionTurnRuntime> _sessionRuntimes = {};
+  final Map<String, ToolVariableStore> _sessionVarStores = {};
   final Map<String, String> _wakeupAssistantIds = {};
   final Map<String, Timer> _wakeupFinalizeTimers = {};
   final Map<String, Timer> _persistTimers = {};
@@ -352,6 +355,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       _wakeupAssistantIds.clear();
       _wakeupSub?.cancel();
       _notifPermSub?.cancel();
+      _varSavedSub?.cancel();
     });
     _wakeupSub?.cancel();
     _wakeupSub = RuntimeBridge.instance.events
@@ -365,6 +369,10 @@ class ChatNotifier extends Notifier<ChatThreadState> {
               e.kind == 'notification_cancel_turn',
         )
         .listen(_handleNotificationPermissionEvent);
+    _varSavedSub?.cancel();
+    _varSavedSub = RuntimeBridge.instance.events
+        .where((e) => e.kind == 'session_var_saved' && e.varName != null)
+        .listen(_handleSessionVarSavedEvent);
     Future.microtask(() {
       if (!ref.mounted) return;
       ref.read(ciWatchProvider.notifier).onCompletedCallback =
@@ -397,6 +405,45 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       Future.microtask(() => _loadMessages(activeId));
     }
     return const ChatThreadState();
+  }
+
+  ToolVariableStore _varStoreForSession(
+    String sessionId, {
+    required bool enabled,
+  }) {
+    final store = _sessionVarStores.putIfAbsent(
+      sessionId,
+      () => ToolVariableStore(enabled: enabled),
+    );
+    store.enabled = enabled;
+    return store;
+  }
+
+  @visibleForTesting
+  ToolVariableStore? varStoreForSessionTest(String sessionId) =>
+      _sessionVarStores[sessionId];
+
+  void _handleSessionVarSavedEvent(RuntimeEvent evt) {
+    if (!ref.mounted) return;
+    final turnId = evt.turnId ?? '';
+    final varName = evt.varName?.trim() ?? '';
+    final rawVal = evt.stdoutLine;
+    if (turnId.isEmpty || varName.isEmpty || rawVal == null) return;
+    for (final entry in _sessionRuntimes.entries) {
+      if (entry.value.turnId == turnId) {
+        final store = _varStoreForSession(
+          entry.key,
+          enabled: ref.read(harnessProvider).toolVariablesEnabled,
+        );
+        store.save(
+          toolName: evt.toolName ?? 'terminal',
+          target: evt.target ?? '',
+          rawOutput: rawVal,
+          explicitName: varName,
+        );
+        break;
+      }
+    }
   }
 
   void _handleNotificationPermissionEvent(RuntimeEvent evt) {
@@ -1120,6 +1167,10 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       isSsh: activeCustom == null && sshHost != null,
       isCustomOpenAi: activeCustom != null,
     );
+    final varStore = _varStoreForSession(
+      session.id,
+      enabled: harness.toolVariablesEnabled,
+    );
     _sessionRuntimes.remove(session.id)?.dispose();
     _sessionRuntimes[session.id] = rt;
 
@@ -1235,9 +1286,18 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       } catch (_) {}
       if (!ref.mounted || _sessionTurnTokens[session.id] != streamToken) return;
     }
-    final contextPrefix = [agentsContext, repoMapContext]
-        .where((s) => s.trim().isNotEmpty)
-        .join('\n\n');
+    final contextPrefix = [
+      agentsContext,
+      repoMapContext,
+      if (!runtime.status.safeMode &&
+          !isBuiltInSlash &&
+          activeCustom == null &&
+          harness.toolVariablesEnabled &&
+          (isNewRemoteSession || varStore.length > 0))
+        isNewRemoteSession
+            ? '<tool_variables>\n${varStore.systemPromptInstructions(hasSubagentTool: false)}\n</tool_variables>'
+            : '<tool_variables>Active session vars: ${varStore.entries.reversed.take(8).map((e) => '\$${e.name} (${e.summary})').join('; ')}. Reference \$v_* in write_file/MCP args/reply instead of re-typing.</tool_variables>',
+    ].where((s) => s.trim().isNotEmpty).join('\n\n');
     final promptWithAgents = contextPrefix.isNotEmpty
         ? '$contextPrefix\n\n$promptWithSkill'
         : promptWithSkill;
@@ -1316,6 +1376,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
                   text: m.text,
                 ))
             .toList();
+        rt.isCustomOpenAi = true;
+        rt.textExpander = null;
         stream = OpenAiCompatRunner.instance.runPrompt(
           profile: effectiveOpenAiProfile,
           apiKey: customKey,
@@ -1330,8 +1392,14 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           sshPassword: sshPwd,
           sshPrivateKey: sshKey,
           onTrustFirstKey: sshHost == null ? null : saveFp,
+          variableStore: varStore,
+          toolVariablesEnabled: harness.toolVariablesEnabled,
         );
       } else {
+        rt.isCustomOpenAi = false;
+        rt.textExpander = harness.toolVariablesEnabled
+            ? StreamingVariableExpander(varStore)
+            : null;
         final apiKey = await ref.read(authServiceProvider).readGeminiApiKey();
         if (!ref.mounted || _sessionTurnTokens[session.id] != streamToken) {
           return;
@@ -1543,6 +1611,11 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       state = state.copyWith(clearStallWarning: true);
     }
     if (evt is! AgyThoughtDeltaEvent && evt is! AgyTextDeltaEvent) {
+      final tailExpanded = rt?.textExpander?.flush() ?? '';
+      if (tailExpanded.isNotEmpty && rt != null) {
+        rt.pendingAssistantId ??= assistantId;
+        rt.pendingTextDelta.write(tailExpanded);
+      }
       _flushPendingDeltas(session.id);
     }
     final msgs = _messagesForSession(session.id);
@@ -1636,8 +1709,11 @@ class ChatNotifier extends Notifier<ChatThreadState> {
       case AgyTextDeltaEvent():
         rt?.receivedTurnContent = true;
         _firstOutputAt.putIfAbsent(assistantId, DateTime.now);
+        final expandedDelta = rt?.textExpander != null
+            ? rt!.textExpander!.addDelta(evt.delta)
+            : evt.delta;
         final rate = _loadedSessionId == session.id
-            ? _recordRateSample(session.id, evt.delta)
+            ? _recordRateSample(session.id, expandedDelta)
             : null;
         if (rt != null) {
           if (rt.pendingAssistantId != null &&
@@ -1645,7 +1721,9 @@ class ChatNotifier extends Notifier<ChatThreadState> {
             _flushPendingDeltas(session.id);
           }
           rt.pendingAssistantId = assistantId;
-          rt.pendingTextDelta.write(evt.delta);
+          if (expandedDelta.isNotEmpty) {
+            rt.pendingTextDelta.write(expandedDelta);
+          }
           rt.pendingStepUsage = ChatTurnHelpers.mergeStepUsage(
             rt.pendingStepUsage,
             evt.stepUsage,
@@ -1658,14 +1736,14 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           }
           break;
         }
-        final nextSteps = _appendTextStep(current.steps, evt.delta);
+        final nextSteps = _appendTextStep(current.steps, expandedDelta);
         final nextUsage =
             ChatTurnHelpers.mergeStepUsage(current.usage, evt.stepUsage);
         _replaceMessageInSession(
           session.id,
           idx,
           current.copyWith(
-            text: '${current.text}${evt.delta}',
+            text: '${current.text}$expandedDelta',
             steps: nextSteps,
             usage: nextUsage,
             contextTokens: (evt.stepUsage?.contextTokens ?? 0) > 0
@@ -1798,6 +1876,24 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           }
         }
         if (evt.state != ToolCallState.running) {
+          if (evt.state == ToolCallState.completed &&
+              rt != null &&
+              !rt.isCustomOpenAi &&
+              ref.read(harnessProvider).toolVariablesEnabled &&
+              evt.output != null &&
+              evt.output!.isNotEmpty &&
+              !evt.output!.startsWith('[VAR STORED:')) {
+            final store = _varStoreForSession(session.id, enabled: true);
+            store.save(
+              toolName: resolvedToolName,
+              target: (mergedParams['path'] ??
+                      mergedParams['command'] ??
+                      mergedParams['TargetFile'] ??
+                      '')
+                  .toString(),
+              rawOutput: evt.output!,
+            );
+          }
           _schedulePersistMessages(session.id);
         }
       case AgyPermissionRequestEvent():
@@ -1829,7 +1925,14 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         if (statusUpper == 'SUCCESS' && errText.isEmpty) {
           ref.read(authProvider.notifier).markAuthenticatedFromTurn();
         }
-        var finalText = current.text.isEmpty ? evt.response : current.text;
+        var finalText = current.text.isEmpty
+            ? (rt?.textExpander != null
+                ? _varStoreForSession(
+                    session.id,
+                    enabled: ref.read(harnessProvider).toolVariablesEnabled,
+                  ).resolveText(evt.response)
+                : evt.response)
+            : current.text;
         if (finalText.trim().isEmpty && errText.isNotEmpty) {
           finalText = errText;
         }
