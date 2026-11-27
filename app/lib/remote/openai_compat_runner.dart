@@ -1214,7 +1214,7 @@ class OpenAiCompatRunner {
             final end = limit > 0 ? (start + limit - 1) : (start + 399);
             content = await SshAgyRunner.instance.runRemoteCommand(
               host: sshHost,
-              command: 'sed -n "${start},${end}p" $quoted',
+              command: 'sed -n "$start,${end}p" $quoted',
               cwd: workspacePath,
               password: sshPassword,
               privateKeyPem: sshPrivateKey,
