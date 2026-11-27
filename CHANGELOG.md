@@ -2,6 +2,15 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.58] - 2026-11-27
+
+### Added
+- **Chat Backup & Restore (`ChatBackupPage`, `ChatBackupService`, `ChatBackupBundle`):**
+  - Added a dedicated **Chat Backup & Restore** screen reachable from Settings, Sessions Drawer (`Backup & Restore Chats` and per-session `Backup Chat…` menu), Command Palette, and Replay & Export (`Save Backup (.json.gz)`).
+  - Supports backing up all chats or specific filtered chats, optional inclusion of archived sessions, composer drafts, and referenced workspace/project definitions, with GZip compression (`.agychats.json.gz`), plain JSON (`.agychats.json`), and readable Markdown digest (`.md`) exports.
+  - Added on-device **Local Snapshots** (`agy_chat_backups/`) for instant point-in-time restore points, plus Android Downloads export, system Share Sheet (`XFile`), file picker restore (`FilePicker`), and clipboard/paste JSON import (including compatibility with single-chat Replay JSON exports).
+  - Added a **Restore Preview Dialog** showing new/updated/copied/skipped counts and per-chat selection with 4 conflict strategies: `Merge (Keep Newer)`, `Skip Existing`, `Import as Copies`, and `Overwrite Existing`.
+
 ## [1.0.57] - 2026-11-27
 
 ### Added
