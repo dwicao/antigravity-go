@@ -162,5 +162,48 @@ void main() {
         'First user is Alice, unknown \$HOME stays, tail Bob.',
       );
     });
+
+    test('systemPromptInstructions stays static for prompt caching while dynamicVarsContextNote tracks vars', () {
+      final store = ToolVariableStore();
+      final before = store.systemPromptInstructions(hasSubagentTool: true);
+      expect(store.dynamicVarsContextNote(), isEmpty);
+
+      store.save(
+        toolName: 'run_command',
+        explicitName: 'rows_1',
+        rawOutput: 'alpha\nbeta\ngamma',
+      );
+      final after = store.systemPromptInstructions(hasSubagentTool: true);
+      expect(after, equals(before));
+      expect(
+        store.dynamicVarsContextNote(),
+        contains(r'$rows_1'),
+      );
+    });
+
+    test('RepoMapBuilder compact mode reduces output size vs standard mode', () {
+      const summary = RepoMapFileSummary(
+        relativePath: 'app/lib/state/chat_state.dart',
+        lineCount: 3200,
+        symbols: [
+          RepoSymbol(
+            kind: 'class',
+            name: 'ChatNotifier',
+            line: 90,
+          ),
+          RepoSymbol(
+            kind: 'fn',
+            name: 'sendPrompt',
+            line: 980,
+            signature: 'sendPrompt(String rawText, {bool force = false})',
+          ),
+        ],
+      );
+      final regular = RepoMapBuilder.renderRepoMap([summary], compact: false);
+      final compact = RepoMapBuilder.renderRepoMap([summary], compact: true);
+      expect(compact.length, lessThan(regular.length));
+      expect(compact, contains('ChatNotifier:90'));
+      expect(compact, contains('sendPrompt:980'));
+    });
   });
 }

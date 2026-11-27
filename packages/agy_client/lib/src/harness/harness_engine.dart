@@ -407,8 +407,12 @@ class HarnessContextMonitor {
     int toolCallCount = 0,
     int changedFileCount = 0,
     String? reasoningEffort,
+    int? customCapTokens,
   }) {
     if (!quotaSaverEnabled) return null;
+    if (customCapTokens != null && customCapTokens > 0) {
+      return math.min((budgetTokens * 0.80).round(), customCapTokens);
+    }
     if (budgetTokens <= minQuotaCompactTokens) {
       return (budgetTokens * 0.80).round();
     }

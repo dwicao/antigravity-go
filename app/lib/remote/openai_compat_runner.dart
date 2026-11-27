@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:agy_client/agy_client.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:http/http.dart' as http;
 
 import '../runtime/runtime_bridge.dart';
@@ -212,6 +214,33 @@ class OpenAiCompatRunner {
               },
             },
           },
+        {
+          'type': 'function',
+          'function': {
+            'name': 'search_files',
+            'description':
+                'Search text/regex pattern across project source files (ignores .git, build, node_modules).',
+            'parameters': {
+              'type': 'object',
+              'properties': {
+                'pattern': {
+                  'type': 'string',
+                  'description': 'Regex or literal pattern to search for',
+                },
+                'path': {
+                  'type': 'string',
+                  'description': 'Optional subdirectory or file path (defaults to workspace root)',
+                },
+                if (includeVariables)
+                  'save_as': {
+                    'type': 'string',
+                    'description': 'Optional variable name to store matches',
+                  },
+              },
+              'required': ['pattern'],
+            },
+          },
+        },
       ];
 
   static Map<String, String> _headers(String? apiKey) => {
@@ -346,6 +375,47 @@ class OpenAiCompatRunner {
     return hasImage ? blocks : prompt;
   }
 
+  @visibleForTesting
+  static List<Map<String, String>> trimHistoryForBudget(
+    List<({String role, String text})> history, {
+    bool quotaSaverEnabled = false,
+    int contextWindowTokens = 128000,
+  }) {
+    if (history.isEmpty) return const [];
+    final nonEmpty = history.where((h) => h.text.trim().isNotEmpty).toList();
+    if (nonEmpty.isEmpty) return const [];
+
+    final maxTurns = nonEmpty.length > 24
+        ? nonEmpty.sublist(nonEmpty.length - 24)
+        : nonEmpty;
+    final defaultBudget = quotaSaverEnabled ? 20000 : 48000;
+    final budgetChars = math.min(
+      defaultBudget,
+      math.max(4000, contextWindowTokens * 2),
+    );
+
+    final reversedOut = <Map<String, String>>[];
+    var usedChars = 0;
+    for (var i = maxTurns.length - 1; i >= 0; i--) {
+      final h = maxTurns[i];
+      final distanceFromEnd = maxTurns.length - 1 - i;
+      final perMsgCap = distanceFromEnd < 2 ? 6000 : 1200;
+      var text = h.text.trim();
+      if (text.length > perMsgCap) {
+        text = '${text.substring(0, perMsgCap)}\n...[trimmed in history]';
+      }
+      if (reversedOut.isNotEmpty && usedChars + text.length > budgetChars) {
+        break;
+      }
+      reversedOut.add({
+        'role': h.role == 'assistant' ? 'assistant' : 'user',
+        'content': text,
+      });
+      usedChars += text.length;
+    }
+    return reversedOut.reversed.toList();
+  }
+
   Stream<AgyChatEvent> runPrompt({
     required OpenAiProviderConfig profile,
     required String? apiKey,
@@ -362,6 +432,7 @@ class OpenAiCompatRunner {
     FutureOr<void> Function(String fp)? onTrustFirstKey,
     ToolVariableStore? variableStore,
     bool toolVariablesEnabled = true,
+    bool quotaSaverEnabled = false,
     bool allowSubagentDelegation = true,
     http.Client? httpClient,
     Future<({bool ok, String output})> Function(
@@ -377,7 +448,10 @@ class OpenAiCompatRunner {
     final client = httpClient ?? http.Client();
     ctrl.client = ownsHttpClient ? client : null;
     final varStore = variableStore ??
-        ToolVariableStore(enabled: toolVariablesEnabled);
+        ToolVariableStore(
+          enabled: toolVariablesEnabled,
+          inlineThresholdChars: quotaSaverEnabled ? 900 : 1200,
+        );
     varStore.enabled = toolVariablesEnabled;
 
     try {
@@ -385,11 +459,13 @@ class OpenAiCompatRunner {
       final sysParts = <String>[
         'You are Antigravity running inside Antigravity Go.',
         if (ws.isNotEmpty) 'Active workspace directory: $ws',
+        if (quotaSaverEnabled)
+          'Be concise; omit filler and redundant code restatements.',
         if (profile.supportsTools)
-          'You have tools (`run_command`, `read_file`, `write_file`, `list_dir`'
+          'You have tools (`run_command`, `read_file`, `write_file`, `list_dir`, `search_files`'
               '${toolVariablesEnabled ? ', `inspect_var`' : ''}'
               '${allowSubagentDelegation ? ', `delegate_subagent`' : ''}'
-              ') to inspect and edit files.',
+              ') to inspect, search, and edit files.',
         if (profile.supportsTools && toolVariablesEnabled)
           varStore.systemPromptInstructions(
             hasSubagentTool: allowSubagentDelegation,
@@ -400,19 +476,19 @@ class OpenAiCompatRunner {
 
       final messages = <Map<String, dynamic>>[
         {'role': 'system', 'content': sysParts.join('\n')},
+        ...trimHistoryForBudget(
+          history,
+          quotaSaverEnabled: quotaSaverEnabled,
+          contextWindowTokens: profile.contextWindowTokens,
+        ),
       ];
-      final recent = history.length > 24
-          ? history.sublist(history.length - 24)
-          : history;
-      for (final h in recent) {
-        if (h.text.trim().isEmpty) continue;
-        messages.add({
-          'role': h.role == 'assistant' ? 'assistant' : 'user',
-          'content': h.text,
-        });
-      }
+      final varsTail = (profile.supportsTools && toolVariablesEnabled)
+          ? varStore.dynamicVarsContextNote()
+          : '';
+      final promptWithVarsTail =
+          varsTail.isNotEmpty ? '$prompt\n\n$varsTail' : prompt;
       final userContent = await _buildUserContent(
-        prompt: prompt,
+        prompt: promptWithVarsTail,
         attachments: attachments,
         supportsVision: profile.supportsVision,
       );
@@ -425,9 +501,37 @@ class OpenAiCompatRunner {
       var lastCtxTokens = 0;
       final fullResponse = StringBuffer();
       var includeStreamOptions = true;
+      final toolMsgMeta =
+          <({int msgIndex, int round, String? varName, int rawChars})>[];
 
       for (var round = 0; round < _maxToolRounds; round++) {
         if (ctrl.cancelled) break;
+
+        if (round >= 3 && toolMsgMeta.isNotEmpty) {
+          final totalChars = messages.fold<int>(
+            0,
+            (sum, m) => sum + (m['content']?.toString().length ?? 0),
+          );
+          final foldLimit =
+              (profile.isLocalEndpoint || quotaSaverEnabled) ? 20000 : 64000;
+          if (totalChars > foldLimit) {
+            for (final meta in toolMsgMeta) {
+              if (meta.round < round - 2 && meta.rawChars > 360) {
+                final cur = messages[meta.msgIndex]['content']?.toString() ?? '';
+                if (!cur.startsWith('[older tool result collapsed')) {
+                  final refNote = meta.varName != null
+                      ? ' -> stored in \$${meta.varName} (use inspect_var)'
+                      : '';
+                  messages[meta.msgIndex] = {
+                    ...messages[meta.msgIndex],
+                    'content':
+                        '[older tool result collapsed (${meta.rawChars} chars)$refNote]',
+                  };
+                }
+              }
+            }
+          }
+        }
 
         final bodyMap = <String, dynamic>{
           'model': profile.modelId,
@@ -740,12 +844,14 @@ class OpenAiCompatRunner {
           final saveAs = call.displayArgs['save_as']?.toString().trim();
           var messageContent = res.output;
           var displayOutput = res.output;
+          String? savedVarName;
 
           if (toolVariablesEnabled &&
               res.ok &&
               call.name != 'inspect_var' &&
               call.name != 'write_file') {
             final target = (call.resolvedArgs['path'] ??
+                    call.resolvedArgs['pattern'] ??
                     call.resolvedArgs['command'] ??
                     call.resolvedArgs['role'] ??
                     '')
@@ -756,7 +862,12 @@ class OpenAiCompatRunner {
               rawOutput: res.output,
               explicitName: (saveAs != null && saveAs.isNotEmpty) ? saveAs : null,
             );
-            messageContent = varStore.formatToolResponse(entry);
+            savedVarName = entry.name;
+            messageContent = varStore.formatToolResponse(
+              entry,
+              previewHead: quotaSaverEnabled ? 320 : 450,
+              previewTail: quotaSaverEnabled ? 200 : 300,
+            );
             displayOutput =
                 '[var: \$${entry.name} · ${entry.summary}]\n${res.output}';
           } else if (messageContent.length > 24000) {
@@ -774,11 +885,18 @@ class OpenAiCompatRunner {
             durationSeconds: res.durationSeconds,
           );
 
+          final msgIdx = messages.length;
           messages.add({
             'role': 'tool',
             'tool_call_id': call.callId,
             'content': messageContent,
           });
+          toolMsgMeta.add((
+            msgIndex: msgIdx,
+            round: round,
+            varName: savedVarName,
+            rawChars: messageContent.length,
+          ));
         }
       }
 
@@ -835,6 +953,37 @@ class OpenAiCompatRunner {
   }) async {
     try {
       switch (name) {
+        case 'search_files':
+          final pattern = (args['pattern'] ?? '').toString().trim();
+          if (pattern.isEmpty) {
+            return (ok: false, output: 'Empty search pattern');
+          }
+          final rawPath = (args['path'] ?? '').toString().trim();
+          final targetPath = rawPath.isEmpty
+              ? (workspacePath.isEmpty ? '.' : workspacePath)
+              : _resolvePath(rawPath, workspacePath);
+          final qPattern = "'${pattern.replaceAll("'", "'\\''")}'";
+          final qPath = "'${targetPath.replaceAll("'", "'\\''")}'";
+          final grepCmd =
+              'grep -rnI --exclude-dir=.git --exclude-dir=.dart_tool --exclude-dir=build --exclude-dir=node_modules --exclude-dir=.gradle -e $qPattern $qPath 2>/dev/null | head -n 120';
+          final out = sshHost != null
+              ? await SshAgyRunner.instance.runRemoteCommand(
+                  host: sshHost,
+                  command: grepCmd,
+                  cwd: workspacePath,
+                  password: sshPassword,
+                  privateKeyPem: sshPrivateKey,
+                  onTrustFirstKey: onTrustFirstKey,
+                )
+              : await RuntimeBridge.instance.runShellCommand(
+                  command: grepCmd,
+                  cwd: workspacePath.isEmpty ? null : workspacePath,
+                );
+          return (
+            ok: true,
+            output: out.trim().isEmpty ? '(no matches for /$pattern/)' : out.trim(),
+          );
+
         case 'inspect_var':
           final varName = (args['name'] ?? '').toString().trim();
           if (varName.isEmpty) {

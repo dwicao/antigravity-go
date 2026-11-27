@@ -538,6 +538,44 @@ class _HarnessPageState extends ConsumerState<HarnessPage> {
                   onChanged: (v) =>
                       ref.read(harnessProvider.notifier).setAutoCompact(v),
                 ),
+                if (harness.autoCompactEnabled && harness.quotaSaverEnabled) ...[
+                  const Divider(height: 1),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Quota Saver Auto-Compact Cap',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: [
+                            for (final opt in const [
+                              (tokens: 0, label: 'Auto (256K–800K)'),
+                              (tokens: 160000, label: '160K Balanced'),
+                              (tokens: 128000, label: '128K Aggressive'),
+                              (tokens: 96000, label: '96K Ultra'),
+                            ])
+                              ChoiceChip(
+                                visualDensity: VisualDensity.compact,
+                                label: Text(opt.label),
+                                selected: harness.quotaCompactCapTokens == opt.tokens,
+                                onSelected: (_) => ref
+                                    .read(harnessProvider.notifier)
+                                    .setQuotaCompactCap(opt.tokens),
+                              ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
                 const Divider(height: 1),
                 SwitchListTile.adaptive(
                   dense: true,

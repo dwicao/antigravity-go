@@ -285,21 +285,38 @@ internal class AcpFsTerminalHandler(
                 val maxLines = if (limit > 0) limit else Int.MAX_VALUE
                 val selected = ArrayList<String>(limit.coerceIn(16, 512))
                 var totalChars = 0
+                var truncatedPartial = false
                 file.bufferedReader(Charsets.UTF_8).use { br ->
                     var lineIdx = 0
                     while (true) {
                         val l = br.readLine() ?: break
                         if (lineIdx >= from) {
-                            selected.add(l)
+                            if (totalChars + l.length + 1 > 24_000 && selected.isNotEmpty()) {
+                                truncatedPartial = true
+                                break
+                            }
+                            selected.add(
+                                if (l.length > 24_000) {
+                                    truncatedPartial = true
+                                    l.take(24_000)
+                                } else {
+                                    l
+                                },
+                            )
                             totalChars += l.length + 1
-                            if (selected.size >= maxLines || totalChars >= 120_000) {
+                            if (selected.size >= maxLines || totalChars >= 24_000) {
                                 break
                             }
                         }
                         lineIdx++
                     }
                 }
-                return selected.joinToString("\n")
+                val joined = selected.joinToString("\n")
+                return if (truncatedPartial) {
+                    "$joined\n... [TRUNCATED partial read at 24,000 chars — narrow line/limit range]"
+                } else {
+                    joined
+                }
             }
 
             val fileBytes = file.length()

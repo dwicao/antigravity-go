@@ -356,4 +356,124 @@ void main() {
     expect(resultEvt?.response, 'Saved count: 150, first=u_0.');
     expect(store.savedOutputChars, greaterThan(5000));
   });
+
+  test('OpenAiCompatRunner.trimHistoryForBudget caps older turns and total chars', () {
+    final longOld = 'X' * 5000;
+    final longRecent = 'Y' * 8000;
+    final history = [
+      (role: 'user', text: 'first prompt $longOld'),
+      (role: 'assistant', text: 'first reply $longOld'),
+      (role: 'user', text: 'latest prompt'),
+      (role: 'assistant', text: 'latest reply $longRecent'),
+    ];
+    final trimmed = OpenAiCompatRunner.trimHistoryForBudget(
+      history,
+      quotaSaverEnabled: true,
+      contextWindowTokens: 128000,
+    );
+    expect(trimmed, isNotEmpty);
+    final total = trimmed.fold<int>(0, (s, m) => s + m['content']!.length);
+    expect(total, lessThanOrEqualTo(20000));
+    expect(trimmed.first['content'], contains('[trimmed in history]'));
+    expect(trimmed.last['content']!.length, lessThanOrEqualTo(6050));
+  });
+
+  test('OpenAiCompatRunner preserves static system prompt, injects tail vars note, and folds older tool outputs', () async {
+    final sysPromptsSeen = <String>[];
+    final userMsgsSeen = <String>[];
+    String? fourthRoundFirstToolMsg;
+    var reqCount = 0;
+
+    final fakeClient = _QueuedHttpClient((req, body) async {
+      final decoded = jsonDecode(body) as Map<String, dynamic>;
+      final msgs = (decoded['messages'] as List).cast<Map<String, dynamic>>();
+      sysPromptsSeen.add(msgs.first['content']?.toString() ?? '');
+      userMsgsSeen.add(
+        msgs.firstWhere((m) => m['role'] == 'user')['content']?.toString() ?? '',
+      );
+      reqCount++;
+      if (reqCount <= 3) {
+        return _sseResponse([
+          jsonEncode({
+            'choices': [
+              {
+                'delta': {
+                  'tool_calls': [
+                    {
+                      'index': 0,
+                      'id': 'c_$reqCount',
+                      'type': 'function',
+                      'function': {
+                        'name': 'read_file',
+                        'arguments': jsonEncode({
+                          'path': 'file_$reqCount.txt',
+                          'save_as': 'f_$reqCount',
+                        }),
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+          jsonEncode({
+            'choices': [
+              {'delta': {}, 'finish_reason': 'tool_calls'},
+            ],
+          }),
+          '[DONE]',
+        ]);
+      }
+      if (reqCount == 4) {
+        final toolMsgs = msgs.where((m) => m['role'] == 'tool').toList();
+        fourthRoundFirstToolMsg = toolMsgs.first['content']?.toString();
+      }
+      return _sseResponse([
+        jsonEncode({
+          'choices': [
+            {
+              'delta': {'content': 'Done'},
+              'finish_reason': 'stop',
+            },
+          ],
+        }),
+        '[DONE]',
+      ]);
+    });
+
+    final store = ToolVariableStore();
+    store.save(
+      toolName: 'run_command',
+      explicitName: 'seed_var',
+      rawOutput: 'seed data',
+    );
+    final hugeChunk = List.generate(300, (i) => 'row_$i=val_$i').join('\n');
+
+    await OpenAiCompatRunner.instance
+        .runPrompt(
+          profile: const OpenAiProviderConfig(
+            id: 'local',
+            name: 'Local',
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            modelId: 'qwen',
+          ),
+          apiKey: '',
+          turnId: 'turn-fold',
+          prompt: 'Inspect multiple files ${'P' * 18500}',
+          workspacePath: '/tmp',
+          dangerouslySkipPermissions: true,
+          quotaSaverEnabled: true,
+          variableStore: store,
+          httpClient: fakeClient,
+          toolExecutorOverride: (name, args) async {
+            return (ok: true, output: 'X' * 9000 + hugeChunk);
+          },
+        )
+        .drain<void>();
+
+    expect(sysPromptsSeen.toSet(), hasLength(1));
+    expect(sysPromptsSeen.first, isNot(contains('seed_var')));
+    expect(userMsgsSeen.first, contains(r'$seed_var'));
+    expect(fourthRoundFirstToolMsg, startsWith('[older tool result collapsed'));
+  });
 }

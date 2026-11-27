@@ -28,6 +28,7 @@ class HarnessState {
     this.effortProfile = EffortCategoryProfile.defaults,
     this.repoMapEnabled = true,
     this.toolVariablesEnabled = true,
+    this.quotaCompactCapTokens = 0,
     this.initialized = false,
     this.loading = false,
     this.workspacePath = '',
@@ -52,6 +53,7 @@ class HarnessState {
   final EffortCategoryProfile effortProfile;
   final bool repoMapEnabled;
   final bool toolVariablesEnabled;
+  final int quotaCompactCapTokens;
   final bool initialized;
   final bool loading;
   final String workspacePath;
@@ -95,6 +97,7 @@ class HarnessState {
     EffortCategoryProfile? effortProfile,
     bool? repoMapEnabled,
     bool? toolVariablesEnabled,
+    int? quotaCompactCapTokens,
     bool? initialized,
     bool? loading,
     String? workspacePath,
@@ -120,6 +123,8 @@ class HarnessState {
       effortProfile: effortProfile ?? this.effortProfile,
       repoMapEnabled: repoMapEnabled ?? this.repoMapEnabled,
       toolVariablesEnabled: toolVariablesEnabled ?? this.toolVariablesEnabled,
+      quotaCompactCapTokens:
+          quotaCompactCapTokens ?? this.quotaCompactCapTokens,
       initialized: initialized ?? this.initialized,
       loading: loading ?? this.loading,
       workspacePath: workspacePath ?? this.workspacePath,
@@ -166,6 +171,8 @@ final contextBudgetProvider = Provider<HarnessContextSnapshot>((ref) {
       ref.watch(settingsProvider.select((s) => s.reasoningEffort));
   final quotaSaver =
       ref.watch(harnessProvider.select((h) => h.quotaSaverEnabled));
+  final customQuotaCap =
+      ref.watch(harnessProvider.select((h) => h.quotaCompactCapTokens));
   final activeCustom = ref.watch(activeCustomProviderProvider);
   final lastCompactIdx = messages.lastIndexWhere((m) => m.isCompactionSummary);
   final activeMessages =
@@ -203,6 +210,7 @@ final contextBudgetProvider = Provider<HarnessContextSnapshot>((ref) {
     toolCallCount: toolCallCount,
     changedFileCount: changedFilePaths.length,
     reasoningEffort: reasoningEffort,
+    customCapTokens: customQuotaCap > 0 ? customQuotaCap : null,
   );
   final monitor = HarnessContextMonitor(
     maxCompactTokens: adaptiveCompactCap,
@@ -309,6 +317,7 @@ class HarnessNotifier extends Notifier<HarnessState> {
   static const _kEffortProfile = 'agy_harness_effort_profile';
   static const _kRepoMap = 'agy_harness_repo_map';
   static const _kToolVariables = 'agy_harness_tool_variables';
+  static const _kQuotaCompactCap = 'agy_harness_quota_compact_cap';
   static const _kHooksJson = 'agy_harness_lifecycle_hooks';
   static const _kCustomVerify = 'agy_harness_custom_verify';
 
@@ -328,6 +337,7 @@ class HarnessNotifier extends Notifier<HarnessState> {
               refreshRepoMap(
                 maxTokens: state.quotaSaverEnabled ? 600 : 1000,
                 maxFiles: state.quotaSaverEnabled ? 80 : 120,
+                compact: state.quotaSaverEnabled,
               ),
             );
           }
@@ -344,6 +354,7 @@ class HarnessNotifier extends Notifier<HarnessState> {
               refreshRepoMap(
                 maxTokens: state.quotaSaverEnabled ? 600 : 1000,
                 maxFiles: state.quotaSaverEnabled ? 80 : 120,
+                compact: state.quotaSaverEnabled,
               ),
             );
           }
@@ -417,6 +428,7 @@ class HarnessNotifier extends Notifier<HarnessState> {
         effortProfile: effortProfile,
         repoMapEnabled: prefs.getBool(_kRepoMap) ?? true,
         toolVariablesEnabled: prefs.getBool(_kToolVariables) ?? true,
+        quotaCompactCapTokens: prefs.getInt(_kQuotaCompactCap) ?? 0,
         customVerifyCommand: prefs.getString(_kCustomVerify),
         hooksConfig: hooks,
       );
@@ -507,6 +519,12 @@ class HarnessNotifier extends Notifier<HarnessState> {
     await prefs.setBool(_kToolVariables, value);
   }
 
+  Future<void> setQuotaCompactCap(int tokens) async {
+    state = state.copyWith(quotaCompactCapTokens: tokens);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_kQuotaCompactCap, tokens);
+  }
+
   Future<void> toggleHookRule(String ruleId, bool enabled) async {
     final nextRules = state.hooksConfig.rules
         .map((r) => r.id == ruleId ? r.copyWith(enabled: enabled) : r)
@@ -535,13 +553,18 @@ class HarnessNotifier extends Notifier<HarnessState> {
     await prefs.setString(_kHooksJson, encoded);
   }
 
-  Future<String> refreshRepoMap({int maxTokens = 1400, int maxFiles = 120}) async {
+  Future<String> refreshRepoMap({
+    int maxTokens = 1400,
+    int maxFiles = 120,
+    bool compact = false,
+  }) async {
     final cwd = _activeWorkspace();
     if (cwd.isEmpty) return '';
     final mapText = await RepoMapBuilder.buildFromDirectory(
       cwd,
       maxTokens: maxTokens,
       maxFiles: maxFiles,
+      compact: compact,
     );
     if (ref.mounted) {
       state = state.copyWith(repoMapPreview: mapText);

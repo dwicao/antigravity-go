@@ -379,6 +379,15 @@ void main() {
         ),
         800000,
       );
+      expect(
+        HarnessContextMonitor.resolveAdaptiveCompactTokens(
+          quotaSaverEnabled: true,
+          budgetTokens: 1000000,
+          changedFileCount: 5,
+          customCapTokens: 128000,
+        ),
+        128000,
+      );
     });
 
     test('adapts thinking effort across low/medium/high/extra/max while obeying selected model',

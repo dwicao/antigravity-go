@@ -2,6 +2,15 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.62] - 2026-11-27
+
+### Improved & Optimized
+- **Prompt Cache Preservation & Deeper Token Savings Across ACP and `/v1` (`ToolVariableStore`, `OpenAiCompatRunner`, `SessionVariableStore`, `RepoMapBuilder`, `HarnessPage`):**
+  - Made `<tool_variables>` system instructions **100% static** across turns (moving dynamic `Active session vars` into `<tool_variables_active>` at the tail of the latest user turn) so LLM prompt/KV-cache prefixes stay valid across consecutive turns, and skipped `<tool_variables>` on trivial chat/ack turns.
+  - Added character-budget history trimming (`OpenAiCompatRunner.trimHistoryForBudget`), older-round `role: 'tool'` output collapsing during deep multi-round `/v1` loops, concise Quota Saver directive, conditional/capped `/v1` system customizations, and first-turn `<repo_map>` injection + native `search_files` tool (`grep`) for `/v1` providers.
+  - Reduced native `AcpFsTerminalHandler.readBoundedFileContent` partial line-range cap from `120,000` to `24,000` chars (~6K tokens max) and synced compact `SessionVariableStore` preview sizes (`600 + 400` chars) with **Quota Saver**.
+  - Added `compact` mode to `RepoMapBuilder` (~40% fewer tokens per symbol) and a configurable **Quota Saver Auto-Compact Cap** selector (`Auto 256K–800K`, `160K Balanced`, `128K Aggressive`, `96K Ultra`) on `HarnessPage`.
+
 ## [1.0.61] - 2026-11-27
 
 ### Added

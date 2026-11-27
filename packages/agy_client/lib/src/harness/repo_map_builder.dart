@@ -16,6 +16,8 @@ class RepoSymbol {
 
   String formatCompact() =>
       signature.isEmpty ? '$kind $name (L$line)' : '$kind $signature (L$line)';
+
+  String formatUltraCompact() => '$name:$line';
 }
 
 /// Summary of extracted symbols for a single source file.
@@ -279,6 +281,7 @@ class RepoMapBuilder {
     List<RepoMapFileSummary> summaries, {
     int maxTokens = 1600,
     String? rootLabel,
+    bool compact = false,
   }) {
     if (summaries.isEmpty) return '';
     final maxChars = maxTokens * 4;
@@ -290,14 +293,21 @@ class RepoMapBuilder {
 
     var includedFiles = 0;
     for (final file in summaries) {
-      final entryBuf = StringBuffer('${file.relativePath} (${file.lineCount}L)');
+      final entryBuf = compact
+          ? StringBuffer('${file.relativePath}(${file.lineCount}L)')
+          : StringBuffer('${file.relativePath} (${file.lineCount}L)');
       if (file.symbols.isNotEmpty) {
         entryBuf.write(': ');
         entryBuf.write(
-          file.symbols.take(12).map((s) => s.formatCompact()).join(' | '),
+          file.symbols
+              .take(12)
+              .map((s) => compact ? s.formatUltraCompact() : s.formatCompact())
+              .join(compact ? ',' : ' | '),
         );
         if (file.symbols.length > 12) {
-          entryBuf.write(' | +${file.symbols.length - 12} more');
+          entryBuf.write(compact
+              ? ',+${file.symbols.length - 12}'
+              : ' | +${file.symbols.length - 12} more');
         }
       }
       final line = entryBuf.toString();
@@ -332,8 +342,9 @@ class RepoMapBuilder {
     int maxTokens = 1600,
     int maxFiles = 120,
     bool useCache = true,
+    bool compact = false,
   }) async {
-    final cacheKey = '$rootPath|$maxTokens|$maxFiles';
+    final cacheKey = '$rootPath|$maxTokens|$maxFiles|$compact';
     if (useCache) {
       final cached = _dirCache[cacheKey];
       if (cached != null &&
@@ -406,6 +417,7 @@ class RepoMapBuilder {
       summaries,
       maxTokens: maxTokens,
       rootLabel: root.path.split(Platform.pathSeparator).last,
+      compact: compact,
     );
     if (useCache) {
       if (_dirCache.length >= 16) {

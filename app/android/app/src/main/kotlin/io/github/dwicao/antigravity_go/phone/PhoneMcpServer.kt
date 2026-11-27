@@ -887,11 +887,7 @@ class PhoneMcpServer(
                                     explicitName = rawArgs.optString("save_as").takeIf { it.isNotBlank() },
                                 )
                                 if (rawText.length > 1_200) {
-                                    SessionVariableStore.shared.formatCompactHandle(
-                                        entry = entry,
-                                        headChars = 1_500,
-                                        tailChars = 800,
-                                    )
+                                    SessionVariableStore.shared.formatCompactHandle(entry = entry)
                                 } else {
                                     rawText
                                 }

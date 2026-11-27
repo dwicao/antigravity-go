@@ -33,6 +33,9 @@ class SessionVariableStore(
         @Volatile
         var enabled: Boolean = true
 
+        @Volatile
+        var compactPreviewMode: Boolean = true
+
         val shared = SessionVariableStore()
 
         private val VALID_NAME_RE = Regex("""^[A-Za-z_][A-Za-z0-9_]*$""")
@@ -190,15 +193,17 @@ class SessionVariableStore(
     fun formatCompactHandle(
         entry: Entry,
         thresholdChars: Int = inlineThresholdChars,
-        headChars: Int = 1_200,
-        tailChars: Int = 800,
+        headChars: Int = -1,
+        tailChars: Int = -1,
         offloadedPath: String? = null,
     ): String {
         if (!enabled || entry.charCount <= thresholdChars) {
             return entry.rawValue
         }
-        val head = entry.rawValue.substring(0, headChars.coerceAtMost(entry.rawValue.length))
-        val tailStart = (entry.rawValue.length - tailChars).coerceAtLeast(head.length)
+        val effHead = if (headChars >= 0) headChars else (if (compactPreviewMode) 600 else 1_200)
+        val effTail = if (tailChars >= 0) tailChars else (if (compactPreviewMode) 400 else 800)
+        val head = entry.rawValue.substring(0, effHead.coerceAtMost(entry.rawValue.length))
+        val tailStart = (entry.rawValue.length - effTail).coerceAtLeast(head.length)
         val tail = entry.rawValue.substring(tailStart)
         val omitted = (tailStart - head.length).coerceAtLeast(0)
         return buildString {

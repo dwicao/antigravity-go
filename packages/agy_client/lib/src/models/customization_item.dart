@@ -250,6 +250,7 @@ class AgentCustomizationHelper {
   static String buildOpenAiSystemCustomizations(
     List<CustomizationItem> items, {
     int maxChars = 14000,
+    bool includeSkillsCatalog = true,
   }) {
     final buf = StringBuffer();
     var remaining = maxChars;
@@ -272,7 +273,7 @@ class AgentCustomizationHelper {
     final skills = items
         .where((i) => i.kind == CustomizationKind.skill && i.enabled)
         .toList();
-    if (skills.isNotEmpty && remaining > 128) {
+    if (includeSkillsCatalog && skills.isNotEmpty && remaining > 128) {
       buf.writeln('### Available Skills (SKILL.md)');
       buf.writeln(
         'If a skill matches the user request, read its `SKILL.md` via `read_file` before proceeding:',

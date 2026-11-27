@@ -41,4 +41,21 @@ class SessionVariableStoreTest {
         assertEquals("big_doc", resolvedArgs.getString("save_as"))
         assertEquals(huge, resolvedArgs.getString("content"))
     }
+
+    @Test
+    fun compactPreviewModeHalvesPreviewLengthWhenEnabled() {
+        val store = SessionVariableStore(inlineThresholdChars = 120)
+        val payload = "A".repeat(4_000)
+        val entry = store.save(toolName = "terminal", rawOutput = payload, explicitName = "big_out")
+
+        SessionVariableStore.compactPreviewMode = true
+        val compact = store.formatCompactHandle(entry)
+
+        SessionVariableStore.compactPreviewMode = false
+        val regular = store.formatCompactHandle(entry)
+
+        SessionVariableStore.compactPreviewMode = true
+        assertTrue(compact.length < regular.length)
+        assertTrue(compact.length < 1_500)
+    }
 }

@@ -537,19 +537,30 @@ $tail''';
     return _ParsedExpr(root: root, steps: steps);
   }
 
-  /// Concise prompt instructions teaching models to reuse `$v_*` variables
-  /// across tool arguments, subagents, and final responses.
+  /// Concise **static** prompt instructions teaching models to reuse `$v_*`
+  /// variables across tool arguments, subagents, and final responses.
+  ///
+  /// Kept invariant across turns so LLM prompt / KV-cache prefixes stay valid.
   String systemPromptInstructions({bool hasSubagentTool = true}) {
     final subagentHint = hasSubagentTool
         ? '\n- Pass large inputs to parallel `delegate_subagent` calls by reference (e.g. `context: "\$v_read_1"`).'
         : '';
-    final activeList = _insertionOrder.isEmpty
-        ? ''
-        : '\nActive variables in this thread: ${entries.reversed.take(8).map((e) => '\$${e.name} (${e.summary})').join('; ')}';
     return '''[TOOL VARIABLES (Pass-by-Reference)]
 Large tool outputs are automatically saved as variables (`\$v_read_*`, `\$v_cmd_*`, `\$v_last`).
 - NEVER re-type or copy-paste thousands of lines/rows manually when a `\$v_*` variable already holds them.
-- Reference `\$v_...`, `\${v_...}`, `\$v_....field`, `\$v_...[0].id`, or `\$v_...[1:50]` directly in `write_file(content: "\$v_cmd_1")`, `run_command(stdin: "\$v_cmd_1")`, `inspect_var`, or your final user reply (the orchestrator resolves them live).$subagentHint$activeList''';
+- Reference `\$v_...`, `\${v_...}`, `\$v_....field`, `\$v_...[0].id`, or `\$v_...[1:50]` directly in `write_file(content: "\$v_cmd_1")`, `run_command(stdin: "\$v_cmd_1")`, `inspect_var`, or your final user reply (the orchestrator resolves them live).$subagentHint''';
+  }
+
+  /// Dynamic tail note listing active variables in this session (`\$v_*`).
+  /// Intended to be appended at the end of the latest user turn (never inside
+  /// the static system prompt) so prefix caching stays intact.
+  String dynamicVarsContextNote({int maxItems = 8}) {
+    if (!enabled || _insertionOrder.isEmpty) return '';
+    final list = entries.reversed
+        .take(maxItems)
+        .map((e) => '\$${e.name} (${e.summary})')
+        .join('; ');
+    return '<tool_variables_active>Active session vars: $list. Reference \$v_* directly or use inspect_var/var_inspect instead of re-reading or re-typing.</tool_variables_active>';
   }
 }
 

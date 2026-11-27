@@ -1096,7 +1096,8 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         : (
             modelId: activeCustom.modelId,
             effort: '',
-            skipRepoMap: false,
+            skipRepoMap: attachments.isEmpty &&
+                HarnessTurnRouter.shouldSkipRepoMap(prompt),
             downgraded: false,
           );
     final activeModelId = turnRoute.modelId;
@@ -1261,51 +1262,6 @@ class ChatNotifier extends Notifier<ChatThreadState> {
 
     final isNewRemoteSession = session.remoteConversationId == null ||
         session.remoteConversationId!.isEmpty;
-    // Native `agy` already reads GEMINI.md / AGENTS.md from disk; only inject
-    // `<agents_instructions>` when Quota Saver is off or on `/v1` OpenAI providers.
-    final agentsContext = (!runtime.status.safeMode &&
-            activeCustom == null &&
-            !harness.quotaSaverEnabled &&
-            isNewRemoteSession)
-        ? AgentCustomizationHelper.buildAgentsContextBlock(customizations)
-        : '';
-    var repoMapContext = '';
-    if (!runtime.status.safeMode &&
-        activeCustom == null &&
-        sshHost == null &&
-        isNewRemoteSession &&
-        harness.repoMapEnabled &&
-        !turnRoute.skipRepoMap &&
-        effectiveWorkspace.isNotEmpty) {
-      try {
-        repoMapContext = await RepoMapBuilder.buildFromDirectory(
-          effectiveWorkspace,
-          maxTokens: harness.quotaSaverEnabled ? 600 : 1000,
-          maxFiles: harness.quotaSaverEnabled ? 80 : 120,
-        );
-      } catch (_) {}
-      if (!ref.mounted || _sessionTurnTokens[session.id] != streamToken) return;
-    }
-    final contextPrefix = [
-      agentsContext,
-      repoMapContext,
-      if (!runtime.status.safeMode &&
-          !isBuiltInSlash &&
-          activeCustom == null &&
-          harness.toolVariablesEnabled &&
-          (isNewRemoteSession || varStore.length > 0))
-        isNewRemoteSession
-            ? '<tool_variables>\n${varStore.systemPromptInstructions(hasSubagentTool: false)}\n</tool_variables>'
-            : '<tool_variables>Active session vars: ${varStore.entries.reversed.take(8).map((e) => '\$${e.name} (${e.summary})').join('; ')}. Reference \$v_* in write_file/MCP args/reply instead of re-typing.</tool_variables>',
-    ].where((s) => s.trim().isNotEmpty).join('\n\n');
-    final promptWithAgents = contextPrefix.isNotEmpty
-        ? '$contextPrefix\n\n$promptWithSkill'
-        : promptWithSkill;
-
-    final requestPrompt = carryCompactContext
-        ? '[Compacted Session Context]\n${priorMsgs[prevCompactIdx].text.trim()}\n\n[User Request]\n$promptWithAgents'
-        : promptWithAgents;
-
     // Hybrid Cloud + Local LLM Offline Fallback:
     final customState = ref.read(customProvidersProvider);
     final policyState = ref.read(devicePolicyProvider);
@@ -1317,15 +1273,73 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         : null;
     final effectiveOpenAiProfile = activeCustom ?? hybridFallbackProfile;
 
+    final isFirstOpenAiTurn = effectiveOpenAiProfile != null &&
+        priorMsgs.where((m) => !m.isCompactionSummary).isEmpty;
+    // Native `agy` already reads GEMINI.md / AGENTS.md from disk; only inject
+    // `<agents_instructions>` when Quota Saver is off on a new ACP session.
+    final agentsContext = (!runtime.status.safeMode &&
+            effectiveOpenAiProfile == null &&
+            !harness.quotaSaverEnabled &&
+            isNewRemoteSession)
+        ? AgentCustomizationHelper.buildAgentsContextBlock(customizations)
+        : '';
+    var repoMapContext = '';
+    if (!runtime.status.safeMode &&
+        sshHost == null &&
+        (effectiveOpenAiProfile != null ? isFirstOpenAiTurn : isNewRemoteSession) &&
+        harness.repoMapEnabled &&
+        !turnRoute.skipRepoMap &&
+        effectiveWorkspace.isNotEmpty) {
+      try {
+        repoMapContext = await RepoMapBuilder.buildFromDirectory(
+          effectiveWorkspace,
+          maxTokens: harness.quotaSaverEnabled ? 600 : 1000,
+          maxFiles: harness.quotaSaverEnabled ? 80 : 120,
+          compact: harness.quotaSaverEnabled,
+        );
+      } catch (_) {}
+      if (!ref.mounted || _sessionTurnTokens[session.id] != streamToken) return;
+    }
+    final contextPrefix = [
+      agentsContext,
+      repoMapContext,
+      if (!runtime.status.safeMode &&
+          !isBuiltInSlash &&
+          effectiveOpenAiProfile == null &&
+          harness.toolVariablesEnabled &&
+          isNewRemoteSession &&
+          !turnRoute.skipRepoMap)
+        '<tool_variables>\n${varStore.systemPromptInstructions(hasSubagentTool: false)}\n</tool_variables>',
+    ].where((s) => s.trim().isNotEmpty).join('\n\n');
+    final acpVarsTail = (!runtime.status.safeMode &&
+            !isBuiltInSlash &&
+            effectiveOpenAiProfile == null &&
+            harness.toolVariablesEnabled &&
+            varStore.length > 0)
+        ? varStore.dynamicVarsContextNote()
+        : '';
+    final promptWithVarsTail = acpVarsTail.isNotEmpty
+        ? '$promptWithSkill\n\n$acpVarsTail'
+        : promptWithSkill;
+    final promptWithAgents = contextPrefix.isNotEmpty
+        ? '$contextPrefix\n\n$promptWithVarsTail'
+        : promptWithVarsTail;
+
+    final requestPrompt = carryCompactContext
+        ? '[Compacted Session Context]\n${priorMsgs[prevCompactIdx].text.trim()}\n\n[User Request]\n$promptWithAgents'
+        : promptWithAgents;
+
     final Stream<AgyChatEvent> stream;
     AgyPromptRequest? localRequest;
     try {
       if (effectiveOpenAiProfile != null) {
-        final systemCustomizations = runtime.status.safeMode
-            ? ''
-            : AgentCustomizationHelper.buildOpenAiSystemCustomizations(
-                customizations,
-              );
+        final systemCustomizations =
+            (runtime.status.safeMode || turnRoute.skipRepoMap)
+                ? ''
+                : AgentCustomizationHelper.buildOpenAiSystemCustomizations(
+                    customizations,
+                    maxChars: harness.quotaSaverEnabled ? 8000 : 14000,
+                  );
         final customKey = await ref
             .read(customProvidersProvider.notifier)
             .readApiKey(effectiveOpenAiProfile.id);
@@ -1394,6 +1408,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
           onTrustFirstKey: sshHost == null ? null : saveFp,
           variableStore: varStore,
           toolVariablesEnabled: harness.toolVariablesEnabled,
+          quotaSaverEnabled: harness.quotaSaverEnabled,
         );
       } else {
         rt.isCustomOpenAi = false;
