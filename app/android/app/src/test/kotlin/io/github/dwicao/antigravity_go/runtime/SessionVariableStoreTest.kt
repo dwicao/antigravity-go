@@ -20,7 +20,7 @@ class SessionVariableStoreTest {
         assertEquals("W1", store.resolveText("\$visits.cohort"))
         assertEquals("u_2", store.resolveText("\${visits.users[1].id}"))
         assertEquals("2", store.resolveText("\$visits.users.length"))
-        assertEquals("\$HOME/\$visits.cohort", store.resolveText("\$HOME/\$visits.cohort"))
+        assertEquals("\$HOME/W1", store.resolveText("\$HOME/\$visits.cohort"))
         assertEquals("literal=\$visits", store.resolveText("literal=\\\$visits"))
     }
 

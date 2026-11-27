@@ -121,7 +121,7 @@ void main() {
       );
       expect(
         store.inspect(r'$big_log', startLine: 2, limit: 2),
-        'ERROR timeout here\nERROR auth failed',
+        'ERROR timeout here\nok 3',
       );
     });
 

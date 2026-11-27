@@ -138,7 +138,8 @@ void main() {
 
     final reloaded = ProviderContainer();
     addTearDown(reloaded.dispose);
-    await Future<void>.delayed(const Duration(milliseconds: 20));
+    reloaded.read(harnessProvider);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
     expect(reloaded.read(harnessProvider).toolVariablesEnabled, isFalse);
   });
 
