@@ -111,10 +111,7 @@ class ModelPricingCatalog {
     final thinkCostRate =
         tier.thinkingPerMillionUsd ?? tier.outputPerMillionUsd;
 
-    final uncachedInput = (usage.inputTokens - usage.cacheReadTokens).clamp(
-      0,
-      usage.inputTokens,
-    );
+    final uncachedInput = usage.inputTokens.clamp(0, usage.inputTokens);
     final inputUsd = (uncachedInput / 1000000.0) * tier.inputPerMillionUsd;
     final cacheUsd = (usage.cacheReadTokens / 1000000.0) * cacheCostRate;
     final outputUsd = (usage.outputTokens / 1000000.0) * tier.outputPerMillionUsd;

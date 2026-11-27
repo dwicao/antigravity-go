@@ -78,22 +78,58 @@ class TokenUsage {
       'completion_tokens',
       'completionTokens',
     ]);
-    final thinking = readAny([
+    final thinkingDirect = readAny([
       'thinking_tokens',
       'thinkingTokens',
+      'thought_tokens',
+      'thoughtTokens',
       'thoughts_token_count',
       'thoughtsTokenCount',
       'reasoning_tokens',
       'reasoningTokens',
     ]);
-    final cacheRead = readAny([
+    final thinking = thinkingDirect > 0
+        ? thinkingDirect
+        : _readNestedUsageInt(json, const [
+            'completion_tokens_details',
+            'completionTokensDetails',
+            'output_tokens_details',
+            'outputTokensDetails',
+          ], const [
+            'reasoning_tokens',
+            'reasoningTokens',
+            'thinking_tokens',
+            'thinkingTokens',
+            'thought_tokens',
+            'thoughtTokens',
+          ]);
+    final cacheReadDirect = readAny([
       'cache_read_tokens',
       'cacheReadTokens',
+      'cached_read_tokens',
+      'cachedReadTokens',
       'cache_read_input_tokens',
       'cacheReadInputTokens',
       'cached_content_token_count',
       'cachedContentTokenCount',
+      'cached_tokens',
+      'cachedTokens',
     ]);
+    final cacheRead = cacheReadDirect > 0
+        ? cacheReadDirect
+        : _readNestedUsageInt(json, const [
+            'prompt_tokens_details',
+            'promptTokensDetails',
+            'input_tokens_details',
+            'inputTokensDetails',
+          ], const [
+            'cached_tokens',
+            'cachedTokens',
+            'cache_read_tokens',
+            'cacheReadTokens',
+            'cached_read_tokens',
+            'cachedReadTokens',
+          ]);
     final explicitTotal = readAny([
       'total_tokens',
       'totalTokens',
@@ -156,6 +192,26 @@ class TokenUsage {
       contextTokens:
           other.contextTokens > 0 ? other.contextTokens : contextTokens,
     );
+  }
+
+  static int _readNestedUsageInt(
+    Map<String, dynamic> json,
+    List<String> containerKeys,
+    List<String> fieldKeys,
+  ) {
+    for (final ck in containerKeys) {
+      final raw = json[ck];
+      if (raw is! Map) continue;
+      for (final fk in fieldKeys) {
+        final v = raw[fk];
+        if (v is num) return v.toInt();
+        if (v is String) {
+          final parsed = int.tryParse(v);
+          if (parsed != null) return parsed;
+        }
+      }
+    }
+    return 0;
   }
 }
 

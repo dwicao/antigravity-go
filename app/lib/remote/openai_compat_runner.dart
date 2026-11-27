@@ -542,13 +542,15 @@ class OpenAiCompatRunner {
       if (ctrl.cancelled) return;
       final durationSec =
           DateTime.now().difference(startedAt).inMilliseconds / 1000.0;
+      final uncachedIn =
+          totalCache > 0 && totalIn >= totalCache ? totalIn - totalCache : totalIn;
       yield AgyTurnResultEvent(
         conversationId: '',
         status: 'SUCCESS',
         response: fullResponse.toString(),
         durationSeconds: durationSec,
         usage: TokenUsage(
-          inputTokens: totalIn,
+          inputTokens: uncachedIn,
           outputTokens: totalOut,
           cacheReadTokens: totalCache,
           thinkingTokens: totalReasoning,

@@ -505,6 +505,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         parsed is! AgyThoughtDeltaEvent &&
         parsed is! AgyToolCallEvent &&
         parsed is! AgyPermissionRequestEvent &&
+        parsed is! AgyUsageUpdateEvent &&
         parsed is! AgyTurnResultEvent &&
         parsed is! AgyErrorEvent) {
       return;
@@ -533,7 +534,9 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         ? -1
         : msgs.indexWhere((m) => m.id == assistantId && m.isStreaming);
     if (idx < 0) {
-      if (parsed is AgyTurnResultEvent || parsed is AgyErrorEvent) {
+      if (parsed is AgyTurnResultEvent ||
+          parsed is AgyErrorEvent ||
+          parsed is AgyUsageUpdateEvent) {
         return;
       }
       if (parsed is AgyTextDeltaEvent && parsed.delta.trim().isEmpty) return;
@@ -1801,6 +1804,20 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         if (_loadedSessionId == session.id) {
           state = state.copyWith(pendingPermission: evt);
         }
+      case AgyUsageUpdateEvent():
+        final nextUsage =
+            ChatTurnHelpers.mergeStepUsage(current.usage, evt.usage);
+        _replaceMessageInSession(
+          session.id,
+          idx,
+          current.copyWith(
+            usage: nextUsage,
+            contextTokens: evt.usage.contextTokens > 0
+                ? evt.usage.contextTokens
+                : current.contextTokens,
+          ),
+          coalesceUi: true,
+        );
       case AgyTurnResultEvent():
         rt?.receivedTurnContent = true;
         _pendingPermissionsBySession.remove(session.id);
@@ -1818,13 +1835,9 @@ class ChatNotifier extends Notifier<ChatThreadState> {
                 finalText.trim().isEmpty
             ? _compactionFallbackText(assistantId)
             : finalText;
-        final resolvedUsage = evt.usage.contextTokens > 0
-            ? evt.usage
-            : ((current.usage?.contextTokens ?? 0) > 0
-                ? evt.usage.copyWith(
-                    contextTokens: current.usage!.contextTokens,
-                  )
-                : evt.usage);
+        final resolvedUsage =
+            ChatTurnHelpers.mergeStepUsage(current.usage, evt.usage) ??
+                evt.usage;
         final stats = _computeTurnStats(
           assistantId: assistantId,
           text: resolvedText,
@@ -1883,7 +1896,7 @@ class ChatNotifier extends Notifier<ChatThreadState> {
         ref.read(usageProvider.notifier).recordTurn(
               modelId: _turnModelId[assistantId] ??
                   ref.read(settingsProvider).selectedModelId,
-              usage: evt.usage,
+              usage: resolvedUsage,
               sessionId: session.id,
             );
         if (_sessionRuntimes.containsKey(session.id)) {

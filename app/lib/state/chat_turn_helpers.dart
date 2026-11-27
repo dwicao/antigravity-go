@@ -46,9 +46,23 @@ class ChatTurnHelpers {
   static TokenUsage? mergeStepUsage(TokenUsage? prev, TokenUsage? stepUsage) {
     if (stepUsage == null) return prev;
     if (prev == null) return stepUsage;
-    return prev.copyWith(
-      contextTokens:
-          stepUsage.contextTokens > 0 ? stepUsage.contextTokens : prev.contextTokens,
+    return TokenUsage(
+      inputTokens:
+          stepUsage.inputTokens > 0 ? stepUsage.inputTokens : prev.inputTokens,
+      outputTokens: stepUsage.outputTokens > 0
+          ? stepUsage.outputTokens
+          : prev.outputTokens,
+      thinkingTokens: stepUsage.thinkingTokens > 0
+          ? stepUsage.thinkingTokens
+          : prev.thinkingTokens,
+      cacheReadTokens: stepUsage.cacheReadTokens > 0
+          ? stepUsage.cacheReadTokens
+          : prev.cacheReadTokens,
+      totalTokens:
+          stepUsage.totalTokens > 0 ? stepUsage.totalTokens : prev.totalTokens,
+      contextTokens: stepUsage.contextTokens > 0
+          ? stepUsage.contextTokens
+          : prev.contextTokens,
     );
   }
 

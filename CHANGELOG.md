@@ -2,6 +2,14 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.59] - 2026-11-27
+
+### Fixed
+- **Stats & Spend Cache Hit Rate & ACP Token Accounting (`TokenUsage`, `AcpCodec`, `UsageStatsAggregator`):**
+  - Added support for `agy acp`'s `cachedReadTokens` and `thoughtTokens` JSON keys (plus `cachedTokens` and nested `prompt_tokens_details` / `completion_tokens_details` fallbacks) in `TokenUsage.fromJson` so prompt-cache reads and thinking tokens are no longer dropped as `0`.
+  - Handled ACP `sessionUpdate: "usage_update"` events in `AcpCodec` and `ChatNotifier`, preserved all non-zero token fields across `ChatTurnHelpers.mergeStepUsage`, and recorded merged turn usage into `UsageNotifier.recordTurn`.
+  - Fixed `UsageStatsSummary.cacheHitRatePct`, `ModelUsageAggregate.cacheHitRatePct`, `uncachedInputTokens`, and `ModelPricingCatalog.estimateTurnCostUsd` to compute cache hit rate consistently over total prompt tokens (`inputTokens + cacheReadTokens`), matching the chat footer and live status bar, and normalized OpenAI `/v1` `prompt_tokens` in `OpenAiCompatRunner`.
+
 ## [1.0.58] - 2026-11-27
 
 ### Added

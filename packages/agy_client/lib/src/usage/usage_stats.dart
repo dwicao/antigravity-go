@@ -50,9 +50,7 @@ class ModelUsageAggregate {
   double get avgCostPerRequestUsd =>
       requests > 0 ? estimatedCostUsd / requests : 0.0;
 
-  double get cacheHitRatePct => usage.inputTokens > 0
-      ? ((usage.cacheReadTokens / usage.inputTokens) * 100.0).clamp(0.0, 100.0)
-      : 0.0;
+  double get cacheHitRatePct => UsageStatsSummary.computeCacheHitRatePct(usage);
 
   ModelUsageAggregate addTurn(
     TokenUsage turnUsage, {
@@ -371,12 +369,16 @@ class UsageStatsSummary {
   final DateTime? startedAt;
   final DateTime? updatedAt;
 
-  int get uncachedInputTokens =>
-      math.max(0, usage.inputTokens - usage.cacheReadTokens);
+  int get uncachedInputTokens => usage.inputTokens;
 
-  double get cacheHitRatePct => usage.inputTokens > 0
-      ? ((usage.cacheReadTokens / usage.inputTokens) * 100.0).clamp(0.0, 100.0)
-      : 0.0;
+  /// Computes cache hit percentage across total prompt tokens (`input + cacheRead`).
+  static double computeCacheHitRatePct(TokenUsage usage) {
+    final totalInput = usage.inputTokens + usage.cacheReadTokens;
+    if (totalInput <= 0 || usage.cacheReadTokens <= 0) return 0.0;
+    return ((usage.cacheReadTokens / totalInput) * 100.0).clamp(0.0, 100.0);
+  }
+
+  double get cacheHitRatePct => computeCacheHitRatePct(usage);
 
   double get thinkingSharePct => usage.totalTokens > 0
       ? ((usage.thinkingTokens / usage.totalTokens) * 100.0).clamp(0.0, 100.0)

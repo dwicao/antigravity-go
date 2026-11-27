@@ -125,6 +125,12 @@ class AgyTurnResultEvent extends AgyChatEvent {
   final String? error;
 }
 
+class AgyUsageUpdateEvent extends AgyChatEvent {
+  const AgyUsageUpdateEvent({required this.usage});
+
+  final TokenUsage usage;
+}
+
 class AgyErrorEvent extends AgyChatEvent {
   const AgyErrorEvent({
     required this.message,

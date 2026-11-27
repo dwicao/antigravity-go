@@ -261,5 +261,30 @@ void main() {
       expect(fromMap!.delta, equals(fromJson!.delta));
       expect(fromMap.delta, 'Hello fast path');
     });
+
+    test('parses ACP cachedReadTokens, thoughtTokens, and usage_update events', () {
+      final codec = AcpCodec();
+      final usageUpdate = codec.parseNotificationOrRequest(
+        '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"usage_update","used":42500,"size":1000000,"usage":{"inputTokens":12000,"cachedReadTokens":30000,"outputTokens":250,"thoughtTokens":500}}}}',
+      );
+      expect(usageUpdate, isA<AgyUsageUpdateEvent>());
+      final uu = usageUpdate! as AgyUsageUpdateEvent;
+      expect(uu.usage.inputTokens, 12000);
+      expect(uu.usage.cacheReadTokens, 30000);
+      expect(uu.usage.outputTokens, 250);
+      expect(uu.usage.thinkingTokens, 500);
+      expect(uu.usage.contextTokens, 42500);
+
+      final result = codec.parseNotificationOrRequest(
+        '{"jsonrpc":"2.0","id":9,"result":{"sessionId":"s1","stopReason":"end_turn","usage":{"inputTokens":12000,"cachedReadTokens":30000,"outputTokens":250,"thoughtTokens":500,"totalTokens":12750}}}',
+      );
+      expect(result, isA<AgyTurnResultEvent>());
+      final turn = result! as AgyTurnResultEvent;
+      expect(turn.usage.inputTokens, 12000);
+      expect(turn.usage.cacheReadTokens, 30000);
+      expect(turn.usage.thinkingTokens, 500);
+      expect(turn.usage.outputTokens, 250);
+      expect(turn.usage.totalTokens, 12750);
+    });
   });
 }

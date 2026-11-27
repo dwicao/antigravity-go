@@ -315,22 +315,35 @@ class AcpCodec {
     if (method == 'session/update') {
       final update = _asMap(params['update']);
       final kind = update['sessionUpdate']?.toString() ?? '';
-      TokenUsage? parseUpdateUsage() {
+      TokenUsage? parseUpdateUsage({bool allowTopLevel = false}) {
         final meta = _asMap(update['_meta']);
-        final rawUsage = _asMap(
+        final nested = _asMap(
           update['usage'] ??
               update['tokenUsage'] ??
               meta['usage'] ??
+              meta['tokenUsage'] ??
               params['usage'],
         );
+        final rawUsage = nested.isNotEmpty
+            ? nested
+            : (allowTopLevel ? update : const <String, dynamic>{});
         if (rawUsage.isEmpty) return null;
         final parsed = TokenUsage.fromJson(rawUsage);
+        final used = (update['used'] as num?)?.toInt() ?? 0;
         final ctx = parsed.contextTokens > 0
             ? parsed.contextTokens
-            : (parsed.inputTokens +
-                parsed.cacheReadTokens +
-                parsed.outputTokens);
-        if (ctx <= 0) return null;
+            : (used > 0
+                ? used
+                : (parsed.inputTokens +
+                    parsed.cacheReadTokens +
+                    parsed.outputTokens));
+        final hasAnyTokens = ctx > 0 ||
+            parsed.inputTokens > 0 ||
+            parsed.outputTokens > 0 ||
+            parsed.thinkingTokens > 0 ||
+            parsed.cacheReadTokens > 0 ||
+            parsed.totalTokens > 0;
+        if (!hasAnyTokens) return null;
         return parsed.copyWith(contextTokens: ctx);
       }
 
@@ -345,6 +358,9 @@ class AcpCodec {
             delta: _extractContentText(update['content']),
             stepUsage: parseUpdateUsage(),
           );
+        case 'usage_update':
+          final usage = parseUpdateUsage(allowTopLevel: true);
+          return usage != null ? AgyUsageUpdateEvent(usage: usage) : null;
         case 'tool_call':
         case 'tool_call_update':
           final rawOut = update['rawOutput'];
@@ -438,7 +454,10 @@ class AcpCodec {
       if (result.containsKey('stopReason')) {
         final meta = _asMap(result['_meta']);
         final usageMap = _asMap(
-          result['usage'] ?? result['tokenUsage'] ?? meta['usage'],
+          result['usage'] ??
+              result['tokenUsage'] ??
+              meta['usage'] ??
+              meta['tokenUsage'],
         );
         final durationSec = (result['durationSeconds'] as num?)?.toDouble() ??
             (result['duration_seconds'] as num?)?.toDouble() ??

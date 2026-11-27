@@ -112,7 +112,9 @@ class UsageNotifier extends Notifier<UsageQuotaSnapshot> {
   }) async {
     if (usage.totalTokens <= 0 &&
         usage.inputTokens <= 0 &&
-        usage.outputTokens <= 0) {
+        usage.outputTokens <= 0 &&
+        usage.cacheReadTokens <= 0 &&
+        usage.thinkingTokens <= 0) {
       return;
     }
     final record = UsageLedgerRecord(

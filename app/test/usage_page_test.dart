@@ -247,6 +247,9 @@ Upgrade\thttps://antigravity.google/g1-upgrade
     expect(find.text('Estimated Spend'), findsOneWidget);
     expect(find.text('Requests / Turns'), findsOneWidget);
     expect(find.text('2'), findsWidgets);
+    expect(find.text('Cache Hit Rate'), findsOneWidget);
+    // (80k + 10k) cached / ((120k + 40k) uncached + (80k + 10k) cached) = 90k / 250k = 36.0%
+    expect(find.text('36.0%'), findsOneWidget);
     expect(find.text('Token & Cost Breakdown'), findsOneWidget);
 
     await tester.scrollUntilVisible(find.text('Models Used (2)'), 160);
