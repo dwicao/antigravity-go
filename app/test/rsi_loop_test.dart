@@ -233,8 +233,8 @@ on:
     expect(feedbackLogs.any((m) => m.contains('finished')), isTrue);
   });
 
-  test('RsiLoopNotifier adapts to generic Node CI-only and local Python projects without APK release', () async {
-    // 1) Node.js project on `master` branch with CI workflow and NO release workflow
+  test('RsiLoopNotifier adapts to generic Node CI-only project without APK release', () async {
+    // Node.js project on `master` branch with CI workflow and NO release workflow
     var nodeSha = '1111aaaa';
     final nodePrompts = <String>[];
     final nodeCiNotifier = CiWatchNotifier()
@@ -305,8 +305,10 @@ on: [push]
     expect(nodeDone.phase, RsiPhase.completed);
     expect(nodeDone.archive.single.status, 'ci_passed');
     expect(nodeDone.archive.single.tag, isNull);
+  });
 
-    // 2) Local-only Python project without GitHub remote -> runs `pytest`, self-heals on failure, then completes!
+  test('RsiLoopNotifier adapts to local-only Python project with pytest self-heal', () async {
+    // Local-only Python project without GitHub remote -> runs `pytest`, self-heals on failure, then completes!
     var pySha = 'aa00';
     var pytestAttempt = 0;
     final pyPrompts = <String>[];
