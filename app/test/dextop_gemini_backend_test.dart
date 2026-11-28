@@ -6,6 +6,8 @@ import 'package:antigravity_go/remote/openai_compat_runner.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   test('OpenAiCompatRunner drives Dextop MCP gemini_web_prompt agentic loop', () async {
     final tmpDir = await Directory.systemTemp.createTemp('dextop_gemini_test_');
     addTearDown(() => tmpDir.delete(recursive: true));
@@ -117,6 +119,13 @@ void main() {
           prompt: 'Check hello.txt',
           turnId: 'turn-gw-1',
           dangerouslySkipPermissions: true,
+          toolExecutorOverride: (name, args) async {
+            if (name == 'read_file') {
+              final target = File('${tmpDir.path}/${args['path']}');
+              return (ok: true, output: await target.readAsString());
+            }
+            return (ok: false, output: 'Unsupported $name');
+          },
         )
         .toList();
 
