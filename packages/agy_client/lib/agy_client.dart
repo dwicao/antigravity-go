@@ -18,6 +18,7 @@ export 'src/models/unified_line_diff.dart';
 export 'src/models/usage_quota.dart';
 export 'src/mcp/mcp_http_client.dart';
 export 'src/protocol/acp_codec.dart';
+export 'src/protocol/dextop_gemini_protocol.dart';
 export 'src/protocol/openai_sse_parser.dart';
 export 'src/protocol/stream_json_parser.dart';
 export 'src/protocol/usage_output_parser.dart';

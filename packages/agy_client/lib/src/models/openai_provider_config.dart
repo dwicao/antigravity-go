@@ -1,5 +1,19 @@
+/// Transport protocol for external model profiles.
+enum ProviderTransportKind {
+  openAiCompat,
+  dextopMcpGeminiWeb;
+
+  static ProviderTransportKind fromString(String? raw) {
+    return switch (raw?.trim()) {
+      'dextopMcpGeminiWeb' || 'dextop_mcp_gemini_web' => dextopMcpGeminiWeb,
+      _ => openAiCompat,
+    };
+  }
+}
+
 /// Configuration profile for an OpenAI-compatible `/v1` external model endpoint
-/// (e.g. OpenAI, OpenRouter, DeepSeek, Ollama, LM Studio, vLLM, LiteLLM).
+/// (e.g. OpenAI, OpenRouter, DeepSeek, Ollama, LM Studio, vLLM, LiteLLM)
+/// OR Dextop Browser's MCP-backed Gemini Web backend (`http://127.0.0.1:38901/mcp`).
 class OpenAiProviderConfig {
   const OpenAiProviderConfig({
     required this.id,
@@ -7,6 +21,7 @@ class OpenAiProviderConfig {
     required this.baseUrl,
     required this.modelId,
     this.subagentModelId = '',
+    this.transportKind = ProviderTransportKind.openAiCompat,
     this.contextWindowTokens = 128000,
     this.supportsTools = true,
     this.supportsVision = true,
@@ -18,10 +33,14 @@ class OpenAiProviderConfig {
   final String baseUrl;
   final String modelId;
   final String subagentModelId;
+  final ProviderTransportKind transportKind;
   final int contextWindowTokens;
   final bool supportsTools;
   final bool supportsVision;
   final String systemPrompt;
+
+  bool get isDextopGeminiWeb =>
+      transportKind == ProviderTransportKind.dextopMcpGeminiWeb;
 
   String get effectiveSubagentModelId =>
       subagentModelId.trim().isNotEmpty ? subagentModelId.trim() : modelId;
@@ -29,14 +48,23 @@ class OpenAiProviderConfig {
   /// Normalizes user-provided URLs into a clean API base without trailing slashes.
   /// - `https://api.openai.com/v1/` -> `https://api.openai.com/v1`
   /// - `http://127.0.0.1:11434` -> `http://127.0.0.1:11434/v1`
-  /// - `https://openrouter.ai/api/v1` -> `https://openrouter.ai/api/v1`
-  /// - `https://proxy.example.com/v1/chat/completions` -> `https://proxy.example.com/v1`
-  static String normalizeBaseUrl(String raw) {
+  /// - `http://127.0.0.1:38901/mcp` (Dextop MCP) -> `http://127.0.0.1:38901/mcp`
+  static String normalizeBaseUrl(
+    String raw, {
+    ProviderTransportKind transportKind = ProviderTransportKind.openAiCompat,
+  }) {
     var url = raw.trim();
     while (url.endsWith('/')) {
       url = url.substring(0, url.length - 1);
     }
     if (url.isEmpty) return '';
+    if (transportKind == ProviderTransportKind.dextopMcpGeminiWeb) {
+      final uri = Uri.tryParse(url);
+      if (uri != null && (uri.path.isEmpty || uri.path == '/')) {
+        return '$url/mcp';
+      }
+      return url;
+    }
     if (url.endsWith('/chat/completions')) {
       url = url.substring(0, url.length - '/chat/completions'.length);
     } else if (url.endsWith('/models')) {
@@ -49,11 +77,19 @@ class OpenAiProviderConfig {
     return url;
   }
 
-  String get normalizedBaseUrl => normalizeBaseUrl(baseUrl);
+  String get normalizedBaseUrl =>
+      normalizeBaseUrl(baseUrl, transportKind: transportKind);
 
   Uri get chatCompletionsUri => Uri.parse('$normalizedBaseUrl/chat/completions');
 
   Uri get modelsUri => Uri.parse('$normalizedBaseUrl/models');
+
+  Uri get mcpEndpointUri => Uri.parse(
+        normalizeBaseUrl(
+          baseUrl,
+          transportKind: ProviderTransportKind.dextopMcpGeminiWeb,
+        ),
+      );
 
   bool get isLocalEndpoint {
     final host = Uri.tryParse(normalizedBaseUrl)?.host.toLowerCase() ?? '';
@@ -72,6 +108,7 @@ class OpenAiProviderConfig {
     String? baseUrl,
     String? modelId,
     String? subagentModelId,
+    ProviderTransportKind? transportKind,
     int? contextWindowTokens,
     bool? supportsTools,
     bool? supportsVision,
@@ -83,6 +120,7 @@ class OpenAiProviderConfig {
       baseUrl: baseUrl ?? this.baseUrl,
       modelId: modelId ?? this.modelId,
       subagentModelId: subagentModelId ?? this.subagentModelId,
+      transportKind: transportKind ?? this.transportKind,
       contextWindowTokens: contextWindowTokens ?? this.contextWindowTokens,
       supportsTools: supportsTools ?? this.supportsTools,
       supportsVision: supportsVision ?? this.supportsVision,
@@ -97,6 +135,8 @@ class OpenAiProviderConfig {
         'modelId': modelId,
         if (subagentModelId.trim().isNotEmpty)
           'subagentModelId': subagentModelId.trim(),
+        if (transportKind != ProviderTransportKind.openAiCompat)
+          'transportKind': transportKind.name,
         'contextWindowTokens': contextWindowTokens,
         'supportsTools': supportsTools,
         'supportsVision': supportsVision,
@@ -110,6 +150,8 @@ class OpenAiProviderConfig {
       baseUrl: json['baseUrl'] as String? ?? '',
       modelId: json['modelId'] as String? ?? '',
       subagentModelId: json['subagentModelId'] as String? ?? '',
+      transportKind:
+          ProviderTransportKind.fromString(json['transportKind'] as String?),
       contextWindowTokens:
           ((json['contextWindowTokens'] as num?)?.toInt() ?? 128000)
               .clamp(2048, 4000000),

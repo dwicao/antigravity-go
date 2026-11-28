@@ -40,9 +40,9 @@ Inspired by [dsh-Go](https://github.com/ccch1mneyyy/dsh-Go) and powered by the o
 - **Organized Sessions Sidebar:** Compact sidebar with session **Pinning**, **Folders**, **Archiving**, running/subagent badges, and **Full-Text Message Search** across all conversations.
 - **Workspace, Diffs & Terminal:** Browse local or remote workspaces, review GitHub-style syntax-highlighted Unified/Split Git diffs with intraline word emphasis and commit/push changes, manage **Customizations** (`GEMINI.md`, `AGENTS.md`, `SKILL.md` agent skills with `/` invocation, `MCP Servers`), and run interactive shells (`xterm` PTY with expanded extra-keys) or localhost (`127.0.0.1`) live previews.
 
-### Remote Connections & External `/v1` Models
+### Remote Connections, External `/v1` & Dextop Gemini Web
 - **SSH Remote Hosts:** Connect to your PC/Mac/Linux workstation over SSH (`dartssh2`) to drive `agy` and remote repositories from your phone.
-- **External `/v1` Providers:** Add OpenAI-compatible API endpoints (Ollama, OpenRouter, vLLM, etc.).
+- **External `/v1` Providers & Dextop Gemini Web:** Add OpenAI-compatible API endpoints (Ollama, OpenRouter, vLLM, etc.) or connect **Dextop Browser MCP (`http://127.0.0.1:38901/mcp`)** to use signed-in Gemini Web (`gemini_web_prompt`) directly behind Antigravity Go's full Chat UI and local coding tool loop.
 - **Remote Control Web Portal:** One-tap access to `https://antigravity.google.com` inside the app.
 
 ### Automations & Phone Control

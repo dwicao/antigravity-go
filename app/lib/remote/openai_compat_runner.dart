@@ -14,6 +14,7 @@ import 'ssh_host.dart';
 class _TurnControl {
   _TurnControl();
   http.Client? client;
+  McpHttpClient? mcpClient;
   bool cancelled = false;
   final Map<Object, Completer<String?>> pendingPermissions = {};
 
@@ -23,6 +24,10 @@ class _TurnControl {
       client?.close();
     } catch (_) {}
     client = null;
+    try {
+      mcpClient?.close();
+    } catch (_) {}
+    mcpClient = null;
     for (final c in pendingPermissions.values) {
       if (!c.isCompleted) c.complete('reject_once');
     }
@@ -304,6 +309,9 @@ class OpenAiCompatRunner {
     OpenAiProviderConfig profile, {
     String? apiKey,
   }) async {
+    if (profile.isDextopGeminiWeb) {
+      return const ['gemini-web'];
+    }
     final uri = profile.modelsUri;
     final res = await http
         .get(uri, headers: _headers(apiKey))
@@ -330,6 +338,45 @@ class OpenAiCompatRunner {
     OpenAiProviderConfig profile, {
     String? apiKey,
   }) async {
+    if (profile.isDextopGeminiWeb) {
+      final mcpClient = McpHttpClient();
+      try {
+        final hdrs = <String, String>{
+          if (apiKey != null && apiKey.trim().isNotEmpty)
+            'Authorization': 'Bearer ${apiKey.trim()}',
+        };
+        final probe = await mcpClient.probeServer(
+          profile.mcpEndpointUri,
+          headers: hdrs,
+        );
+        if (!probe.ok) {
+          throw Exception(probe.error ?? 'Dextop MCP handshake failed');
+        }
+        final hasGeminiTool = probe.tools.any((t) => t.name == 'gemini_web_prompt');
+        if (!hasGeminiTool) {
+          return 'Dextop MCP OK (${probe.tools.length} tools), but update Dextop for gemini_web_prompt';
+        }
+        final statusRpc = await mcpClient.callTool(
+          profile.mcpEndpointUri,
+          name: 'gemini_web_status',
+          arguments: const {'openIfMissing': false},
+          headers: hdrs,
+          sessionId: probe.sessionId,
+          timeout: const Duration(seconds: 15),
+        );
+        final statusText = (statusRpc['result']?['content'] as List?)
+                ?.whereType<Map>()
+                .map((e) => e['text']?.toString() ?? '')
+                .join('\n') ??
+            '';
+        if (statusText.contains('"composerReady":true')) {
+          return 'Dextop MCP OK (${probe.tools.length} tools) • Gemini Web ready';
+        }
+        return 'Dextop MCP OK (${probe.tools.length} tools) • Open & sign in at gemini.google.com in Dextop';
+      } finally {
+        mcpClient.close();
+      }
+    }
     try {
       final models = await fetchModels(profile, apiKey: apiKey);
       if (models.isNotEmpty) {
@@ -554,190 +601,323 @@ class OpenAiCompatRunner {
       final toolMsgMeta =
           <({int msgIndex, int round, String? varName, int rawChars})>[];
 
+      McpHttpClient? dextopMcpClient;
+      String? dextopMcpSessionId;
+      final roundToolResults = <({String callId, String name, String content})>[];
+      if (profile.isDextopGeminiWeb) {
+        dextopMcpClient = McpHttpClient();
+        ctrl.mcpClient = dextopMcpClient;
+      }
+
       for (var round = 0; round < _maxToolRounds; round++) {
         if (ctrl.cancelled) break;
 
-        if (round >= 3 && toolMsgMeta.isNotEmpty) {
-          final totalChars = messages.fold<int>(
-            0,
-            (sum, m) => sum + (m['content']?.toString().length ?? 0),
-          );
-          final foldLimit =
-              (profile.isLocalEndpoint || quotaSaverEnabled) ? 20000 : 64000;
-          if (totalChars > foldLimit) {
-            for (final meta in toolMsgMeta) {
-              if (meta.round < round - 2 && meta.rawChars > 360) {
-                final cur = messages[meta.msgIndex]['content']?.toString() ?? '';
-                if (!cur.startsWith('[older tool result collapsed')) {
-                  final refNote = meta.varName != null
-                      ? ' -> stored in \$${meta.varName} (use inspect_var)'
-                      : '';
-                  messages[meta.msgIndex] = {
-                    ...messages[meta.msgIndex],
-                    'content':
-                        '[older tool result collapsed (${meta.rawChars} chars)$refNote]',
-                  };
+        final parsedToolBatch = <({
+          String callId,
+          String name,
+          Map<String, dynamic> rawArgs,
+        })>[];
+
+        if (profile.isDextopGeminiWeb) {
+          final authHdr = <String, String>{
+            if (apiKey != null && apiKey.trim().isNotEmpty)
+              'Authorization': 'Bearer ${apiKey.trim()}',
+          };
+          Map<String, dynamic> rpcResp;
+          try {
+            if (dextopMcpSessionId == null) {
+              final initResp = await dextopMcpClient!.sendRpc(
+                profile.mcpEndpointUri,
+                method: 'initialize',
+                params: const {
+                  'protocolVersion': '2025-03-26',
+                  'capabilities': <String, dynamic>{},
+                  'clientInfo': {
+                    'name': 'antigravity-go',
+                    'version': '1.0.64',
+                  },
+                },
+                headers: authHdr,
+                timeout: const Duration(seconds: 15),
+              );
+              dextopMcpSessionId = initResp.sessionId;
+            }
+          } catch (e) {
+            if (ctrl.cancelled) return;
+            yield AgyErrorEvent(
+              message: 'Failed connecting to Dextop MCP (${profile.mcpEndpointUri}): $e',
+            );
+            return;
+          }
+
+          final sentPrompt = round == 0
+              ? DextopGeminiProtocol.buildInitialPrompt(
+                  systemInstructions: sysParts.join('\n'),
+                  trimmedHistory: trimHistoryForBudget(
+                    history,
+                    quotaSaverEnabled: quotaSaverEnabled,
+                    contextWindowTokens: profile.contextWindowTokens,
+                  ),
+                  userPrompt: promptWithVarsTail,
+                  supportsTools: profile.supportsTools,
+                  includeVariables: toolVariablesEnabled,
+                  includeSubagent: allowSubagentDelegation,
+                )
+              : DextopGeminiProtocol.buildToolResultsDeltaPrompt(roundToolResults);
+          roundToolResults.clear();
+
+          try {
+            rpcResp = await dextopMcpClient!.callTool(
+              profile.mcpEndpointUri,
+              name: 'gemini_web_prompt',
+              arguments: {
+                'prompt': sentPrompt,
+                'newChat': round == 0,
+                'openIfMissing': true,
+                'timeoutMs': 120000,
+              },
+              headers: authHdr,
+              sessionId: dextopMcpSessionId,
+              timeout: const Duration(seconds: 150),
+            );
+          } catch (e) {
+            if (ctrl.cancelled) return;
+            yield AgyErrorEvent(
+              message: 'Error calling Dextop MCP (${profile.name}): $e',
+            );
+            return;
+          }
+
+          final parsedReply = DextopGeminiProtocol.parseDextopGeminiResponse(rpcResp);
+          if (!parsedReply.ok) {
+            yield AgyErrorEvent(
+              message: parsedReply.error ?? 'Gemini Web returned an error',
+            );
+            return;
+          }
+
+          final extracted = DextopGeminiProtocol.parseToolCalls(parsedReply.replyText);
+          final textExpander = StreamingVariableExpander(varStore);
+          final visibleExpanded = textExpander.addDelta(extracted.visibleText) +
+              textExpander.flush();
+          if (visibleExpanded.isNotEmpty) {
+            fullResponse.write(visibleExpanded);
+            if (round > 0) {
+              yield AgyTextDeltaEvent(delta: '\n\n$visibleExpanded');
+            } else {
+              yield AgyTextDeltaEvent(delta: visibleExpanded);
+            }
+          }
+
+          final estIn = (sentPrompt.length / 4).ceil();
+          final estOut = (parsedReply.replyText.length / 4).ceil();
+          totalIn += estIn;
+          totalOut += estOut;
+          lastCtxTokens = estIn + estOut;
+
+          if (!profile.supportsTools || extracted.calls.isEmpty || ctrl.cancelled) {
+            break;
+          }
+
+          for (var i = 0; i < extracted.calls.length; i++) {
+            final c = extracted.calls[i];
+            parsedToolBatch.add((
+              callId: 'dextop_${round}_$i',
+              name: c.name,
+              rawArgs: c.arguments,
+            ));
+          }
+        } else {
+          if (round >= 3 && toolMsgMeta.isNotEmpty) {
+            final totalChars = messages.fold<int>(
+              0,
+              (sum, m) => sum + (m['content']?.toString().length ?? 0),
+            );
+            final foldLimit =
+                (profile.isLocalEndpoint || quotaSaverEnabled) ? 20000 : 64000;
+            if (totalChars > foldLimit) {
+              for (final meta in toolMsgMeta) {
+                if (meta.round < round - 2 && meta.rawChars > 360) {
+                  final cur = messages[meta.msgIndex]['content']?.toString() ?? '';
+                  if (!cur.startsWith('[older tool result collapsed')) {
+                    final refNote = meta.varName != null
+                        ? ' -> stored in \$${meta.varName} (use inspect_var)'
+                        : '';
+                    messages[meta.msgIndex] = {
+                      ...messages[meta.msgIndex],
+                      'content':
+                          '[older tool result collapsed (${meta.rawChars} chars)$refNote]',
+                    };
+                  }
                 }
               }
             }
           }
-        }
 
-        final bodyMap = <String, dynamic>{
-          'model': profile.modelId,
-          'messages': messages,
-          'stream': true,
-          if (includeStreamOptions)
-            'stream_options': const {'include_usage': true},
-          if (profile.supportsTools)
-            'tools': _toolDefinitions(
-              includeVariables: toolVariablesEnabled,
-              includeSubagent: allowSubagentDelegation,
-            ),
-        };
+          final bodyMap = <String, dynamic>{
+            'model': profile.modelId,
+            'messages': messages,
+            'stream': true,
+            if (includeStreamOptions)
+              'stream_options': const {'include_usage': true},
+            if (profile.supportsTools)
+              'tools': _toolDefinitions(
+                includeVariables: toolVariablesEnabled,
+                includeSubagent: allowSubagentDelegation,
+              ),
+          };
 
-        final req = http.Request('POST', profile.chatCompletionsUri)
-          ..headers.addAll(_headers(apiKey))
-          ..body = jsonEncode(bodyMap);
+          final req = http.Request('POST', profile.chatCompletionsUri)
+            ..headers.addAll(_headers(apiKey))
+            ..body = jsonEncode(bodyMap);
 
-        http.StreamedResponse resp;
-        try {
-          resp = await client.send(req).timeout(const Duration(seconds: 45));
-        } catch (e) {
-          if (ctrl.cancelled) return;
-          yield AgyErrorEvent(message: 'Network error calling ${profile.name}: $e');
-          return;
-        }
-
-        if (resp.statusCode == 400 && includeStreamOptions) {
-          final errBody = await resp.stream.bytesToString();
-          if (errBody.toLowerCase().contains('stream_options')) {
-            includeStreamOptions = false;
-            round--;
-            continue;
-          }
-          yield AgyErrorEvent(
-            message: 'HTTP 400 from ${profile.name}: $errBody',
-            code: 400,
-          );
-          return;
-        }
-
-        if (resp.statusCode < 200 || resp.statusCode >= 300) {
-          final errBody = await resp.stream.bytesToString();
-          yield AgyErrorEvent(
-            message: 'HTTP ${resp.statusCode} from ${profile.name}: $errBody',
-            code: resp.statusCode,
-          );
-          return;
-        }
-
-        final parser = OpenAiSseParser();
-        final roundText = StringBuffer();
-        final textExpander = StreamingVariableExpander(varStore);
-        final ctype = (resp.headers['content-type'] ?? '').toLowerCase();
-
-        if (ctype.contains('application/json')) {
-          final rawJson = await resp.stream.bytesToString();
-          final slice = parser.parseLine(rawJson);
-          if (slice?.errorMessage != null) {
-            yield AgyErrorEvent(message: slice!.errorMessage!);
+          http.StreamedResponse resp;
+          try {
+            resp = await client.send(req).timeout(const Duration(seconds: 45));
+          } catch (e) {
+            if (ctrl.cancelled) return;
+            yield AgyErrorEvent(message: 'Network error calling ${profile.name}: $e');
             return;
           }
-          if (slice != null) {
-            if (slice.thoughtDelta.isNotEmpty) {
-              yield AgyThoughtDeltaEvent(delta: slice.thoughtDelta);
+
+          if (resp.statusCode == 400 && includeStreamOptions) {
+            final errBody = await resp.stream.bytesToString();
+            if (errBody.toLowerCase().contains('stream_options')) {
+              includeStreamOptions = false;
+              round--;
+              continue;
             }
-            if (slice.textDelta.isNotEmpty) {
-              roundText.write(slice.textDelta);
-              final expanded = textExpander.addDelta(slice.textDelta);
-              if (expanded.isNotEmpty) {
-                fullResponse.write(expanded);
-                yield AgyTextDeltaEvent(delta: expanded);
-              }
-            }
+            yield AgyErrorEvent(
+              message: 'HTTP 400 from ${profile.name}: $errBody',
+              code: 400,
+            );
+            return;
           }
-        } else {
-          final lines = resp.stream
-              .transform(const Utf8Decoder(allowMalformed: true))
-              .transform(const LineSplitter());
-          await for (final line in lines) {
-            if (ctrl.cancelled) break;
-            final slice = parser.parseLine(line);
-            if (slice == null) continue;
-            if (slice.errorMessage != null) {
-              yield AgyErrorEvent(message: slice.errorMessage!);
+
+          if (resp.statusCode < 200 || resp.statusCode >= 300) {
+            final errBody = await resp.stream.bytesToString();
+            yield AgyErrorEvent(
+              message: 'HTTP ${resp.statusCode} from ${profile.name}: $errBody',
+              code: resp.statusCode,
+            );
+            return;
+          }
+
+          final parser = OpenAiSseParser();
+          final roundText = StringBuffer();
+          final textExpander = StreamingVariableExpander(varStore);
+          final ctype = (resp.headers['content-type'] ?? '').toLowerCase();
+
+          if (ctype.contains('application/json')) {
+            final rawJson = await resp.stream.bytesToString();
+            final slice = parser.parseLine(rawJson);
+            if (slice?.errorMessage != null) {
+              yield AgyErrorEvent(message: slice!.errorMessage!);
               return;
             }
-            if (slice.thoughtDelta.isNotEmpty) {
-              yield AgyThoughtDeltaEvent(
-                delta: slice.thoughtDelta,
-                stepUsage: slice.usage,
-              );
+            if (slice != null) {
+              if (slice.thoughtDelta.isNotEmpty) {
+                yield AgyThoughtDeltaEvent(delta: slice.thoughtDelta);
+              }
+              if (slice.textDelta.isNotEmpty) {
+                roundText.write(slice.textDelta);
+                final expanded = textExpander.addDelta(slice.textDelta);
+                if (expanded.isNotEmpty) {
+                  fullResponse.write(expanded);
+                  yield AgyTextDeltaEvent(delta: expanded);
+                }
+              }
             }
-            if (slice.textDelta.isNotEmpty) {
-              roundText.write(slice.textDelta);
-              final expanded = textExpander.addDelta(slice.textDelta);
-              if (expanded.isNotEmpty) {
-                fullResponse.write(expanded);
-                yield AgyTextDeltaEvent(
-                  delta: expanded,
+          } else {
+            final lines = resp.stream
+                .transform(const Utf8Decoder(allowMalformed: true))
+                .transform(const LineSplitter());
+            await for (final line in lines) {
+              if (ctrl.cancelled) break;
+              final slice = parser.parseLine(line);
+              if (slice == null) continue;
+              if (slice.errorMessage != null) {
+                yield AgyErrorEvent(message: slice.errorMessage!);
+                return;
+              }
+              if (slice.thoughtDelta.isNotEmpty) {
+                yield AgyThoughtDeltaEvent(
+                  delta: slice.thoughtDelta,
                   stepUsage: slice.usage,
                 );
               }
+              if (slice.textDelta.isNotEmpty) {
+                roundText.write(slice.textDelta);
+                final expanded = textExpander.addDelta(slice.textDelta);
+                if (expanded.isNotEmpty) {
+                  fullResponse.write(expanded);
+                  yield AgyTextDeltaEvent(
+                    delta: expanded,
+                    stepUsage: slice.usage,
+                  );
+                }
+              }
+            }
+            final tail = parser.flushPendingTags();
+            if (tail.thought.isNotEmpty) {
+              yield AgyThoughtDeltaEvent(delta: tail.thought);
+            }
+            if (tail.text.isNotEmpty) {
+              roundText.write(tail.text);
+              final expandedTail = textExpander.addDelta(tail.text);
+              if (expandedTail.isNotEmpty) {
+                fullResponse.write(expandedTail);
+                yield AgyTextDeltaEvent(delta: expandedTail);
+              }
             }
           }
-          final tail = parser.flushPendingTags();
-          if (tail.thought.isNotEmpty) {
-            yield AgyThoughtDeltaEvent(delta: tail.thought);
+
+          final flushedText = textExpander.flush();
+          if (flushedText.isNotEmpty) {
+            fullResponse.write(flushedText);
+            yield AgyTextDeltaEvent(delta: flushedText);
           }
-          if (tail.text.isNotEmpty) {
-            roundText.write(tail.text);
-            final expandedTail = textExpander.addDelta(tail.text);
-            if (expandedTail.isNotEmpty) {
-              fullResponse.write(expandedTail);
-              yield AgyTextDeltaEvent(delta: expandedTail);
-            }
+
+          final u = parser.latestUsage;
+          if (u != null) {
+            totalIn += u.inputTokens;
+            totalOut += u.outputTokens;
+            totalCache += u.cacheReadTokens;
+            totalReasoning += u.thinkingTokens;
+            lastCtxTokens = u.contextTokens > 0
+                ? u.contextTokens
+                : (u.inputTokens + u.outputTokens);
           }
-        }
 
-        final flushedText = textExpander.flush();
-        if (flushedText.isNotEmpty) {
-          fullResponse.write(flushedText);
-          yield AgyTextDeltaEvent(delta: flushedText);
-        }
+          final pendingTools = parser.orderedToolCalls;
+          if (!profile.supportsTools || pendingTools.isEmpty || ctrl.cancelled) {
+            break;
+          }
 
-        final u = parser.latestUsage;
-        if (u != null) {
-          totalIn += u.inputTokens;
-          totalOut += u.outputTokens;
-          totalCache += u.cacheReadTokens;
-          totalReasoning += u.thinkingTokens;
-          lastCtxTokens = u.contextTokens > 0
-              ? u.contextTokens
-              : (u.inputTokens + u.outputTokens);
-        }
-
-        final pendingTools = parser.orderedToolCalls;
-        if (!profile.supportsTools || pendingTools.isEmpty || ctrl.cancelled) {
-          break;
-        }
-
-        messages.add({
-          'role': 'assistant',
-          if (roundText.isNotEmpty) 'content': roundText.toString(),
-          'tool_calls': [
-            for (final tc in pendingTools)
-              {
-                'id': tc.id.isNotEmpty ? tc.id : 'call_${tc.index}_$round',
-                'type': 'function',
-                'function': {
-                  'name': tc.name,
-                  'arguments': tc.argumentsBuffer.toString(),
+          messages.add({
+            'role': 'assistant',
+            if (roundText.isNotEmpty) 'content': roundText.toString(),
+            'tool_calls': [
+              for (final tc in pendingTools)
+                {
+                  'id': tc.id.isNotEmpty ? tc.id : 'call_${tc.index}_$round',
+                  'type': 'function',
+                  'function': {
+                    'name': tc.name,
+                    'arguments': tc.argumentsBuffer.toString(),
+                  },
                 },
-              },
-          ],
-        });
+            ],
+          });
+
+          for (final tc in pendingTools) {
+            parsedToolBatch.add((
+              callId: tc.id.isNotEmpty ? tc.id : 'call_${tc.index}_$round',
+              name: tc.name,
+              rawArgs: tc.parseArgumentsMap(),
+            ));
+          }
+        }
 
         final preparedCalls = <({
           String callId,
@@ -747,10 +927,9 @@ class OpenAiCompatRunner {
           bool needsApproval,
         })>[];
 
-        for (final tc in pendingTools) {
-          final callId =
-              tc.id.isNotEmpty ? tc.id : 'call_${tc.index}_$round';
-          final rawArgs = tc.parseArgumentsMap();
+        for (final tc in parsedToolBatch) {
+          final callId = tc.callId;
+          final rawArgs = tc.rawArgs;
           final resolvedArgs = toolVariablesEnabled
               ? varStore.resolveArguments(rawArgs)
               : rawArgs;
@@ -1012,6 +1191,13 @@ class OpenAiCompatRunner {
             'tool_call_id': call.callId,
             'content': messageContent,
           });
+          if (profile.isDextopGeminiWeb) {
+            roundToolResults.add((
+              callId: call.callId,
+              name: call.name,
+              content: messageContent,
+            ));
+          }
           toolMsgMeta.add((
             msgIndex: msgIdx,
             round: round,

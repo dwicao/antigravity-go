@@ -217,6 +217,7 @@ class McpHttpClient {
     Map<String, dynamic> arguments = const {},
     Map<String, String> headers = const {},
     String? sessionId,
+    Duration timeout = const Duration(seconds: 12),
   }) async {
     final res = await sendRpc(
       url,
@@ -227,6 +228,7 @@ class McpHttpClient {
       },
       headers: headers,
       sessionId: sessionId,
+      timeout: timeout,
     );
     return res.json;
   }

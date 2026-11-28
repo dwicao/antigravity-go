@@ -8,36 +8,54 @@ import '../../state/custom_providers_state.dart';
 class CustomProvidersPage extends ConsumerWidget {
   const CustomProvidersPage({super.key});
 
-  static const _presets = <({String name, String baseUrl, String modelId, int ctx})>[
+  static const _presets = <({
+    String name,
+    String baseUrl,
+    String modelId,
+    int ctx,
+    ProviderTransportKind kind,
+  })>[
+    (
+      name: 'Dextop Gemini Web',
+      baseUrl: 'http://127.0.0.1:38901/mcp',
+      modelId: 'gemini-web',
+      ctx: 1000000,
+      kind: ProviderTransportKind.dextopMcpGeminiWeb,
+    ),
     (
       name: 'OpenAI',
       baseUrl: 'https://api.openai.com/v1',
       modelId: 'gpt-4.1',
       ctx: 1000000,
+      kind: ProviderTransportKind.openAiCompat,
     ),
     (
       name: 'OpenRouter',
       baseUrl: 'https://openrouter.ai/api/v1',
       modelId: 'anthropic/claude-sonnet-4',
       ctx: 200000,
+      kind: ProviderTransportKind.openAiCompat,
     ),
     (
       name: 'DeepSeek',
       baseUrl: 'https://api.deepseek.com/v1',
       modelId: 'deepseek-chat',
       ctx: 128000,
+      kind: ProviderTransportKind.openAiCompat,
     ),
     (
       name: 'Ollama (Local)',
       baseUrl: 'http://127.0.0.1:11434/v1',
       modelId: 'qwen2.5-coder:14b',
       ctx: 128000,
+      kind: ProviderTransportKind.openAiCompat,
     ),
     (
       name: 'LM Studio',
       baseUrl: 'http://127.0.0.1:1234/v1',
       modelId: 'local-model',
       ctx: 128000,
+      kind: ProviderTransportKind.openAiCompat,
     ),
   ];
 
@@ -165,7 +183,7 @@ class CustomProvidersPage extends ConsumerWidget {
                 leading: const Icon(Icons.hub_outlined),
                 title: Text(p.name),
                 subtitle: Text(
-                  '${p.modelId}${p.subagentModelId.trim().isNotEmpty ? " (sub: ${p.subagentModelId.trim()})" : ""} · ${p.normalizedBaseUrl}\nContext: ${(p.contextWindowTokens / 1000).round()}K${p.supportsTools ? " · Tools" : ""}${p.supportsVision ? " · Vision" : ""}',
+                  '${p.isDextopGeminiWeb ? "Dextop MCP • Gemini Web" : p.modelId}${!p.isDextopGeminiWeb && p.subagentModelId.trim().isNotEmpty ? " (sub: ${p.subagentModelId.trim()})" : ""} · ${p.normalizedBaseUrl}\nContext: ${(p.contextWindowTokens / 1000).round()}K${p.supportsTools ? " · Tools" : ""}${p.supportsVision ? " · Vision" : ""}',
                 ),
                 isThreeLine: true,
                 trailing: Row(
@@ -240,7 +258,13 @@ class CustomProvidersPage extends ConsumerWidget {
     BuildContext context,
     WidgetRef ref, {
     OpenAiProviderConfig? existing,
-    ({String name, String baseUrl, String modelId, int ctx})? preset,
+    ({
+      String name,
+      String baseUrl,
+      String modelId,
+      int ctx,
+      ProviderTransportKind kind,
+    })? preset,
   }) async {
     final nameCtrl =
         TextEditingController(text: existing?.name ?? preset?.name ?? '');
@@ -267,8 +291,11 @@ class CustomProvidersPage extends ConsumerWidget {
       }
     }
 
+    var transportKind =
+        existing?.transportKind ?? preset?.kind ?? ProviderTransportKind.openAiCompat;
     var supportsTools = existing?.supportsTools ?? true;
-    var supportsVision = existing?.supportsVision ?? true;
+    var supportsVision = existing?.supportsVision ??
+        (transportKind == ProviderTransportKind.openAiCompat);
     var activateNow = true;
     var fetchingModels = false;
     var discoveredModels = <String>[];
@@ -280,7 +307,7 @@ class CustomProvidersPage extends ConsumerWidget {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialogState) => AlertDialog(
           title: Text(
-            existing == null ? 'Add OpenAI /v1 Model' : 'Edit OpenAI /v1 Model',
+            existing == null ? 'Add External / Dextop Model' : 'Edit Model Profile',
           ),
           content: SingleChildScrollView(
             child: Column(
@@ -302,11 +329,48 @@ class CustomProvidersPage extends ConsumerWidget {
                               urlCtrl.text = p.baseUrl;
                               modelCtrl.text = p.modelId;
                               ctxCtrl.text = '${p.ctx}';
+                              transportKind = p.kind;
+                              supportsVision =
+                                  p.kind == ProviderTransportKind.openAiCompat;
                             });
                           },
                         ),
                     ],
                   ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<ProviderTransportKind>(
+                  value: transportKind,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Backend Transport',
+                    isDense: true,
+                  ),
+                  items: const [
+                    DropdownMenuItem(
+                      value: ProviderTransportKind.openAiCompat,
+                      child: Text('OpenAI /v1 Compatible HTTP'),
+                    ),
+                    DropdownMenuItem(
+                      value: ProviderTransportKind.dextopMcpGeminiWeb,
+                      child: Text('Dextop Browser MCP (Gemini Web)'),
+                    ),
+                  ],
+                  onChanged: (v) {
+                    if (v != null) {
+                      setDialogState(() {
+                        transportKind = v;
+                        if (v == ProviderTransportKind.dextopMcpGeminiWeb &&
+                            urlCtrl.text.trim() == 'https://api.openai.com/v1') {
+                          urlCtrl.text = 'http://127.0.0.1:38901/mcp';
+                          modelCtrl.text = 'gemini-web';
+                          if (nameCtrl.text.trim().isEmpty) {
+                            nameCtrl.text = 'Dextop Gemini Web';
+                          }
+                        }
+                      });
+                    }
+                  },
+                ),
                 const SizedBox(height: 8),
                 TextField(
                   controller: nameCtrl,
@@ -315,17 +379,23 @@ class CustomProvidersPage extends ConsumerWidget {
                 const SizedBox(height: 8),
                 TextField(
                   controller: urlCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Base URL (/v1)',
-                    hintText: 'https://api.openai.com/v1',
+                  decoration: InputDecoration(
+                    labelText: transportKind == ProviderTransportKind.dextopMcpGeminiWeb
+                        ? 'Dextop MCP Endpoint URL'
+                        : 'Base URL (/v1)',
+                    hintText: transportKind == ProviderTransportKind.dextopMcpGeminiWeb
+                        ? 'http://127.0.0.1:38901/mcp'
+                        : 'https://api.openai.com/v1',
                   ),
                 ),
                 const SizedBox(height: 8),
                 TextField(
                   controller: keyCtrl,
                   obscureText: true,
-                  decoration: const InputDecoration(
-                    labelText: 'API Key (stored in Android Keystore, optional for local)',
+                  decoration: InputDecoration(
+                    labelText: transportKind == ProviderTransportKind.dextopMcpGeminiWeb
+                        ? 'MCP Bearer Token (from Dextop)'
+                        : 'API Key (stored in Android Keystore, optional for local)',
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -499,6 +569,7 @@ class CustomProvidersPage extends ConsumerWidget {
               baseUrl: urlCtrl.text.trim(),
               modelId: modelCtrl.text.trim(),
               subagentModelId: subModelCtrl.text.trim(),
+              transportKind: transportKind,
               contextWindowTokens: ctxTokens.clamp(2048, 4000000),
               supportsTools: supportsTools,
               supportsVision: supportsVision,

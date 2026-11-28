@@ -2,6 +2,13 @@
 
 All notable changes to **Antigravity Go** are documented in this file.
 
+## [1.0.64] - 2026-11-28
+
+### Added
+- **Dextop Browser Gemini Web Backend (`http://127.0.0.1:38901/mcp`):**
+  - Added `ProviderTransportKind.dextopMcpGeminiWeb` on `OpenAiProviderConfig` and a one-tap **Dextop Gemini Web** preset + Bearer token config on `CustomProvidersPage`.
+  - Added `DextopGeminiProtocol` (`<tool_call>` / `<tool_results>` codec) and integrated multi-round Dextop MCP (`gemini_web_prompt` & `gemini_web_status`) inference into `OpenAiCompatRunner` so Antigravity Go's full Chat UI, `ToolApprovalCard` approvals, `$v_*` variables, RTK output compression, Read-Once dedup, and ChangeCard diffs work seamlessly on top of signed-in Gemini Web in Dextop Browser.
+
 ## [1.0.63] - 2026-11-27
 
 ### Added & Optimized
