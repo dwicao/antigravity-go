@@ -6,9 +6,10 @@ import 'package:antigravity_go/remote/openai_compat_runner.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  TestWidgetsFlutterBinding.ensureInitialized();
-
   test('OpenAiCompatRunner drives Dextop MCP gemini_web_prompt agentic loop', () async {
+    final prevOverrides = HttpOverrides.current;
+    HttpOverrides.global = null;
+    addTearDown(() => HttpOverrides.global = prevOverrides);
     final tmpDir = await Directory.systemTemp.createTemp('dextop_gemini_test_');
     addTearDown(() => tmpDir.delete(recursive: true));
 
